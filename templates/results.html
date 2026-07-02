@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ query }} - LibGen Results</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f5f5f5; }
+    .book-row:hover { background: #e8f0fe; }
+    .dl-btn { white-space: nowrap; }
+    .badge-epub { background: #27ae60; }
+    .badge-pdf { background: #e74c3c; }
+    .badge-mobi { background: #8e44ad; }
+    .badge-other { background: #7f8c8d; }
+    .page-link { cursor: pointer; }
+    .title-cell a { color: #2c3e50; text-decoration: none; font-weight: 500; }
+    .title-cell a:hover { text-decoration: underline; }
+    .table th { background: #ecf0f1; position: sticky; top: 0; }
+    .nav-bar { background: #2c3e50; color: #fff; padding: 10px 0; }
+    .nav-bar a { color: #fff; text-decoration: none; }
+    .cover-thumb { width: 60px; height: 90px; object-fit: cover; border-radius: 3px; }
+    .cover-placeholder { width: 60px; height: 90px; background: #ddd; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 20px; color: #999; }
+  </style>
+</head>
+<body>
+  <div class="nav-bar">
+    <div class="container d-flex justify-content-between align-items-center">
+      <a href="/"><strong>LibGen Search</strong></a>
+      <span class="small">{{ total }} results for "{{ query }}"</span>
+    </div>
+  </div>
+
+  <div class="container my-3">
+    <form action="/search" method="get" class="row g-2 align-items-end">
+      <input type="hidden" name="page" value="1">
+      <div class="col-md-4">
+        <input type="text" class="form-control" name="q" value="{{ query }}" placeholder="Search...">
+      </div>
+      <div class="col-md-2">
+        <select class="form-select form-select-sm" name="sort">
+          {% for k, v in sort_options.items() %}
+          <option value="{{ k }}" {% if k == sort %}selected{% endif %}>{{ v }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-1">
+        <select class="form-select form-select-sm" name="order">
+          <option value="DESC" {% if order == 'DESC' %}selected{% endif %}>DESC</option>
+          <option value="ASC" {% if order == 'ASC' %}selected{% endif %}>ASC</option>
+        </select>
+      </div>
+      <div class="col-md-1">
+        <select class="form-select form-select-sm" name="limit">
+          <option value="25" {% if limit == 25 %}selected{% endif %}>25</option>
+          <option value="50" {% if limit == 50 %}selected{% endif %}>50</option>
+          <option value="100" {% if limit == 100 %}selected{% endif %}>100</option>
+        </select>
+      </div>
+      <div class="col-md-1">
+        <select class="form-select form-select-sm" name="format">
+          <option value="epub" {% if fmt == 'epub' %}selected{% endif %}>EPUB</option>
+          <option value="pdf" {% if fmt == 'pdf' %}selected{% endif %}>PDF</option>
+          <option value="mobi" {% if fmt == 'mobi' %}selected{% endif %}>MOBI</option>
+          <option value="all" {% if fmt == 'all' %}selected{% endif %}>All</option>
+        </select>
+      </div>
+      <div class="col-md-1">
+        <select class="form-select form-select-sm" name="lang">
+          <option value="English" {% if lang == 'English' %}selected{% endif %}>English</option>
+          <option value="all" {% if lang == 'all' %}selected{% endif %}>All</option>
+        </select>
+      </div>
+      <div class="col-md-1">
+        <button type="submit" class="btn btn-primary btn-sm w-100">Go</button>
+      </div>
+      <div class="col-md-1">
+        <a href="/" class="btn btn-outline-secondary btn-sm w-100">Reset</a>
+      </div>
+    </form>
+    <div class="d-flex justify-content-between align-items-center mt-1">
+      <small class="text-muted">{{ books|length }} results shown</small>
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" id="dedupToggle" {% if dedup_on %}checked{% endif %} onchange="toggleDedup(this)">
+        <label class="form-check-label" for="dedupToggle">Deduplicate</label>
+      </div>
+    </div>
+    <script>
+    function toggleDedup(cb) {
+      const url = new URL(window.location);
+      url.searchParams.set('dedup', cb.checked ? '1' : '0');
+      url.searchParams.set('page', '1');
+      window.location = url.toString();
+    }
+    </script>
+  </div>
+
+  <div class="container">
+    {% if not books %}
+    <div class="alert alert-info">No matching results.</div>
+    {% else %}
+    <div class="table-responsive">
+      <table class="table table-hover table-bordered align-middle">
+        <thead>
+          <tr>
+            <th style="width:70px">Cover</th>
+            <th>#</th>
+            <th>Title / Author / Publisher</th>
+            <th class="text-center">Year</th>
+            <th class="text-center">Size</th>
+            <th class="text-center">Format</th>
+            <th class="text-center">Lang</th>
+            <th class="text-center" style="width:70px">DL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for book in books %}
+          <tr class="book-row">
+            <td class="text-center">
+              {% if book.cover_dir and book.md5 %}
+              <img class="cover-thumb" src="/cover/{{ book.md5 }}?dir={{ book.cover_dir }}"
+                   alt="cover"
+                   onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+              <div class="cover-placeholder" style="display:none">?</div>
+              {% else %}
+              <div class="cover-placeholder">?</div>
+              {% endif %}
+            </td>
+            <td class="text-muted text-center">{{ loop.index + (page-1) * limit }}</td>
+            <td class="title-cell">
+              <div class="fw-semibold">{{ book.title[:100] }}{% if book.title|length > 100 %}...{% endif %}</div>
+              <div class="small text-muted">{{ book.author[:60] }}{% if book.author|length > 60 %}...{% endif %}</div>
+              {% if book.publisher %}<div class="small text-muted">{{ book.publisher[:50] }}{% if book.publisher|length > 50 %}...{% endif %}</div>{% endif %}
+            </td>
+            <td class="text-center">{{ book.year }}</td>
+            <td class="text-center">{{ book.size }}</td>
+            <td class="text-center">
+              <span class="badge {% if book.ext == 'epub' %}badge-epub{% elif book.ext == 'pdf' %}badge-pdf{% elif book.ext == 'mobi' %}badge-mobi{% else %}badge-other{% endif %}">{{ book.ext }}</span>
+            </td>
+            <td class="text-center">{{ book.language[:8] }}</td>
+            <td class="text-center dl-btn">
+              {% if book.md5 %}
+              <a href="/download/{{ book.md5 }}?filename={{ book.title[:50] | urlencode }}.{{ book.ext }}" class="btn btn-success btn-sm" title="Download {{ book.ext }}">&#x2B07;</a>
+              {% else %}
+              <span class="text-muted">N/A</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <nav>
+      <ul class="pagination justify-content-center">
+        <li class="page-item {% if page <= 1 %}disabled{% endif %}">
+          <a class="page-link" href="/search?q={{ query | urlencode }}&sort={{ sort }}&order={{ order }}&limit={{ limit }}&page={{ page-1 }}&format={{ fmt }}&lang={{ lang }}">Prev</a>
+        </li>
+        {% for p in range(1, total_pages + 1) %}
+          {% if p == page %}
+          <li class="page-item active"><span class="page-link">{{ p }}</span></li>
+          {% elif p <= 3 or p > total_pages - 3 or (p >= page - 2 and p <= page + 2) %}
+          <li class="page-item"><a class="page-link" href="/search?q={{ query | urlencode }}&sort={{ sort }}&order={{ order }}&limit={{ limit }}&page={{ p }}&format={{ fmt }}&lang={{ lang }}">{{ p }}</a></li>
+          {% elif p == 4 or p == total_pages - 3 %}
+          <li class="page-item disabled"><span class="page-link">...</span></li>
+          {% endif %}
+        {% endfor %}
+        <li class="page-item {% if page >= total_pages %}disabled{% endif %}">
+          <a class="page-link" href="/search?q={{ query | urlencode }}&sort={{ sort }}&order={{ order }}&limit={{ limit }}&page={{ page+1 }}&format={{ fmt }}&lang={{ lang }}">Next</a>
+        </li>
+      </ul>
+    </nav>
+    {% endif %}
+  </div>
+</body>
+</html>

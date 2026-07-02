@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} - LibFlix</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
+    .navbar { background: linear-gradient(180deg, rgba(20,20,20,.9) 0, rgba(20,20,20,.5) 80%, transparent); z-index: 10; }
+    .navbar-brand { font-size: 1.6rem; font-weight: 700; color: #e50914 !important; letter-spacing: -1px; }
+    .search-bar { max-width: 480px; }
+    .search-bar input { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 4px; }
+    .search-bar input:focus { background: rgba(255,255,255,.15); border-color: #e50914; box-shadow: none; color: #fff; }
+    .search-bar input::placeholder { color: rgba(255,255,255,.4); }
+    .search-bar button { background: #e50914; border: none; border-radius: 4px; }
+    .search-bar button:hover { background: #f40612; }
+
+    .detail-wrap { max-width: 1100px; margin: 0 auto; padding: 2rem 1rem; }
+    .detail-cover { width: 300px; height: 450px; object-fit: cover; border-radius: 6px; background: #333; box-shadow: 0 4px 30px rgba(0,0,0,.5); }
+    .detail-cover-placeholder { width: 300px; height: 450px; background: #2a2a2a; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 4rem; color: #555; }
+    .detail-title { font-size: 2.2rem; font-weight: 700; line-height: 1.2; }
+    .detail-author { font-size: 1.1rem; color: #aaa; margin-top: 4px; }
+    .detail-desc { color: #bbb; line-height: 1.7; font-size: .95rem; max-height: 360px; overflow-y: auto; margin-top: 1rem; }
+    .detail-desc::-webkit-scrollbar { width: 4px; }
+    .detail-desc::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 2px; }
+    .detail-meta { margin-top: 1.2rem; display: flex; flex-wrap: wrap; gap: 8px; }
+    .detail-meta .tag { background: rgba(255,255,255,.08); padding: 4px 12px; border-radius: 20px; font-size: .8rem; color: #aaa; }
+    .desc-skeleton { margin-top: 1rem; }
+    .desc-skeleton .line { height: 14px; background: rgba(255,255,255,.06); border-radius: 4px; margin-bottom: 8px; animation: shimmer 1.5s infinite; }
+    .desc-skeleton .line:nth-child(2) { width: 90%; }
+    .desc-skeleton .line:nth-child(3) { width: 75%; }
+    .desc-skeleton .line:nth-child(4) { width: 80%; }
+    .desc-skeleton .line:nth-child(5) { width: 60%; }
+    @keyframes shimmer { 0% { opacity: .4; } 50% { opacity: .8; } 100% { opacity: .4; } }
+
+    .loading-message { color: #666; font-style: italic; font-size: .9rem; margin-top: .5rem; }
+
+    .btn-search-lg { background: #e50914; border: none; padding: 12px 36px; font-size: 1.05rem; font-weight: 600; border-radius: 4px; color: #fff; text-decoration: none; display: inline-block; transition: background .15s; }
+    .btn-search-lg:hover { background: #f40612; color: #fff; }
+
+    .shelf { margin-bottom: 2rem; }
+    .shelf-title { font-size: 1.3rem; font-weight: 600; margin-bottom: .6rem; padding-left: 4px; }
+    .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; scroll-behavior: smooth; cursor: grab; user-select: none; }
+    .shelf-row.dragging { cursor: grabbing; scroll-behavior: auto; }
+    .shelf-row::-webkit-scrollbar { height: 6px; }
+    .shelf-row::-webkit-scrollbar-track { background: transparent; }
+    .shelf-row::-webkit-scrollbar-thumb { background: rgba(255,255,255,.2); border-radius: 3px; }
+    .book-card { flex: 0 0 auto; width: 140px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; }
+    .book-card:hover { transform: scale(1.08); z-index: 5; }
+    .book-card img { width: 140px; height: 210px; object-fit: cover; border-radius: 4px; display: block; background: #333; pointer-events: none; }
+    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 30px 8px 8px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .25s; pointer-events: none; }
+    .book-card:hover .info { opacity: 1; }
+    .book-card .info .t { font-size: .78rem; font-weight: 600; line-height: 1.2; }
+    .book-card .info .a { font-size: .68rem; color: #bbb; margin-top: 2px; }
+    .book-card .placeholder { width: 140px; height: 210px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; color: #555; border-radius: 4px; }
+
+    .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #141414; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; }
+    .loading-overlay .spinner { width: 50px; height: 50px; border: 4px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-overlay p { margin-top: 1rem; color: #888; font-size: .9rem; }
+
+    @media (max-width: 768px) {
+      .detail-cover, .detail-cover-placeholder { width: 180px; height: 270px; }
+      .detail-title { font-size: 1.5rem; }
+      .book-card, .book-card img { width: 110px; }
+      .book-card img { height: 165px; }
+      .book-card .placeholder { width: 110px; height: 165px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-dark px-3 py-2">
+    <div class="container-fluid d-flex align-items-center gap-3">
+      <a class="navbar-brand" href="/">LibFlix</a>
+      <form action="/search" method="get" class="search-bar d-flex flex-grow-1" style="max-width:600px">
+        <input type="text" class="form-control" name="q" placeholder="Search non-fiction, self-development, business..." aria-label="Search">
+        <button class="btn ms-1" type="submit">Search</button>
+      </form>
+    </div>
+  </nav>
+
+  <div class="detail-wrap">
+    <div class="row g-4">
+      <div class="col-md-4 text-center">
+        {% if cover_url %}
+        <img class="detail-cover" src="{{ cover_url }}/L" alt="{{ title }}" onerror="this.src='{{ cover_url }}'">
+        {% else %}
+        <div class="detail-cover-placeholder">?</div>
+        {% endif %}
+      </div>
+      <div class="col-md-8 d-flex flex-column justify-content-between">
+        <div>
+          <div class="detail-title">{{ title }}</div>
+          {% if author %}<div class="detail-author">{{ author }}</div>{% endif %}
+
+          <div id="descContainer">
+            <div class="desc-skeleton" id="descSkeleton">
+              <div class="line"></div><div class="line"></div><div class="line"></div><div class="line"></div><div class="line"></div>
+            </div>
+            <div id="descText" class="detail-desc" style="display:none"></div>
+            <div id="descSubjects" class="detail-meta" style="display:none"></div>
+            <div id="descNone" class="loading-message" style="display:none">No description available.</div>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <a href="/search?q={{ (title + ' ' + author) | urlencode }}" class="btn-search-lg">
+            Search LibGen for this book
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="px-3 px-md-4" style="max-width:1100px;margin:0 auto">
+    <div class="shelf">
+      <div class="shelf-title">More Like This</div>
+      <div id="similarRow" class="shelf-row">
+        <div style="color:#666;font-style:italic;padding:1rem">Loading similar books...</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="spinner"></div>
+    <p>Searching libgen<span style="margin-left:6px"><span style="width:5px;height:5px;background:#e50914;border-radius:50%;display:inline-block;animation:pulseX 1.4s ease-in-out infinite"></span><span style="width:5px;height:5px;background:#e50914;border-radius:50%;display:inline-block;animation:pulseX 1.4s ease-in-out infinite;animation-delay:.2s;margin-left:3px"></span><span style="width:5px;height:5px;background:#e50914;border-radius:50%;display:inline-block;animation:pulseX 1.4s ease-in-out infinite;animation-delay:.4s;margin-left:3px"></span></span></p>
+  </div>
+
+  <footer class="text-center text-muted py-4 small">
+    Powered by Open Library &amp; libgen.li
+  </footer>
+
+  <style>
+    @keyframes pulseX { 0%,80%,100% { opacity:.2; transform:scale(.8); } 40% { opacity:1; transform:scale(1.1); } }
+  </style>
+  <script>
+    document.getElementById('loadingOverlay').style.display = 'none';
+    document.querySelectorAll('a[href^="/search"]').forEach(a => {
+      a.addEventListener('click', function(e) {
+        document.getElementById('loadingOverlay').style.display = 'flex';
+      });
+    });
+
+    const olKey = '{{ ol_key }}';
+
+    if (olKey) {
+      fetch('/api/book?ol_key=' + encodeURIComponent(olKey))
+        .then(r => r.json())
+        .then(data => {
+          document.getElementById('descSkeleton').style.display = 'none';
+          if (data.success) {
+            if (data.description) {
+              const descEl = document.getElementById('descText');
+              descEl.textContent = data.description;
+              descEl.style.display = 'block';
+            }
+            if (data.subjects && data.subjects.length > 0) {
+              const subjEl = document.getElementById('descSubjects');
+              subjEl.innerHTML = data.subjects.map(s => '<span class="tag">' + s + '</span>').join('');
+              subjEl.style.display = 'flex';
+
+              fetchSimilar(data.subjects[0]);
+            }
+            if (!data.description && (!data.subjects || data.subjects.length === 0)) {
+              document.getElementById('descNone').style.display = 'block';
+            }
+          } else {
+            document.getElementById('descNone').style.display = 'block';
+          }
+        })
+        .catch(() => {
+          document.getElementById('descSkeleton').style.display = 'none';
+          document.getElementById('descNone').style.display = 'block';
+        });
+    } else {
+      document.getElementById('descSkeleton').style.display = 'none';
+      document.getElementById('descNone').style.display = 'block';
+      fetchSimilar('');
+    }
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
+
+    function fetchSimilar(subject) {
+      if (!subject) {
+        document.getElementById('similarRow').innerHTML = '<div style="color:#666;font-style:italic;padding:1rem">No similar books found.</div>';
+        return;
+      }
+      fetch('/api/similar?subject=' + encodeURIComponent(subject) + '&ol_key=' + encodeURIComponent(olKey))
+        .then(r => r.json())
+        .then(data => {
+          if (!data.success || !data.books.length) {
+            document.getElementById('similarRow').innerHTML = '<div style="color:#666;font-style:italic;padding:1rem">No similar books found.</div>';
+            return;
+          }
+          let html = '';
+          for (const b of data.books) {
+            const href = '/preview?title=' + encodeURIComponent(b.title) + '&author=' + encodeURIComponent(b.author) + '&ol_key=' + encodeURIComponent(b.ol_key) + '&cover=' + encodeURIComponent(b.cover_url);
+            html += '<a href="' + href + '" class="text-decoration-none"><div class="book-card">';
+            if (b.cover_url) {
+              html += '<img src="' + b.cover_url + '" alt="' + esc(b.title) + '" loading="lazy">';
+            } else {
+              html += '<div class="placeholder">?</div>';
+            }
+            html += '<div class="info"><div class="t">' + (b.title.length > 45 ? esc(b.title.slice(0,45)) + '...' : esc(b.title)) + '</div>';
+            if (b.author) html += '<div class="a">' + (b.author.length > 30 ? esc(b.author.slice(0,30)) + '...' : esc(b.author)) + '</div>';
+            html += '</div></div></a>';
+          }
+          document.getElementById('similarRow').innerHTML = html;
+        })
+        .catch(() => {
+          document.getElementById('similarRow').innerHTML = '<div style="color:#666;font-style:italic;padding:1rem">Could not load similar books.</div>';
+        });
+    }
+  </script>
+</body>
+</html>

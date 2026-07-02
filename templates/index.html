@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LibFlix - Non-Fiction Library</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
+    .navbar { background: linear-gradient(180deg, rgba(20,20,20,.9) 0, rgba(20,20,20,.5) 80%, transparent); z-index: 10; }
+    .navbar-brand { font-size: 1.6rem; font-weight: 700; color: #e50914 !important; letter-spacing: -1px; }
+    .search-bar { max-width: 480px; }
+    .search-bar input { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 4px; }
+    .search-bar input:focus { background: rgba(255,255,255,.15); border-color: #e50914; box-shadow: none; color: #fff; }
+    .search-bar input::placeholder { color: rgba(255,255,255,.4); }
+    .search-bar button { background: #e50914; border: none; border-radius: 4px; }
+    .search-bar button:hover { background: #f40612; }
+
+    .hero { height: 65vh; min-height: 420px; background: linear-gradient(rgba(20,20,20,.55), rgba(20,20,20,.95)), center/cover no-repeat; display: flex; align-items: center; padding: 0 4%; margin-bottom: .5rem; position: relative; transition: height .4s ease, min-height .4s ease, opacity .4s ease; overflow: hidden; }
+    .hero.collapsed { height: 0 !important; min-height: 0 !important; opacity: 0; margin: 0; padding: 0; }
+    .hero .hero-content { max-width: 600px; }
+    .hero h1 { font-size: 3rem; font-weight: 700; text-shadow: 0 2px 10px rgba(0,0,0,.5); }
+    .hero .hero-sub { font-size: 1.1rem; color: #ccc; max-width: 500px; margin-top: 4px; text-shadow: 0 1px 6px rgba(0,0,0,.5); }
+    .hero .btn-hero { background: #e50914; border: none; padding: 10px 32px; font-weight: 600; border-radius: 4px; color: #fff; text-decoration: none; display: inline-block; margin-top: 12px; }
+    .hero .btn-hero:hover { background: #f40612; color: #fff; }
+    .hero .btn-hero-outline { background: rgba(255,255,255,.1); border: none; padding: 10px 24px; font-weight: 500; border-radius: 4px; color: #fff; text-decoration: none; display: inline-block; margin-top: 12px; margin-left: 10px; }
+    .hero .btn-hero-outline:hover { background: rgba(255,255,255,.2); color: #fff; }
+
+    .hero-toggle { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); background: rgba(255,255,255,.08); border: none; color: #aaa; padding: 2px 18px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: .9rem; line-height: 1; transition: background .15s; z-index: 2; }
+    .hero-toggle:hover { background: rgba(255,255,255,.15); color: #fff; }
+    .hero.collapsed + .hero-toggle { bottom: auto; top: 0; border-radius: 0 0 8px 8px; background: rgba(255,255,255,.06); }
+    .hero.collapsed + .hero-toggle:hover { background: rgba(255,255,255,.12); }
+    .hero-toggle-bar { display: none; align-items: center; justify-content: center; height: 28px; cursor: pointer; color: #555; font-size: .75rem; gap: 4px; transition: color .15s; }
+    .hero-toggle-bar:hover { color: #aaa; }
+    .hero-toggle-bar .line { width: 24px; height: 2px; background: currentColor; border-radius: 1px; }
+
+    .shelf { margin-bottom: 2rem; }
+    .shelf-title { font-size: 1.3rem; font-weight: 600; margin-bottom: .6rem; padding-left: 4px; }
+    .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; scroll-behavior: smooth; cursor: grab; user-select: none; }
+    .shelf-row.dragging { cursor: grabbing; scroll-behavior: auto; }
+    .shelf-row::-webkit-scrollbar { height: 6px; }
+    .shelf-row::-webkit-scrollbar-track { background: transparent; }
+    .shelf-row::-webkit-scrollbar-thumb { background: rgba(255,255,255,.2); border-radius: 3px; }
+
+    .book-card { flex: 0 0 auto; width: 150px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; }
+    .book-card:hover { transform: scale(1.08); z-index: 5; }
+    .book-card img { width: 150px; height: 225px; object-fit: cover; border-radius: 4px; display: block; background: #333; pointer-events: none; }
+    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 30px 8px 8px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .25s; pointer-events: none; }
+    .book-card:hover .info { opacity: 1; }
+    .book-card .info .t { font-size: .82rem; font-weight: 600; line-height: 1.2; }
+    .book-card .info .a { font-size: .7rem; color: #bbb; margin-top: 2px; }
+    .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 4px; }
+
+    .error-banner { background: rgba(229,9,20,.2); border: 1px solid #e50914; color: #ff6b6b; padding: 8px 16px; border-radius: 4px; margin-bottom: 1rem; text-align: center; }
+
+    .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #141414; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; }
+    .loading-overlay .spinner { width: 50px; height: 50px; border: 4px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes pulse2 { 0%,80%,100% { opacity:.2; transform:scale(.8); } 40% { opacity:1; transform:scale(1.1); } }
+    .loading-overlay p { margin-top: 1rem; color: #888; font-size: .9rem; }
+
+    @media (max-width: 768px) {
+      .hero { height: 40vh; min-height: 300px; }
+      .hero h1 { font-size: 2rem; }
+      .book-card, .book-card img { width: 120px; }
+      .book-card img { height: 180px; }
+      .book-card .placeholder { width: 120px; height: 180px; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-dark px-3 py-2">
+    <div class="container-fluid d-flex align-items-center gap-3">
+      <a class="navbar-brand" href="/">LibFlix</a>
+      <form action="/search" method="get" class="search-bar d-flex flex-grow-1" style="max-width:600px">
+        <input type="text" class="form-control" name="q" placeholder="Search non-fiction, self-development, business..." aria-label="Search">
+        <button class="btn ms-1" type="submit">Search</button>
+      </form>
+    </div>
+  </nav>
+
+  {% if hero %}
+  <div id="heroSection" class="hero" style="background-image: linear-gradient(rgba(20,20,20,.55), rgba(20,20,20,.95)), url('{{ hero.cover_url }}/L')">
+    <div class="hero-content">
+      <h1>{{ hero.title[:80] }}</h1>
+      {% if hero.author %}<div class="hero-sub">{{ hero.author }}</div>{% endif %}
+      <div>
+        <a href="/preview?title={{ hero.title | urlencode }}&author={{ hero.author | urlencode }}&ol_key={{ hero.ol_key | urlencode }}&cover={{ hero.cover_url | urlencode }}" class="btn-hero">View Details</a>
+        <a href="/search?q={{ (hero.title + ' ' + hero.author) | urlencode }}" class="btn-hero-outline">Download</a>
+      </div>
+    </div>
+    <button class="hero-toggle" id="heroToggle" title="Hide hero" aria-label="Toggle hero">&#x25B2;</button>
+  </div>
+  <div class="hero-toggle-bar" id="heroToggleBar" title="Show hero">
+    <span class="line"></span><span style="font-size:.7rem;letter-spacing:1px;text-transform:uppercase">Hero</span><span class="line"></span>
+  </div>
+  {% else %}
+  <div class="hero" style="background-image: linear-gradient(rgba(20,20,20,.6), rgba(20,20,20,1))">
+    <div class="hero-content">
+      <h1>Unlock Knowledge</h1>
+      <div class="hero-sub">Curated non-fiction for self-development, business, science, and more. Download any book free.</div>
+    </div>
+  </div>
+  {% endif %}
+
+  <div class="px-3 px-md-4">
+    {% if error %}
+    <div class="error-banner">{{ error }}</div>
+    {% endif %}
+
+    {% for shelf in shelves %}
+    <div class="shelf">
+      <div class="shelf-title">{{ shelf.name }}</div>
+      <div class="shelf-row" data-dragscroll>
+        {% for book in shelf.books %}
+        <a href="/preview?title={{ book.title | urlencode }}&author={{ book.author | urlencode }}&ol_key={{ book.ol_key | urlencode }}&cover={{ book.cover_url | urlencode }}" class="text-decoration-none">
+          <div class="book-card">
+            {% if book.cover_url %}
+            <img src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy">
+            {% else %}
+            <div class="placeholder">?</div>
+            {% endif %}
+            <div class="info">
+              <div class="t">{{ book.title[:50] }}{% if book.title|length > 50 %}...{% endif %}</div>
+              {% if book.author %}<div class="a">{{ book.author[:35] }}{% if book.author|length > 35 %}...{% endif %}</div>{% endif %}
+            </div>
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="spinner"></div>
+    <p>Searching libgen<span class="dot-pulse" style="display:inline-flex;gap:4px;margin-left:4px"><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite"></span><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite;animation-delay:.2s"></span><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite;animation-delay:.4s"></span></span></p>
+  </div>
+
+  <footer class="text-center text-muted py-4 small">
+    Non-fiction focus &mdash; Powered by Open Library &amp; libgen.li
+  </footer>
+
+  <script>
+    document.getElementById('loadingOverlay').style.display = 'none';
+    document.querySelectorAll('a[href^="/search"]').forEach(a => {
+      a.addEventListener('click', function(e) {
+        document.getElementById('loadingOverlay').style.display = 'flex';
+      });
+    });
+
+    // Drag-to-scroll for shelf rows
+    document.querySelectorAll('[data-dragscroll]').forEach(row => {
+      let isDown = false, startX, scrollLeft;
+
+      row.addEventListener('mousedown', e => {
+        isDown = true;
+        row.classList.add('dragging');
+        startX = e.pageX - row.offsetLeft;
+        scrollLeft = row.scrollLeft;
+      });
+
+      row.addEventListener('mouseleave', () => {
+        if (!isDown) return;
+        isDown = false;
+        row.classList.remove('dragging');
+      });
+
+      row.addEventListener('mouseup', () => {
+        isDown = false;
+        row.classList.remove('dragging');
+      });
+
+      row.addEventListener('mousemove', e => {
+        if (!isDown) return;
+        e.preventDefault();
+        const x = e.pageX - row.offsetLeft;
+        const walk = (x - startX) * 1.5;
+        row.scrollLeft = scrollLeft - walk;
+      });
+    });
+
+    // Hero toggle
+    const heroEl = document.getElementById('heroSection');
+    const heroToggle = document.getElementById('heroToggle');
+    const heroToggleBar = document.getElementById('heroToggleBar');
+
+    if (heroEl && heroToggle && heroToggleBar) {
+      const HERO_KEY = 'libflix_hide_hero';
+
+      function setHeroState(hidden) {
+        if (hidden) {
+          heroEl.classList.add('collapsed');
+          heroToggle.textContent = '\u25BC';
+          heroToggle.title = 'Show hero';
+          heroToggleBar.style.display = 'flex';
+        } else {
+          heroEl.classList.remove('collapsed');
+          heroToggle.textContent = '\u25B2';
+          heroToggle.title = 'Hide hero';
+          heroToggleBar.style.display = 'none';
+        }
+        try { localStorage.setItem(HERO_KEY, hidden ? '1' : '0'); } catch {}
+      }
+
+      if (localStorage.getItem(HERO_KEY) === '1') {
+        setHeroState(true);
+      }
+
+      heroToggle.addEventListener('click', () => setHeroState(true));
+      heroToggleBar.addEventListener('click', () => setHeroState(false));
+    }
+  </script>
+</body>
+</html>
