@@ -8,23 +8,32 @@
   <style>
     * { box-sizing: border-box; }
     body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
-    .navbar { background: linear-gradient(180deg, rgba(20,20,20,.9) 0, rgba(20,20,20,.5) 80%, transparent); z-index: 10; }
-    .navbar-brand { font-size: 1.6rem; font-weight: 700; color: #e50914 !important; letter-spacing: -1px; }
-    .search-bar { max-width: 480px; }
-    .search-bar input { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 4px; }
+    .navbar { background: linear-gradient(180deg, rgba(20,20,20,.9) 0, rgba(20,20,20,.5) 80%, transparent); z-index: 10; min-height: 48px; }
+    .navbar-brand { font-size: 1.3rem; font-weight: 700; color: #e50914 !important; letter-spacing: -1px; }
+    .search-bar { min-width: 0; }
+    .search-bar input { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 4px; font-size: .82rem; padding: 4px 8px; height: 30px; }
     .search-bar input:focus { background: rgba(255,255,255,.15); border-color: #e50914; box-shadow: none; color: #fff; }
-    .search-bar input::placeholder { color: rgba(255,255,255,.4); }
-    .search-bar button { background: #e50914; border: none; border-radius: 4px; }
+    .search-bar input::placeholder { color: rgba(255,255,255,.4); font-size: .78rem; }
+    .search-bar button { background: #e50914; border: none; border-radius: 4px; white-space: nowrap; }
     .search-bar button:hover { background: #f40612; }
 
-    .hero { height: 65vh; min-height: 420px; background: linear-gradient(rgba(20,20,20,.55), rgba(20,20,20,.95)), center/cover no-repeat; display: flex; align-items: center; padding: 0 4%; margin-bottom: .5rem; position: relative; transition: height .4s ease, min-height .4s ease, opacity .4s ease; overflow: hidden; }
+    .mode-toggle { display: flex; background: rgba(255,255,255,.08); border-radius: 20px; padding: 1px; }
+    .mode-btn { padding: 2px 10px; border-radius: 18px; font-size: .7rem; color: #aaa; text-decoration: none; white-space: nowrap; transition: all .15s; }
+    .mode-btn.active { background: #e50914; color: #fff; }
+    .cat-tabs::-webkit-scrollbar { display: none; }
+    .cat-tab { flex-shrink: 0; padding: 2px 10px; border-radius: 20px; font-size: .75rem; color: #aaa; text-decoration: none; transition: all .15s; white-space: nowrap; }
+    .cat-tab:hover { background: rgba(255,255,255,.1); color: #fff; }
+    .cat-tab.active { background: #e50914; color: #fff; }
+
+    .hero { height: 55vh; min-height: 360px; background: linear-gradient(rgba(20,20,20,.55), rgba(20,20,20,.95)), center/cover no-repeat; display: flex; align-items: center; padding: 0 4%; margin-bottom: .5rem; position: relative; transition: height .4s ease, min-height .4s ease, opacity .4s ease; overflow: hidden; }
     .hero.collapsed { height: 0 !important; min-height: 0 !important; opacity: 0; margin: 0; padding: 0; }
     .hero .hero-content { max-width: 600px; }
-    .hero h1 { font-size: 3rem; font-weight: 700; text-shadow: 0 2px 10px rgba(0,0,0,.5); }
-    .hero .hero-sub { font-size: 1.1rem; color: #ccc; max-width: 500px; margin-top: 4px; text-shadow: 0 1px 6px rgba(0,0,0,.5); }
-    .hero .btn-hero { background: #e50914; border: none; padding: 10px 32px; font-weight: 600; border-radius: 4px; color: #fff; text-decoration: none; display: inline-block; margin-top: 12px; }
+    .hero h1 { font-size: 2.8rem; font-weight: 700; text-shadow: 0 2px 10px rgba(0,0,0,.5); }
+    .hero .hero-sub { font-size: 1.05rem; color: #ccc; max-width: 500px; margin-top: 4px; text-shadow: 0 1px 6px rgba(0,0,0,.5); }
+    .hero .hero-desc { font-size: .88rem; color: #999; max-width: 500px; margin-top: 8px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .hero .btn-hero { background: #e50914; border: none; padding: 8px 28px; font-weight: 600; border-radius: 4px; color: #fff; text-decoration: none; display: inline-block; margin-top: 8px; font-size: .9rem; }
     .hero .btn-hero:hover { background: #f40612; color: #fff; }
-    .hero .btn-hero-outline { background: rgba(255,255,255,.1); border: none; padding: 10px 24px; font-weight: 500; border-radius: 4px; color: #fff; text-decoration: none; display: inline-block; margin-top: 12px; margin-left: 10px; }
+    .hero .btn-hero-outline { background: rgba(255,255,255,.1); border: none; padding: 8px 20px; font-weight: 500; border-radius: 4px; color: #fff; text-decoration: none; display: inline-block; margin-top: 8px; margin-left: 8px; font-size: .9rem; }
     .hero .btn-hero-outline:hover { background: rgba(255,255,255,.2); color: #fff; }
 
     .hero-toggle { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); background: rgba(255,255,255,.08); border: none; color: #aaa; padding: 2px 18px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: .9rem; line-height: 1; transition: background .15s; z-index: 2; }
@@ -37,16 +46,15 @@
 
     .shelf { margin-bottom: 2rem; }
     .shelf-title { font-size: 1.3rem; font-weight: 600; margin-bottom: .6rem; padding-left: 4px; }
-    .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; scroll-behavior: smooth; cursor: grab; user-select: none; }
-    .shelf-row.dragging { cursor: grabbing; scroll-behavior: auto; }
+    .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; }
     .shelf-row::-webkit-scrollbar { height: 6px; }
     .shelf-row::-webkit-scrollbar-track { background: transparent; }
     .shelf-row::-webkit-scrollbar-thumb { background: rgba(255,255,255,.2); border-radius: 3px; }
 
     .book-card { flex: 0 0 auto; width: 150px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; }
     .book-card:hover { transform: scale(1.08); z-index: 5; }
-    .book-card img { width: 150px; height: 225px; object-fit: cover; border-radius: 4px; display: block; background: #333; pointer-events: none; }
-    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 30px 8px 8px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .25s; pointer-events: none; }
+    .book-card img { width: 150px; height: 225px; object-fit: cover; border-radius: 4px; display: block; background: #333; }
+    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 30px 8px 8px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .25s; }
     .book-card:hover .info { opacity: 1; }
     .book-card .info .t { font-size: .82rem; font-weight: 600; line-height: 1.2; }
     .book-card .info .a { font-size: .7rem; color: #bbb; margin-top: 2px; }
@@ -60,31 +68,31 @@
     @keyframes pulse2 { 0%,80%,100% { opacity:.2; transform:scale(.8); } 40% { opacity:1; transform:scale(1.1); } }
     .loading-overlay p { margin-top: 1rem; color: #888; font-size: .9rem; }
 
+    @media (max-width: 992px) {
+      .cat-tab { font-size: .7rem; padding: 2px 8px; }
+      .navbar-brand { font-size: 1.1rem; }
+    }
     @media (max-width: 768px) {
-      .hero { height: 40vh; min-height: 300px; }
-      .hero h1 { font-size: 2rem; }
+      .hero { height: 35vh; min-height: 260px; }
+      .hero h1 { font-size: 1.6rem; }
+      .hero .hero-desc { display: none; }
       .book-card, .book-card img { width: 120px; }
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
+      .cat-tab { font-size: .65rem; padding: 2px 6px; }
     }
   </style>
 </head>
 <body>
-  <nav class="navbar navbar-dark px-3 py-2">
-    <div class="container-fluid d-flex align-items-center gap-3">
-      <a class="navbar-brand" href="/">LibFlix</a>
-      <form action="/search" method="get" class="search-bar d-flex flex-grow-1" style="max-width:600px">
-        <input type="text" class="form-control" name="q" placeholder="Search non-fiction, self-development, business..." aria-label="Search">
-        <button class="btn ms-1" type="submit">Search</button>
-      </form>
-    </div>
-  </nav>
+  {% set active_tab = 'home' if mode != 'fiction' else 'trending_fiction' %}
+  {% include "_navbar.html" %}
 
   {% if hero %}
-  <div id="heroSection" class="hero" style="background-image: linear-gradient(rgba(20,20,20,.55), rgba(20,20,20,.95)), url('{{ hero.cover_url }}/L')">
+  <div id="heroSection" class="hero" style="background-image: linear-gradient(rgba(20,20,20,.55), rgba(20,20,20,.95)), url('{{ hero.cover_url | size_url("L") }}')">
     <div class="hero-content">
       <h1>{{ hero.title[:80] }}</h1>
       {% if hero.author %}<div class="hero-sub">{{ hero.author }}</div>{% endif %}
+      {% if hero.description %}<div class="hero-desc">{{ hero.description }}</div>{% endif %}
       <div>
         <a href="/preview?title={{ hero.title | urlencode }}&author={{ hero.author | urlencode }}&ol_key={{ hero.ol_key | urlencode }}&cover={{ hero.cover_url | urlencode }}" class="btn-hero">View Details</a>
         <a href="/search?q={{ (hero.title + ' ' + hero.author) | urlencode }}" class="btn-hero-outline">Download</a>
@@ -112,21 +120,9 @@
     {% for shelf in shelves %}
     <div class="shelf">
       <div class="shelf-title">{{ shelf.name }}</div>
-      <div class="shelf-row" data-dragscroll>
+      <div class="shelf-row">
         {% for book in shelf.books %}
-        <a href="/preview?title={{ book.title | urlencode }}&author={{ book.author | urlencode }}&ol_key={{ book.ol_key | urlencode }}&cover={{ book.cover_url | urlencode }}" class="text-decoration-none">
-          <div class="book-card">
-            {% if book.cover_url %}
-            <img src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy">
-            {% else %}
-            <div class="placeholder">?</div>
-            {% endif %}
-            <div class="info">
-              <div class="t">{{ book.title[:50] }}{% if book.title|length > 50 %}...{% endif %}</div>
-              {% if book.author %}<div class="a">{{ book.author[:35] }}{% if book.author|length > 35 %}...{% endif %}</div>{% endif %}
-            </div>
-          </div>
-        </a>
+        {% include "_book_card.html" %}
         {% endfor %}
       </div>
     </div>
@@ -150,38 +146,6 @@
       });
     });
 
-    // Drag-to-scroll for shelf rows
-    document.querySelectorAll('[data-dragscroll]').forEach(row => {
-      let isDown = false, startX, scrollLeft;
-
-      row.addEventListener('mousedown', e => {
-        isDown = true;
-        row.classList.add('dragging');
-        startX = e.pageX - row.offsetLeft;
-        scrollLeft = row.scrollLeft;
-      });
-
-      row.addEventListener('mouseleave', () => {
-        if (!isDown) return;
-        isDown = false;
-        row.classList.remove('dragging');
-      });
-
-      row.addEventListener('mouseup', () => {
-        isDown = false;
-        row.classList.remove('dragging');
-      });
-
-      row.addEventListener('mousemove', e => {
-        if (!isDown) return;
-        e.preventDefault();
-        const x = e.pageX - row.offsetLeft;
-        const walk = (x - startX) * 1.5;
-        row.scrollLeft = scrollLeft - walk;
-      });
-    });
-
-    // Hero toggle
     const heroEl = document.getElementById('heroSection');
     const heroToggle = document.getElementById('heroToggle');
     const heroToggleBar = document.getElementById('heroToggleBar');

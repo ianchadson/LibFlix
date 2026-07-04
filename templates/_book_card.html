@@ -1,0 +1,18 @@
+<a href="/preview?title={{ book.title | urlencode }}&author={{ book.author | urlencode }}&ol_key={{ book.ol_key | urlencode }}&cover={{ book.cover_url | urlencode }}" class="text-decoration-none">
+  <div class="book-card">
+    {% if book.cover_url %}
+    {% if book.cover_url.startswith('http') %}
+    <img src="{{ book.cover_url }}" alt="{{ book.title }}" referrerpolicy="no-referrer" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='/gbcover/{{ book.ol_key }}';}else{this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';}">
+    {% else %}
+    <img src="{{ book.cover_url }}" alt="{{ book.title }}" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';">
+    {% endif %}
+    <div class="placeholder ph-fallback" style="display:none">?</div>
+    {% else %}
+    <div class="placeholder">?</div>
+    {% endif %}
+    <div class="info">
+      <div class="t">{{ book.title[:50] }}{% if book.title|length > 50 %}...{% endif %}</div>
+      {% if book.author %}<div class="a">{{ book.author[:35] }}{% if book.author|length > 35 %}...{% endif %}</div>{% endif %}
+    </div>
+  </div>
+</a>

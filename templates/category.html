@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ shelf.name }} - LibFlix</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
+    .navbar { background: linear-gradient(180deg, rgba(20,20,20,.9) 0, rgba(20,20,20,.5) 80%, transparent); z-index: 10; min-height: 48px; }
+    .navbar-brand { font-size: 1.3rem; font-weight: 700; color: #e50914 !important; letter-spacing: -1px; }
+    .search-bar { min-width: 0; }
+    .search-bar input { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 4px; font-size: .82rem; padding: 4px 8px; height: 30px; }
+    .search-bar input:focus { background: rgba(255,255,255,.15); border-color: #e50914; box-shadow: none; color: #fff; }
+    .search-bar input::placeholder { color: rgba(255,255,255,.4); font-size: .78rem; }
+    .search-bar button { background: #e50914; border: none; border-radius: 4px; white-space: nowrap; }
+    .search-bar button:hover { background: #f40612; }
+
+    .mode-toggle { display: flex; background: rgba(255,255,255,.08); border-radius: 20px; padding: 1px; }
+    .mode-btn { padding: 2px 10px; border-radius: 18px; font-size: .7rem; color: #aaa; text-decoration: none; white-space: nowrap; transition: all .15s; }
+    .mode-btn.active { background: #e50914; color: #fff; }
+    .cat-tabs::-webkit-scrollbar { display: none; }
+    .cat-tab { flex-shrink: 0; padding: 2px 10px; border-radius: 20px; font-size: .75rem; color: #aaa; text-decoration: none; transition: all .15s; white-space: nowrap; }
+    .cat-tab:hover { background: rgba(255,255,255,.1); color: #fff; }
+    .cat-tab.active { background: #e50914; color: #fff; }
+
+    .page-title { font-size: 1.6rem; font-weight: 700; padding: 1.5rem 1rem .5rem; }
+
+    .book-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 1rem 2rem; justify-content: center; }
+    .book-card { width: 150px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; }
+    .book-card:hover { transform: scale(1.08); z-index: 5; }
+    .book-card img { width: 150px; height: 225px; object-fit: cover; border-radius: 4px; display: block; background: #333; }
+    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 30px 8px 8px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .25s; }
+    .book-card:hover .info { opacity: 1; }
+    .book-card .info .t { font-size: .82rem; font-weight: 600; line-height: 1.2; }
+    .book-card .info .a { font-size: .7rem; color: #bbb; margin-top: 2px; }
+    .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 4px; }
+
+    .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #141414; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; }
+    .loading-overlay .spinner { width: 50px; height: 50px; border: 4px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .scroll-sentinel { width: 100%; height: 1px; }
+    .inf-loading { text-align: center; padding: 1.5rem; color: #666; display: none; }
+    .inf-loading .spinner-sm { width: 28px; height: 28px; border: 3px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 8px; }
+
+    @media (max-width: 768px) {
+      .book-card, .book-card img { width: 120px; }
+      .book-card img { height: 180px; }
+      .book-card .placeholder { width: 120px; height: 180px; }
+      .cat-tab { font-size: .65rem; padding: 2px 6px; }
+    }
+    @media (max-width: 992px) {
+      .cat-tab { font-size: .7rem; padding: 2px 8px; }
+    }
+  </style>
+</head>
+<body>
+  {% set active_tab = topic %}
+  {% include "_navbar.html" %}
+
+  <div class="page-title">{{ shelf.name }}</div>
+  <div style="padding:0 1rem;font-size:.8rem;color:#666" id="bookCount">{{ shelf.books|length }} books</div>
+
+  {% if shelf.books %}
+  <div class="book-grid" id="bookGrid">
+    {% for book in shelf.books %}
+    {% include "_book_card.html" %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <div style="text-align:center;padding:3rem;color:#666;font-style:italic">No books found for this category.</div>
+  {% endif %}
+
+  <div class="scroll-sentinel" id="scrollSentinel"></div>
+  <div class="inf-loading" id="infLoading">
+    <div class="spinner-sm"></div>
+    <div>Loading more...</div>
+  </div>
+
+  <div class="loading-overlay" id="loadingOverlay">
+    <div class="spinner"></div>
+  </div>
+
+  <footer class="text-center text-muted py-4 small">
+    Powered by Open Library &amp; libgen.li
+  </footer>
+
+  <script>
+    const TOPIC = {{ topic | tojson }};
+    const MODE = {{ mode | tojson if mode else 'nonfiction' | tojson }};
+    let currentPage = 1;
+    let totalPages = Infinity;
+    let loading = false;
+    let obs = null;
+    const sentinel = document.getElementById('scrollSentinel');
+
+    document.getElementById('loadingOverlay').style.display = 'none';
+    document.querySelectorAll('a[href^="/search"], a[href^="/preview"]').forEach(a => {
+      a.addEventListener('click', function() {
+        document.getElementById('loadingOverlay').style.display = 'flex';
+      });
+    });
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
+
+    function renderBooks(books) {
+      const grid = document.getElementById('bookGrid');
+      for (const b of books) {
+        const href = '/preview?title=' + encodeURIComponent(b.title) + '&author=' + encodeURIComponent(b.author) + '&ol_key=' + encodeURIComponent(b.ol_key) + '&cover=' + encodeURIComponent(b.cover_url);
+        const card = document.createElement('a');
+        card.href = href;
+        card.className = 'text-decoration-none';
+        card.innerHTML = '<div class="book-card">' +
+          (b.cover_url ? '<img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" onerror="this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\'"><div class="placeholder ph-fallback" style="display:none">?</div>' : '<div class="placeholder">?</div>') +
+          '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' +
+          (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') +
+          '</div></div>';
+        grid.appendChild(card);
+      }
+      document.getElementById('bookCount').textContent = document.querySelectorAll('#bookGrid .book-card').length + ' books';
+    }
+
+    function loadMore() {
+      if (loading || currentPage >= totalPages) return;
+      loading = true;
+      document.getElementById('infLoading').style.display = 'block';
+      currentPage++;
+      fetch('/api/category/' + encodeURIComponent(TOPIC) + '?page=' + currentPage + '&mode=' + MODE)
+        .then(r => r.json())
+        .then(data => {
+          if (data.success) {
+            if (data.books.length === 0) {
+              totalPages = currentPage;
+              if (obs && sentinel) obs.unobserve(sentinel);
+            } else {
+              renderBooks(data.books);
+              totalPages = data.total_pages;
+              if (obs && sentinel) { obs.unobserve(sentinel); obs.observe(sentinel); }
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          loading = false;
+          document.getElementById('infLoading').style.display = 'none';
+        });
+    }
+
+    if (sentinel) {
+      obs = new IntersectionObserver(entries => {
+        if (entries[0].isIntersecting) loadMore();
+      }, { rootMargin: '200px' });
+      obs.observe(sentinel);
+    }
+  </script>
+</body>
+</html>

@@ -3,33 +3,42 @@
 ## Overview
 
 LibFlix is a Flask-based web application that transforms libgen.li into a
-"Netflix for books" browsing and download experience. It uses Open Library's
-free API for book discovery (trending, subject shelves, descriptions) and
-libgen.li for file downloads.
+"Netflix for books" browsing and download experience. It supports **two book
+discovery backends**: Open Library (free, no key) and Google Books (faster,
+richer metadata, requires free API key).
 
 ## Core UX Flows
 
 ### 1. Homepage Browsing (`GET /`)
 ```
 User visits /
-  → Server returns cached shelves (warmed on startup)
-  → Hero picks random trending non-fiction book
-  → 12 horizontal shelves render immediately (~3ms)
+  → Server returns cached shelves (warmed on startup, persisted to disk)
+  → Hero picks random trending book for the selected mode (with description from source)
+  → 12 horizontal shelves render immediately (~3ms with cache hit)
   → User clicks a book card → `/preview?title=...&ol_key=...`
-  → User clicks "Download" on hero → `/search?q=...`
+  → Category tabs in navbar → `/category/<topic>` (infinite scroll)
 ```
 
-### 2. Book Preview (`GET /preview?title=&author=&ol_key=`)
+### 2. Category Browsing (`GET /category/<topic>`)
+```
+Page shell renders instantly with first batch of books (server-side)
+  → JS sets up IntersectionObserver on scroll sentinel
+  → When user scrolls near bottom → GET /api/category/<topic>?page=N
+  → New books appended to grid, book count updates
+  → Loading spinner shown during fetch
+```
+
+### 3. Book Preview (`GET /preview?title=&author=&ol_key=`)
 ```
 Page shell renders instantly (cover, title, author)
   → JS fetches `/api/book?ol_key=` for description + subjects (async)
-  → Description appears with skeleton shimmer while loading
+  → Description appears with skeleton shimmer while loading (HTML stripped)
   → Subjects become clickable tags
   → First subject triggers `/api/similar?subject=` → "More Like This" shelf
-  → User clicks "Search LibGen" → `/search?q=...`
+  → Libgen download options shown inline (auto-searches title + author)
 ```
 
-### 3. Search (`GET /search?q=...`)
+### 4. Search (`GET /search?q=...`)
 ```
 Page renders instantly with search form + spinner
   → JS calls `/api/search?q=...&sort=...&page=...` via fetch
@@ -42,33 +51,44 @@ Page renders instantly with search form + spinner
 
 ## Key Components
 
-### `app.py` (565 lines)
+### `app.py` (~760 lines)
 
 | Component | Lines | Purpose |
 |---|---|---|
-| Cache layer | 14-38 | In-memory TTL-based cache for OL API responses (10min) and libgen HTML (5min) |
-| `SHELVES_DEF` | 45-57 | 12 non-fiction subject categories for homepage shelves |
-| `extract_book` | 60-77 | Filters OL results to English + cover + author only |
-| `fetch_shelves` | 91-110 | Parallel (6 workers) fetcher for all 12 shelves |
-| `fetch_search` | 128-146 | Libgen.li search with caching |
-| `parse_results` | 148-182 | BS4 parser for libgen's HTML table |
-| `dedup` | 258-267 | Groups by normalized title+author, keeps highest-scored format |
-| `GET /` | 305-314 | Returns cached shelves + random hero |
-| `GET /preview` | 323-342 | Instant page render, async description load |
-| `GET /api/search` | 358-444 | JSON endpoint for libgen search |
-| `GET /download/<md5>` | 446-461 | Proxies file download from libgen |
-| `POST /api/sendtokindle` | 475-522 | Downloads from libgen, emails via user's SMTP |
-| `olcover` | 529-540 | Proxies Open Library cover images (S/M/L sizes) |
-| `warm_cache` | 546-550 | Background thread on startup |
+| Cache layer | 18-42 | In-memory TTL-based cache for OL/GB API (10min) and libgen HTML (15min) |
+| Book source config | 17 | `BOOK_SOURCE` env var: `openlibrary` (default) or `google` |
+| `SHELVES_DEF` / `FICTION_SHELVES_DEF` | app.py | Separate non-fiction and fiction subject categories for homepage shelves |
+| `ol_get` | 27-40 | Open Library API caller with caching |
+| `gb_get` | 109-123 | Google Books API caller with caching (uses `GOOGLE_BOOKS_API_KEY` env) |
+| `extract_book` / `gb_extract_book` | 65-84, 125-140 | Filters OL/GB results to English + cover + author only |
+| `fetch_one_shelf` | 144-175 | Fetches a single category from OL or GB (based on `BOOK_SOURCE`) |
+| `fetch_shelves` | 177-185 | Parallel (6 workers) fetcher for all 12 shelves |
+| `fetch_search` | 195-212 | Libgen.li search with caching |
+| `parse_results` | 215-260 | BS4 parser for libgen's HTML table |
+| `dedup` | 340-349 | Groups by normalized title+author, keeps highest-scored format |
+| `strip_html` | 363-368 | Strips HTML tags and unescapes entities from descriptions |
+| `GET /` | 428-456 | Returns cached shelves + random hero |
+| `GET /category/<topic>` | 458-465 | Server-rendered category page with first batch of books |
+| `GET /api/category/<topic>` | 467-497 | Paginated JSON endpoint for infinite scroll |
+| `GET /preview` | 477-485 | Instant page render, async description load |
+| `GET /api/book` | 521-558 | JSON endpoint for book details (OL or GB) |
+| `GET /api/similar` | 498-520 | JSON endpoint for similar books |
+| `GET /api/search` | 401-445 | JSON endpoint for libgen search |
+| `GET /download/<md5>` | 530-539 | Proxies file download from libgen |
+| `POST /api/sendtokindle` | 562-620 | Downloads from libgen, emails via user's SMTP |
+| `/olcover` / `/gbcover` | 607-633 | Proxies cover images (S/M/L sizes) |
+| `warm_cache` | 636-648 | Background thread on startup, loads disk cache instantly |
 
 ### Templates
 
 | Template | Purpose |
 |---|---|
-| `templates/index.html` | Homepage — hero + 12 draggable shelves, error states |
+| `templates/_navbar.html` | Shared navbar — logo, search bar, category tabs inline (responsive, scrollable) |
+| `templates/_book_card.html` | Shared book card partial (cover, title, author overlay) |
+| `templates/index.html` | Homepage — hero + 12 shelves, uses `_navbar` and `_book_card` |
+| `templates/category.html` | Category browsing — server-rendered first batch + infinite scroll via IntersectionObserver |
 | `templates/search.html` | Two-phase search — instant shell + async results + filter controls + Kindle send |
-| `templates/book.html` | Book preview — detail view with async description + similar shelf |
-| ~~`templates/results.html`~~ | *Replaced by search.html (client-side render)* |
+| `templates/book.html` | Book preview — detail view with async description + inline libgen results + Kindle send |
 
 ### Data Flow
 
@@ -77,30 +97,28 @@ Browser                    Flask Server                  External APIs
 -------                    ------------                  -------------
 [Homepage]                 GET /
   ↓                           ↓ (cache hit ~3ms)
-  render shelves              fetch_shelves() ──→ ThreadPool(6) ──→ Open Library API
+  render shelves              fetch_shelves() ──→ ThreadPool(6) ──→ OL or GB API
   render hero                                             ↓
   ↓                           ↓                          cache 10min
-[click card]               GET /preview?ol_key=X
+[click category tab]        GET /category/<topic>
+  ↓                           ↓ fetch_one_shelf (first batch)
+  render grid                 ↓ render with _book_card partials
+  ↓
+  IntersectionObserver ────→ GET /api/category/<topic>?page=N ──→ OL or GB API (paginated)
+  → append books to grid     ↓ return JSON
+  ↓
+[click card]                GET /preview?ol_key=X
   ↓                           ↓ (instant)
   render shell                render book.html
-  fetch /api/book ──────────→ GET /api/book ──────────→ Open Library work API
-  fetch /api/similar ───────→ GET /api/similar ───────→ Open Library subject search
-  ↓
-[click Search LibGen]      GET /search?q=...
-  ↓                           ↓ (instant)
-  render spinner              render search.html
+  fetch /api/book ──────────→ GET /api/book ──────────→ OL work API or GB volume API
+  fetch /api/similar ───────→ GET /api/similar ───────→ OL or GB subject search
   fetch /api/search ────────→ GET /api/search ────────→ libgen.li HTML
-                                parse_results(bs4)
-                                dedup()
-                                return JSON
-  ↓                           ↓ cache 5min
-  render results table
-  ↓
-[click Download]            GET /download/<md5>
+  ↓ render results table
+[click Download]             GET /download/<md5>
   ↓                           ↓ resolve_download() ─→ libgen.li ads.php
   stream file                 ↓ stream from dl link
   ↓
-[click Send to Kindle]      POST /api/sendtokindle
+[click Send to Kindle]       POST /api/sendtokindle
   ↓                           ↓ resolve + download
   show sending overlay        ↓ email via SMTP (user's Gmail)
   show ✓ Sent                 ↓ return JSON
@@ -108,35 +126,40 @@ Browser                    Flask Server                  External APIs
 
 ## API Reference
 
-### `GET /api/search`
-Search libgen.li for books.
+### `GET /api/category/<topic>`
+Fetch paginated books for a category shelf.
 
-**Params:** `q`, `sort` (y\|title\|author\|filesize\|extension), `order` (ASC\|DESC), `limit`, `page`, `format` (epub\|pdf\|mobi\|all), `lang` (English\|all), `dedup` (0\|1)
+**Params:** `page` (1-based)
 
 **Returns:**
 ```json
 {
   "success": true,
-  "query": "atomic habits",
-  "total": 42,
-  "total_pages": 2,
+  "books": [{"title": "...", "author": "...", "cover_url": "/gbcover/...", "ol_key": "..."}],
   "page": 1,
-  "books": [
-    {
-      "idx": 1, "title": "Atomic Habits", "author": "James Clear",
-      "year": "2019", "ext": "epub", "size": "2.5 MB",
-      "md5": "65e5bdb6807bb180ed3af728f3327226",
-      "cover_url": "/cover/65e5bdb68...?dir=4322000",
-      "publisher": "", "language": "English", "pages": ""
-    }
-  ]
+  "total_pages": 16,
+  "total": 300
+}
+```
+
+### `GET /api/search`
+Search libgen.li for books.
+
+**Params:** `q`, `sort` (y|title|author|filesize|extension), `order` (ASC|DESC), `limit`, `page`, `format` (epub|pdf|mobi|all), `lang` (English|all), `dedup` (0|1)
+
+**Returns:**
+```json
+{
+  "success": true, "query": "atomic habits", "total": 42,
+  "total_pages": 2, "page": 1,
+  "books": [{"idx": 1, "title": "Atomic Habits", "author": "James Clear", "year": "2019", "ext": "epub", "size": "2.5 MB", "md5": "...", "cover_url": "/cover/...?dir=4322000", "publisher": "", "language": "English", "pages": ""}]
 }
 ```
 
 ### `GET /api/book`
-Fetch Open Library work details.
+Fetch book details (description + subjects) from the configured source.
 
-**Params:** `ol_key` (e.g. `/works/OL21628013W`)
+**Params:** `ol_key` (OL work key `/works/OL123W` or GB volume ID)
 
 **Returns:** `{ success, title, description, subjects[] }`
 
@@ -158,16 +181,28 @@ Email a book to Kindle via SMTP.
 
 | Data | TTL | Key Format | Warmed On |
 |---|---|---|---|
-| Open Library API responses | 10 min | `ol:{path}:{params}` | First request |
-| Libgen search HTML | 5 min | `lg:{query}:{sort}:{order}:{page}:{limit}` | First search |
-| Homepage shelves | 10 min | `shelves` | **Server startup** (background thread) |
+| Open Library / Google Books API | 10 min | `ol:{path}:{params}` or `gb:{path}:{params}` | First request |
+| Libgen search HTML | 15 min | `lg:{query}:{sort}:{order}:{page}:{limit}` | First search |
+| Homepage shelves | 1 hour | `shelves_{mode}` (in-memory + `shelf_cache_{mode}.json` on disk) | **Server startup** (instant from disk, refreshed in background) |
 | Cover images | 24h | (HTTP Cache-Control) | First load |
 
-## Non-Fiction Focus
+## Configuration
 
-The app is curated for non-fiction content:
+### Book Source
+Set via environment variable:
+```bash
+export BOOK_SOURCE=google          # Use Google Books API
+export BOOK_SOURCE=openlibrary     # Use Open Library (default)
+```
 
-1. **Shelf subjects** exclude fiction: `q=subject:{topic} -subject:Fiction`
-2. **Trending** sources from non-fiction search: `q=subject:Nonfiction -subject:Fiction`
-3. **Book filter** drops non-English titles (ASCII heuristic), books without covers, books without authors
-4. **Hero** randomly picks from the (filtered) trending shelf
+### Google Books API Key
+Required only when `BOOK_SOURCE=google`:
+```bash
+export GOOGLE_BOOKS_API_KEY="your-key-here"
+```
+Get a free key from https://console.cloud.google.com/apis/credentials
+(1,000 requests/day free tier). Never hardcode the key.
+
+### Templates
+
+All templates use shared partials (`_navbar.html`, `_book_card.html`) for consistency. The navbar includes the Fiction / Non-Fiction switch and mode-specific category tabs. The category page uses IntersectionObserver-based infinite scroll with a sentinel element. Searching/navigating shows a full-screen loading overlay (triggered by `a[href^="/search"]` and `a[href^="/preview"]` click handlers).

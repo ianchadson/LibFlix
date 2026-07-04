@@ -1,19 +1,32 @@
-import re, os, warnings, time, random, threading
+import re, os, json, html as htmlmod, warnings, time, random, threading
 from urllib.parse import urljoin, quote
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import requests
+from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, Response, stream_with_context, jsonify
 
+# Modular download source — see ``downloaders/`` package.
+from downloaders import DOWNLOADER
+from downloaders.base import Book, SESSION as DL_SESSION
+from downloaders.libgen import MIRROR
+
 warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
-MIRROR = "https://libgen.li"
 OL = "https://openlibrary.org"
 CACHE = {}
-CACHE_TTL_OL = 600
-CACHE_TTL_LG = 300
+CACHE_TTL_OL = 3600
+SHELF_DISK_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shelf_cache.json")
+
+BOOK_SOURCE = os.environ.get("BOOK_SOURCE", "openlibrary").lower()
+GOOGLE_API_KEY = os.environ.get("GOOGLE_BOOKS_API_KEY", "")
+
+SESSION = requests.Session()
+SESSION.mount("https://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
+SESSION.mount("http://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
+SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
 
 def cache_get(key, ttl=CACHE_TTL_OL):
     v = CACHE.get(key)
@@ -30,8 +43,7 @@ def ol_get(path, params=None):
     if cached:
         return cached
     try:
-        r = requests.get(f"{OL}{path}", params=params, timeout=15,
-                         headers={"User-Agent": "Mozilla/5.0"})
+        r = SESSION.get(f"{OL}{path}", params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
         cache_set(key, data)
@@ -43,7 +55,7 @@ def ol_get_work(ol_key):
     return ol_get(ol_key + ".json")
 
 SHELVES_DEF = [
-    ("Trending Now", "trending"),
+    ("New & Popular", "trending"),
     ("Personal Development", "self_help"),
     ("Business & Finance", "business"),
     ("Science & Technology", "technology"),
@@ -57,8 +69,78 @@ SHELVES_DEF = [
     ("Award-Winning Non-Fiction", "award"),
 ]
 
+FICTION_SHELVES_DEF = [
+    ("New Releases", "trending_fiction"),
+    ("Science Fiction", "science_fiction"),
+    ("Fantasy", "fantasy"),
+    ("Mystery & Thriller", "mystery"),
+    ("Romance", "romance"),
+    ("Horror", "horror"),
+    ("Historical Fiction", "historical_fiction"),
+    ("Adventure", "adventure"),
+    ("Young Adult", "young_adult"),
+    ("Graphic Novels", "graphic_novels"),
+    ("Literary Fiction", "literary_fiction"),
+    ("Contemporary Fiction", "contemporary_fiction"),
+]
+
+def get_shelves_def(mode="nonfiction"):
+    return FICTION_SHELVES_DEF if mode == "fiction" else SHELVES_DEF
+
+FICTION_TOPICS = {topic for _, topic in FICTION_SHELVES_DEF}
+
+def shelf_query(topic):
+    if topic == "trending":
+        return "subject:Nonfiction -subject:Fiction", "rating"
+    if topic == "trending_fiction":
+        return "subject:Fiction", "rating"
+    if topic in FICTION_TOPICS:
+        return f"subject:{topic.replace('_', ' ')} subject:Fiction", "rating"
+    return f"subject:{topic.replace('_', ' ')} -subject:Fiction", "rating"
+
+def gb_shelf_query(topic):
+    if topic == "trending":
+        return "subject:Nonfiction", "newest"
+    if topic == "trending_fiction":
+        return "subject:Fiction", "newest"
+    return f"subject:{topic.replace('_', ' ')}", "relevance"
+
+def gb_search_shelf_books(q, order, want=25):
+    books = []
+    seen = set()
+    for start_index in (0, 40, 80):
+        data = gb_get("/volumes", {"q": q, "orderBy": order, "maxResults": 40, "startIndex": start_index})
+        for item in (data or {}).get("items", []):
+            b = gb_extract_book(item)
+            if not b:
+                continue
+            key = (normalize_title(b["title"]), normalize_author(b.get("author", "")))
+            if key in seen:
+                continue
+            seen.add(key)
+            books.append(b)
+        verified = verify_covers(books)
+        if len(verified) >= want:
+            return verified[:want]
+    return verify_covers(books)[:want]
+
 def is_english_title(title):
     return bool(re.match(r'^[\x20-\x7E\s\-\'.,!?;:()"&]+$', title))
+
+_ENGLISH_WORDS = frozenset(
+    "the is a an of to in and that this with for on as by from or but not was has "
+    "have are be been his her their its which who when where what how why will would "
+    "can could should about into over under after before between among through during "
+    "while also more most some such only own than then there here one two first new "
+    "story book author memoir life world history man woman people time year".split()
+)
+
+def is_english_text(text, threshold=4):
+    words = re.findall(r"[a-zA-Z']+", text.lower())
+    if len(words) < 4:
+        return False
+    hits = sum(1 for w in words if w in _ENGLISH_WORDS)
+    return hits >= threshold
 
 def extract_book(w):
     title = w.get("title", "")
@@ -82,14 +164,71 @@ def extract_book(w):
     ol_key = w.get("key", "")
     return {"title": title, "author": author, "cover_url": cover_url, "ol_key": ol_key}
 
+def gb_get(path, params=None):
+    if not GOOGLE_API_KEY:
+        return None
+    key = f"gb:{path}:{str(params)}"
+    cached = cache_get(key, CACHE_TTL_OL)
+    if cached:
+        return cached
+    try:
+        p = dict(params or {})
+        p["key"] = GOOGLE_API_KEY
+        r = SESSION.get(f"https://www.googleapis.com/books/v1{path}", params=p, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+        cache_set(key, data)
+        return data
+    except:
+        return None
+
+def gb_extract_book(item):
+    v = item.get("volumeInfo", {})
+    title = v.get("title", "")
+    if not title or not is_english_title(title):
+        return None
+    authors = v.get("authors", [])
+    author = authors[0] if authors else ""
+    if not author:
+        return None
+    images = v.get("imageLinks", {})
+    thumb = (images.get("thumbnail") or images.get("smallThumbnail") or "")
+    if not thumb:
+        return None
+    gb_id = item.get("id", "")
+    cover_url = thumb.replace("http://", "https://").replace("zoom=1", "zoom=3").split("&edge=curl")[0].rstrip("&")
+    return {"title": title, "author": author, "cover_url": cover_url, "ol_key": gb_id}
+
+def verify_covers(books):
+    """Remove books whose cover is a Google placeholder (< 5KB). Runs HEAD requests in parallel."""
+    def check(b):
+        gid = b.get("ol_key", "")
+        if not gid:
+            return None
+        try:
+            h = SESSION.head(
+                f"https://books.google.com/books/content?id={gid}&printsec=frontcover&img=1&zoom=3&source=gbs_api",
+                timeout=3,
+            )
+            cl = int(h.headers.get("content-length", 0))
+            return b if h.status_code == 200 and cl >= 10000 else None
+        except:
+            return None
+    with ThreadPoolExecutor(max_workers=20) as pool:
+        results = list(pool.map(check, books))
+    return [b for b in results if b is not None]
+
 def fetch_one_shelf(name, topic):
     try:
-        if topic == "trending":
-            params = {"q": "subject:Nonfiction -subject:Fiction", "sort": "rating", "limit": 30}
-        else:
-            params = {"q": f"subject:{topic} -subject:Fiction", "sort": "rating", "limit": 30}
+        if BOOK_SOURCE == "google":
+            q, order = gb_shelf_query(topic)
+            books = gb_search_shelf_books(q, order, want=25)
+            return {"name": name, "books": books}
+
+        q, sort = shelf_query(topic)
+        params = {"q": q, "sort": sort, "limit": 50}
         data = ol_get("/search.json", params)
-        works = (data or {}).get("docs", [])[:30]
+        works = (data or {}).get("docs", [])[:50]
         books = []
         for w in works:
             b = extract_book(w)
@@ -101,115 +240,23 @@ def fetch_one_shelf(name, topic):
     except:
         return {"name": name, "books": []}
 
-def fetch_shelves():
+def fetch_shelves(mode="nonfiction"):
+    sd = get_shelves_def(mode)
     shelves = []
     with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {pool.submit(fetch_one_shelf, name, topic): name for name, topic in SHELVES_DEF}
+        futures = {pool.submit(fetch_one_shelf, name, topic): name for name, topic in sd}
         for f in as_completed(futures):
             shelves.append(f.result())
-    shelves.sort(key=lambda s: [n for n, _ in SHELVES_DEF].index(s["name"]))
+    shelves.sort(key=lambda s: [n for n, _ in sd].index(s["name"]))
     return shelves
 
-@dataclass
-class LibgenBook:
-    id: str = ""
-    title: str = ""
-    author: str = ""
-    publisher: str = ""
-    year: str = ""
-    language: str = ""
-    pages: str = ""
-    size: str = ""
-    ext: str = ""
-    md5: str = ""
-    cover_dir: str = ""
-
-def fetch_search(query, sort="y", order="DESC", page=1, res=25):
-    key = f"lg:{query}:{sort}:{order}:{page}:{res}"
-    cached = cache_get(key, CACHE_TTL_LG)
-    if cached:
-        return cached
-    params = {
-        "req": query,
-        "columns[]": ["t", "a", "s", "y", "p", "i", "l", "la", "qi"],
-        "sort": sort, "sortmode": order,
-        "page": page, "res": res,
-        "gmode": 1,
-        "topics[]": ["l", "f"], "curtab": "f",
-    }
-    r = requests.get(f"{MIRROR}/index.php", params=params, timeout=30,
-                     headers={"User-Agent": "Mozilla/5.0"})
-    r.raise_for_status()
-    html = r.text
-    cache_set(key, html)
-    return html
-
-def parse_results(html_text):
-    soup = BeautifulSoup(html_text, "html.parser")
-    table = soup.find("table", id="tablelibgen")
-    if not table:
-        return []
-    books = []
-    rows = table.find_all("tr")
-    for row in rows[1:]:
-        cells = row.find_all("td")
-        if len(cells) < 9:
-            continue
-        tds = list(row.find_all("td"))
-        md5 = ""
-        mlink = tds[-1].find("a")
-        if mlink and mlink.get("href"):
-            m = re.search(r'md5=([a-f0-9]{32})', mlink["href"])
-            if m:
-                md5 = m.group(1)
-        link_a = tds[0].find("a")
-        title = link_a.get_text(strip=True) if link_a else tds[0].get_text(strip=True)
-        title = re.sub(r'\s+', ' ', title).strip()
-        year = tds[3].get_text(" ", strip=True)
-        year = re.sub(r'[;|].*$', '', year).strip()
-        year = re.sub(r'\s+P\s+\d+.*$', '', year).strip()
-        size_link = tds[6].find("a")
-        size = size_link.get_text(strip=True) if size_link else tds[6].get_text(" ", strip=True)
-        first_html = str(tds[0])
-        l_match = re.search(r'l (\d+)', first_html)
-        cover_dir = ""
-        if l_match:
-            l_num = int(l_match.group(1))
-            cover_dir = str(l_num // 1000 * 1000)
-        books.append(LibgenBook(
-            title=title, author=tds[1].get_text(" ", strip=True),
-            publisher=tds[2].get_text(" ", strip=True), year=year,
-            language=tds[4].get_text(" ", strip=True),
-            pages=tds[5].get_text(" ", strip=True), size=size,
-            ext=tds[7].get_text(" ", strip=True), md5=md5,
-            cover_dir=cover_dir,
-        ))
-    return books
-
-def resolve_download(md5):
-    try:
-        r = requests.get(f"{MIRROR}/ads.php", params={"md5": md5}, timeout=30,
-                         headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        for a in soup.find_all("a"):
-            href = a.get("href", "")
-            if "get.php" in href or "download" in href.lower() or "/dl/" in href:
-                return urljoin(r.url, href)
-        for a in soup.find_all("a"):
-            href = a.get("href", "")
-            if href.startswith("http") and ("libgen" in href or "booksdl" in href):
-                return urljoin(r.url, href)
-        txt = r.text
-        m = re.search(r'https?://[^"\']+\.(?:epub|pdf|mobi|djvu|zip|rar)[^"\']*', txt, re.I)
-        if m:
-            return m.group(0)
-        m = re.search(r'(?:href|HREF)=["\']([^"\']+)["\']', txt)
-        if m:
-            return urljoin(r.url, m.group(1))
-    except Exception:
-        return f"{MIRROR}/ads.php?md5={md5}"
-    return f"{MIRROR}/ads.php?md5={md5}"
+# ---------------------------------------------------------------------------
+# Download source
+# ---------------------------------------------------------------------------
+# All libgen.li-specific code (search, parse, resolve, cover) now lives in
+# ``downloaders/libgen.py``.  The Flask routes below call ``DOWNLOADER`` so
+# changing the source is a one-line change in ``downloaders/__init__.py``.
+DOWNLOADER  # noqa: F821 — imported at top of file
 
 def normalize_title(title):
     t = title.lower().strip()
@@ -242,7 +289,7 @@ def parse_size_bytes(size_str):
 
 def book_score(book):
     score = 0
-    fmt_scores = {"epub": 30, "pdf": 20, "mobi": 15, "azw3": 15, "djvu": 10, "chm": 5, "txt": 3}
+    fmt_scores = {"epub": 50, "pdf": 20, "mobi": 20, "azw3": 20, "djvu": 10, "chm": 5, "txt": 3}
     score += fmt_scores.get(book.ext.lower(), 0)
     score += 20 if book.language.lower() == "english" else 0
     try:
@@ -258,6 +305,15 @@ def book_score(book):
         score -= 10
     else:
         score += 5
+    if book.publisher.strip():
+        score += 5
+    try:
+        if int(book.pages) > 0:
+            score += 5
+    except:
+        pass
+    if getattr(book, "cover_dir", ""):
+        score += 3
     return score
 
 def dedup(books):
@@ -271,22 +327,39 @@ def dedup(books):
         best.append(group[0])
     return best
 
-def total_search_results(html_text):
-    soup = BeautifulSoup(html_text, "html.parser")
-    paginator = soup.find("div", class_="paginator")
-    if paginator:
-        m = re.search(r'Paginator\("(\w+)",\s*(\d+)', str(paginator))
-        if m:
-            return int(m.group(2))
-    return 0
+def strip_html(text):
+    if not text:
+        return ""
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = htmlmod.unescape(text)
+    return re.sub(r'\s+', ' ', text).strip()
 
 def extract_desc(work):
     desc = work.get("description", "")
     if isinstance(desc, dict):
         desc = desc.get("value", "")
-    return desc
+    return strip_html(desc)
 
 app = Flask(__name__)
+
+@app.after_request
+def no_cache(resp):
+    if resp.mimetype == "text/html":
+        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        resp.headers["Pragma"] = "no-cache"
+        resp.headers["Expires"] = "0"
+    return resp
+
+@app.template_filter("size_url")
+def size_url(url, size="M"):
+    if not url:
+        return url
+    zoom = {"S": "1", "M": "3", "L": "5"}.get(size, "3")
+    if url.startswith("/"):
+        return f"{url.rstrip('/')}/{size}"
+    if "zoom=" in url:
+        return re.sub(r'zoom=\d+', f'zoom={zoom}', url)
+    return url
 
 SORT_OPTIONS = {
     "y": "Year", "id": "ID", "title": "Title",
@@ -294,23 +367,146 @@ SORT_OPTIONS = {
     "time_added": "Date Added"
 }
 
-def get_shelves():
-    cached = cache_get("shelves", CACHE_TTL_OL)
+def disk_load_shelves(mode="nonfiction"):
+    path = SHELF_DISK_CACHE.replace(".json", f"_{mode}.json")
+    try:
+        with open(path, "r") as f:
+            data = json.load(f)
+        if data and isinstance(data, list) and len(data) > 0:
+            return data
+    except:
+        pass
+    return None
+
+def disk_save_shelves(shelves, mode="nonfiction"):
+    path = SHELF_DISK_CACHE.replace(".json", f"_{mode}.json")
+    try:
+        tmp = path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(shelves, f)
+        os.replace(tmp, path)
+    except:
+        pass
+
+def get_shelves(mode="nonfiction"):
+    ckey = f"shelves_{mode}"
+    cached = cache_get(ckey, CACHE_TTL_OL)
     if cached:
         return cached
-    shelves = fetch_shelves()
-    cache_set("shelves", shelves)
+    disk = disk_load_shelves(mode)
+    if disk:
+        cache_set(ckey, disk)
+        return disk
+    shelves = fetch_shelves(mode)
+    cache_set(ckey, shelves)
+    disk_save_shelves(shelves, mode)
+    return shelves
+
+def dedup_across_shelves(shelves):
+    seen = set()
+    for shelf in shelves:
+        deduped = []
+        for book in shelf["books"]:
+            key = (normalize_title(book["title"]), normalize_author(book.get("author", "")))
+            if key not in seen:
+                seen.add(key)
+                deduped.append(book)
+        shelf["books"] = deduped
     return shelves
 
 @app.route("/")
 def index():
-    shelves = get_shelves()
+    mode = request.args.get("mode", "nonfiction")
+    if mode not in ("fiction", "nonfiction"):
+        mode = "nonfiction"
+    shelves = get_shelves(mode)
+    shelves = dedup_across_shelves(shelves) if shelves else shelves
     hero = None
     if shelves:
         trending = shelves[0].get("books", [])
         if trending:
-            hero = random.choice(trending)
-    return render_template("index.html", shelves=shelves, hero=hero)
+            candidates = random.sample(trending, min(len(trending), 8))
+            for b in candidates:
+                hero = dict(b)
+                hero["description"] = ""
+                if hero.get("ol_key"):
+                    if BOOK_SOURCE == "google":
+                        data = gb_get(f"/volumes/{hero['ol_key']}")
+                        if data:
+                            v = data.get("volumeInfo", {})
+                            desc = v.get("description", "")
+                            if isinstance(desc, dict):
+                                desc = desc.get("value", "")
+                            desc = strip_html(desc)
+                            if desc and is_english_text(desc):
+                                hero["description"] = desc[:300]
+                                break
+                    else:
+                        work = ol_get_work(hero["ol_key"])
+                        if work:
+                            desc = extract_desc(work)
+                            if desc and is_english_text(desc):
+                                hero["description"] = desc[:300]
+                                break
+    return render_template("index.html", shelves=shelves, hero=hero, mode=mode)
+
+@app.route("/category/<topic>")
+def category_page(topic):
+    mode = request.args.get("mode", "nonfiction")
+    sd = get_shelves_def(mode)
+    valid_topics = {t for _, t in sd}
+    if topic not in valid_topics:
+        return render_template("category.html", shelf={"name": topic.capitalize(), "books": []}, topic=topic, mode=mode)
+    name = {t: n for n, t in sd}.get(topic, topic.capitalize())
+    shelf = fetch_one_shelf(name, topic)
+    return render_template("category.html", shelf=shelf, topic=topic, mode=mode)
+
+@app.route("/api/category/<topic>")
+def api_category(topic):
+    page = int(request.args.get("page", 1))
+    mode = request.args.get("mode", "nonfiction")
+    sd = get_shelves_def(mode)
+    valid_topics = {t for _, t in sd}
+    if topic not in valid_topics:
+        return jsonify({"success": False, "error": "Invalid topic"})
+
+    name = {t: n for n, t in sd}.get(topic, topic.capitalize())
+
+    if BOOK_SOURCE == "google":
+        q, order = gb_shelf_query(topic)
+        start_index = (page - 1) * 40
+        data = gb_get("/volumes", {"q": q, "orderBy": order, "maxResults": 40, "startIndex": start_index})
+        total = data.get("totalItems", 0) if data else 0
+        items = (data or {}).get("items", [])[:40]
+        books = []
+        for item in items:
+            b = gb_extract_book(item)
+            if b:
+                books.append(b)
+                if len(books) >= 30:
+                    break
+    else:
+        q, sort = shelf_query(topic)
+        params = {"q": q, "sort": sort, "limit": 30, "page": page}
+        data = ol_get("/search.json", params)
+        total = data.get("numFound", 0) if data else 0
+        works = (data or {}).get("docs", [])[:30]
+        books = []
+        for w in works:
+            b = extract_book(w)
+            if b:
+                books.append(b)
+                if len(books) >= 15:
+                    break
+
+    if BOOK_SOURCE == "google":
+        books = verify_covers(books)
+
+    total_pages = min(100, max(1, (total // max(len(books), 1)) + 1))
+    return jsonify({
+        "success": True, "books": books,
+        "page": page, "total_pages": total_pages, "total": total,
+    })
 
 @app.route("/search")
 def search():
@@ -346,6 +542,17 @@ def api_similar():
     ol_key = request.args.get("ol_key", "").strip()
     if not subject:
         return jsonify({"success": False, "error": "No subject"})
+
+    if BOOK_SOURCE == "google":
+        data = gb_get("/volumes", {"q": f"subject:{subject}", "orderBy": "relevance", "maxResults": 12})
+        items = (data or {}).get("items", [])[:12]
+        books = []
+        for item in items:
+            b = gb_extract_book(item)
+            if b and b["ol_key"] != ol_key:
+                books.append(b)
+        return jsonify({"success": True, "books": books})
+
     data = ol_get("/search.json", {"subject": subject, "sort": "rating", "limit": 12})
     docs = (data or {}).get("docs", [])
     books = []
@@ -360,6 +567,24 @@ def api_book():
     ol_key = request.args.get("ol_key", "").strip()
     if not ol_key:
         return jsonify({"success": False, "error": "No ol_key provided"})
+
+    if BOOK_SOURCE == "google":
+        data = gb_get(f"/volumes/{ol_key}")
+        if not data:
+            return jsonify({"success": False, "error": "Book not found"})
+        v = data.get("volumeInfo", {})
+        desc = v.get("description", "")
+        if isinstance(desc, dict):
+            desc = desc.get("value", "")
+        desc = strip_html(desc)
+        categories = v.get("categories", [])[:12]
+        return jsonify({
+            "success": True,
+            "title": v.get("title", ""),
+            "description": desc,
+            "subjects": categories,
+        })
+
     work = ol_get_work(ol_key)
     if not work:
         return jsonify({"success": False, "error": "Book not found"})
@@ -387,11 +612,9 @@ def api_search():
 
     sort_field = "y" if sort == "year" else sort
     try:
-        html = fetch_search(q, sort=sort_field, order=order, page=page, res=limit)
+        books, total = DOWNLOADER.search(q, sort=sort_field, order=order, page=page, limit=limit)
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
-    books = parse_results(html)
-    total = total_search_results(html)
 
     lang_filter = None if lang == "all" else lang
     fmt_filter = None if fmt == "all" else fmt
@@ -409,20 +632,10 @@ def api_search():
     total_pages = (total + limit - 1) // limit if total else 1
     result_books = []
     for i, b in enumerate(books):
-        cover_url = f"/cover/{b.md5}?dir={b.cover_dir}" if b.cover_dir and b.md5 else ""
-        result_books.append({
-            "idx": i + 1 + (page - 1) * limit,
-            "title": b.title,
-            "author": b.author,
-            "publisher": b.publisher,
-            "year": b.year,
-            "language": b.language,
-            "pages": b.pages,
-            "size": b.size,
-            "ext": b.ext,
-            "md5": b.md5,
-            "cover_url": cover_url,
-        })
+        d = b.to_dict(i + 1 + (page - 1) * limit)
+        cover_dir = getattr(b, "cover_dir", "")
+        d["cover_url"] = f"/cover/{d['md5']}?dir={cover_dir}" if cover_dir and d['md5'] else ""
+        result_books.append(d)
     return jsonify({
         "success": True,
         "query": q,
@@ -440,12 +653,11 @@ def api_search():
 
 @app.route("/download/<md5>")
 def download(md5):
-    url = resolve_download(md5)
+    url = DOWNLOADER.resolve_download(md5)
     filename = request.args.get("filename", f"{md5}.epub")
     def generate():
         try:
-            r = requests.get(url, stream=True, timeout=120,
-                             headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True)
+            r = SESSION.get(url, stream=True, timeout=120, allow_redirects=True)
             r.raise_for_status()
             yield from r.iter_content(chunk_size=65536)
         except:
@@ -462,8 +674,7 @@ def cover(md5):
         return "", 404
     url = f"{MIRROR}/covers/{cover_dir}/{md5}.jpg"
     try:
-        r = requests.get(url, timeout=15,
-                         headers={"User-Agent": "Mozilla/5.0", "Referer": f"{MIRROR}/"})
+        r = SESSION.get(url, timeout=15, headers={"Referer": f"{MIRROR}/"})
         if r.status_code == 200 and len(r.content) > 100:
             resp = Response(r.content, mimetype=r.headers.get("content-type", "image/jpeg"))
             resp.headers["Cache-Control"] = "public, max-age=86400"
@@ -478,8 +689,7 @@ def olcover(cover_id, size="M"):
     s = size.upper() if size in ("S", "M", "L") else "M"
     url = f"https://covers.openlibrary.org/b/id/{cover_id}-{s}.jpg"
     try:
-        r = requests.get(url, timeout=10,
-                         headers={"User-Agent": "Mozilla/5.0"})
+        r = SESSION.get(url, timeout=10)
         if r.status_code == 200 and len(r.content) > 100:
             resp = Response(r.content, mimetype=r.headers.get("content-type", "image/jpeg"))
             resp.headers["Cache-Control"] = "public, max-age=86400"
@@ -487,6 +697,25 @@ def olcover(cover_id, size="M"):
     except:
         pass
     return "", 404
+
+@app.route("/gbcover/<gb_id>")
+@app.route("/gbcover/<gb_id>/<size>")
+def gbcover(gb_id, size="M"):
+    zooms = {"S": ["1", "2"], "M": ["3", "5", "2"], "L": ["5", "3"]}
+    for zoom in zooms.get(size.upper(), ["3", "5"]):
+        url = f"https://books.google.com/books/content?id={gb_id}&printsec=frontcover&img=1&zoom={zoom}&source=libflix"
+        try:
+            r = SESSION.get(url, timeout=10, headers={"Referer": "https://books.google.com/"})
+            ct = (r.headers.get("content-type") or "").lower()
+            if r.status_code == 200 and "image" in ct and len(r.content) > 10000:
+                resp = Response(r.content, mimetype=ct)
+                resp.headers["Cache-Control"] = "public, max-age=86400"
+                return resp
+        except:
+            pass
+    resp = Response("", status=404, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
 
 @app.route("/api/sendtokindle", methods=["POST"])
 def api_sendtokindle():
@@ -510,10 +739,9 @@ def api_sendtokindle():
     if not all([md5, kindle_email, smtp_host, smtp_user, smtp_pass]):
         return jsonify({"success": False, "error": "Missing required fields"}), 400
 
-    dl_url = resolve_download(md5)
+    dl_url = DOWNLOADER.resolve_download(md5)
     try:
-        r = requests.get(dl_url, stream=True, timeout=120,
-                         headers={"User-Agent": "Mozilla/5.0"}, allow_redirects=True)
+        r = SESSION.get(dl_url, stream=True, timeout=120, allow_redirects=True)
         r.raise_for_status()
     except Exception as e:
         return jsonify({"success": False, "error": f"Download failed: {e}"})
@@ -554,11 +782,19 @@ def api_sendtokindle():
         return jsonify({"success": False, "error": str(e)})
 
 def warm_cache():
-    print("Warming cache: fetching shelves...")
+    for mode in ("nonfiction", "fiction"):
+        disk = disk_load_shelves(mode)
+        if disk:
+            cache_set(f"shelves_{mode}", disk)
+            print(f"Loaded {len(disk)} {mode} shelves from disk cache (instant)", flush=True)
+    print("Warming cache: fetching fresh shelves...", flush=True)
     t0 = time.time()
-    shelves = fetch_shelves()
-    cache_set("shelves", shelves)
-    print(f"Cache warmed: {len(shelves)} shelves in {time.time()-t0:.1f}s")
+    for mode in ("nonfiction", "fiction"):
+        shelves = fetch_shelves(mode)
+        cache_set(f"shelves_{mode}", shelves)
+        disk_save_shelves(shelves, mode)
+        print(f"  {mode}: {len(shelves)} shelves", flush=True)
+    print(f"Cache warmed in {time.time()-t0:.1f}s", flush=True)
 
 if __name__ == "__main__":
     threading.Thread(target=warm_cache, daemon=True).start()
