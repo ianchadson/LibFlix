@@ -110,10 +110,8 @@
     /* More Like This shelf */
     .shelf { margin-bottom: 2rem; }
     .shelf-title { font-size: 1.2rem; font-weight: 600; margin-bottom: .5rem; padding-left: 4px; }
-    .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; }
-    .shelf-row::-webkit-scrollbar { height: 6px; }
-    .shelf-row::-webkit-scrollbar-track { background: transparent; }
-    .shelf-row::-webkit-scrollbar-thumb { background: rgba(255,255,255,.2); border-radius: 3px; }
+    .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; scrollbar-width: none; -ms-overflow-style: none; }
+    .shelf-row::-webkit-scrollbar { display: none; }
     .book-card { flex: 0 0 auto; width: 130px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; background:#242424; }
     .book-card:hover { transform: scale(1.08); z-index: 5; }
     .book-card img { width: 130px; height: 195px; object-fit: cover; border-radius: 4px; display: block; background: #333; opacity:0; transition: opacity .22s ease; position:relative; z-index:2; }
@@ -218,10 +216,6 @@
     </div>
 
     <div id="lgResults" style="display:none">
-      <div class="d-flex justify-content-between align-items-center result-info">
-        <span id="resultCount"></span>
-        <span id="resultMeta" class="text-muted"></span>
-      </div>
       <div class="table-wrap">
         <table class="book-table">
           <thead>
@@ -293,7 +287,7 @@
     const bookAuthor = {{ author | tojson }};
     const olKey = {{ ol_key | tojson }};
     const MODE = {{ mode | default('nonfiction') | tojson }};
-    const BOOK_SOURCE = {{ book_source | tojson }};
+    const BOOK_LANG = {{ book_lang | tojson }};
     const searchQuery = (bookTitle + ' ' + (bookAuthor || '')).trim();
 
     function esc(s) {
@@ -309,7 +303,7 @@
 
     /* ---- Book details (description + subjects) ---- */
     if (olKey) {
-      fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&source=' + encodeURIComponent(BOOK_SOURCE))
+      fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
         .then(r => r.json())
         .then(data => {
           document.getElementById('descSkeleton').style.display = 'none';
@@ -348,7 +342,7 @@
         document.getElementById('similarRow').innerHTML = '<div style="color:#666;font-style:italic;padding:1rem">No similar books found.</div>';
         return;
       }
-      fetch('/api/similar?subject=' + encodeURIComponent(subject) + '&ol_key=' + encodeURIComponent(olKey) + '&source=' + encodeURIComponent(BOOK_SOURCE))
+      fetch('/api/similar?subject=' + encodeURIComponent(subject) + '&ol_key=' + encodeURIComponent(olKey) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
         .then(r => r.json())
         .then(data => {
           if (!data.success || !data.books.length) {
@@ -357,7 +351,7 @@
           }
           let html = '';
           for (const b of data.books) {
-            const href = '/preview?title=' + encodeURIComponent(b.title) + '&author=' + encodeURIComponent(b.author) + '&ol_key=' + encodeURIComponent(b.ol_key) + '&cover=' + encodeURIComponent(b.cover_url) + '&mode=' + encodeURIComponent(MODE) + '&source=' + encodeURIComponent(BOOK_SOURCE);
+            const href = '/preview?title=' + encodeURIComponent(b.title) + '&author=' + encodeURIComponent(b.author) + '&ol_key=' + encodeURIComponent(b.ol_key) + '&cover=' + encodeURIComponent(b.cover_url) + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG);
             html += '<a href="' + href + '" class="text-decoration-none"><div class="book-card">';
             if (b.cover_url) {
               html += '<div class="cover-skeleton"></div><img src="' + b.cover_url + '" alt="' + esc(b.title) + '" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="placeholder" style="display:none">?</div>';
@@ -387,6 +381,8 @@
         format: document.getElementById('fmtSel').value,
         lang: 'English',
         dedup: document.getElementById('dedupToggle').checked ? '1' : '0',
+        mode: MODE,
+        book_lang: BOOK_LANG,
         page: String(page || 1)
       };
     }
@@ -411,8 +407,6 @@
 
     function renderTable(data) {
       const b = data.books;
-      document.getElementById('resultCount').textContent = b.length + ' of ' + data.total + ' results';
-      document.getElementById('resultMeta').textContent = 'Page ' + data.page + ' of ' + data.total_pages;
       let html = '';
       for (const book of b) {
         const titleShort = book.title.length > 100 ? esc(book.title.slice(0,100)) + '...' : esc(book.title);

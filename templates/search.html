@@ -92,7 +92,6 @@
 <body>
   {% set active_tab = '' %}
   {% set mode = mode | default('nonfiction') %}
-  {% set search_id = 'searchForm' %}
   {% set search_value = query %}
   {% include "_navbar.html" %}
   <button id="settingsBtn" class="btn btn-sm" style="background:rgba(25,25,25,.92);color:#ddd;border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:8px 13px;font-size:.78rem;position:fixed;right:16px;bottom:16px;z-index:20;box-shadow:0 8px 26px rgba(0,0,0,.35)" title="Send to Kindle settings">&#x2699; Kindle</button>
@@ -145,7 +144,7 @@
           <button type="submit" class="btn btn-go btn-sm text-white w-100">Go</button>
         </div>
         <div class="col-md-1 col-3 d-flex align-items-end">
-          <a href="/?mode={{ mode | urlencode }}&source={{ book_source | urlencode }}" class="btn btn-sm w-100" style="background:rgba(255,255,255,.1);color:#aaa">Reset</a>
+          <a href="/?mode={{ mode | urlencode }}&book_lang={{ book_lang | urlencode }}" class="btn btn-sm w-100" style="background:rgba(255,255,255,.1);color:#aaa">Reset</a>
         </div>
         <div class="col-md-3 col-6 d-flex align-items-end dedup-switch">
           <input class="form-check-input" type="checkbox" id="dedupToggle" {% if dedup_on %}checked{% endif %}>
@@ -166,10 +165,6 @@
     </div>
 
     <div id="results" style="display:none">
-      <div class="d-flex justify-content-between align-items-center result-info">
-        <span id="resultCount"></span>
-        <span id="resultMeta" class="text-muted"></span>
-      </div>
       <div class="table-wrap">
         <table class="book-table">
           <thead>
@@ -194,7 +189,7 @@
   <script>
     let currentState = null;
     const MODE = {{ mode | tojson }};
-    const BOOK_SOURCE = {{ book_source | tojson }};
+    const BOOK_LANG = {{ book_lang | tojson }};
 
     function getParams() {
       const f = document.getElementById('filterForm');
@@ -209,7 +204,7 @@
         lang: fd.get('lang') || '{{ lang }}',
         dedup: dedup,
         mode: MODE,
-        source: BOOK_SOURCE,
+        book_lang: BOOK_LANG,
         page: '1'
       };
     }
@@ -231,8 +226,6 @@
 
     function renderTable(data) {
       const b = data.books;
-      document.getElementById('resultCount').textContent = b.length + ' of ' + data.total + ' results';
-      document.getElementById('resultMeta').textContent = 'Page ' + data.page + ' of ' + data.total_pages;
 
       let html = '';
       for (const book of b) {
@@ -281,7 +274,7 @@
       const fmt = data.format;
       const lang = data.lang;
       const dedup = data.dedup_on ? '1' : '0';
-      const base = '/search?q=' + q + '&sort=' + sort + '&order=' + order + '&limit=' + limit + '&format=' + fmt + '&lang=' + lang + '&dedup=' + dedup + '&mode=' + encodeURIComponent(MODE) + '&source=' + encodeURIComponent(BOOK_SOURCE);
+      const base = '/search?q=' + q + '&sort=' + sort + '&order=' + order + '&limit=' + limit + '&format=' + fmt + '&lang=' + lang + '&dedup=' + dedup + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG);
 
       let html = '<ul class="pagination">';
 
@@ -356,14 +349,6 @@
     function doSearch() {
       fetchAndRender(getParams());
     }
-
-    document.getElementById('searchForm').addEventListener('submit', function(e) {
-      e.preventDefault();
-      const q = this.querySelector('input[name="q"]').value.trim();
-      if (!q) return;
-      document.getElementById('filterForm').querySelector('input[name="q"]').value = q;
-      doSearch();
-    });
 
     document.getElementById('filterForm').addEventListener('submit', function(e) {
       e.preventDefault();
@@ -506,8 +491,6 @@
     const origRenderTable = renderTable;
     renderTable = function(data) {
       const b = data.books;
-      document.getElementById('resultCount').textContent = b.length + ' of ' + data.total + ' results';
-      document.getElementById('resultMeta').textContent = 'Page ' + data.page + ' of ' + data.total_pages;
 
       let html = '';
       for (const book of b) {

@@ -49,11 +49,10 @@
     .shelf-title { font-size: 1.3rem; font-weight: 600; padding-left: 4px; }
     .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; scrollbar-width: none; -ms-overflow-style: none; }
     .shelf-row::-webkit-scrollbar { display: none; }
-    .shelf-more-tile { flex: 0 0 auto; width: 96px; height: 225px; border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.055); color: #bbb; border-radius: 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; font-size: .78rem; font-weight: 600; transition: all .18s ease; }
-    .shelf-more-tile:hover { background: rgba(255,255,255,.11); border-color: rgba(255,255,255,.2); color: #fff; }
-    .shelf-more-tile.loading { opacity: .55; pointer-events: none; }
-    .shelf-more-icon { width: 34px; height: 34px; border-radius: 999px; display: flex; align-items: center; justify-content: center; background: #e50914; color: #fff; }
-    .shelf-more-icon svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .shelf-more-btn { flex: 0 0 auto; align-self: center; width: 44px; height: 44px; margin: 0 18px; border: 1px solid rgba(255,255,255,.16); background: #e50914; color: #fff; border-radius: 999px; display: flex; align-items: center; justify-content: center; transition: background .18s ease, border-color .18s ease, opacity .18s ease, transform .18s ease; }
+    .shelf-more-btn:hover { background: #f40612; border-color: rgba(255,255,255,.28); transform: translateX(2px); }
+    .shelf-more-btn.loading { opacity: .55; pointer-events: none; transform: none; }
+    .shelf-more-btn svg { width: 20px; height: 20px; stroke: currentColor; stroke-width: 2.25; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 
     .book-card { flex: 0 0 auto; width: 150px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; background:#242424; }
     .book-card:hover { transform: scale(1.08); z-index: 5; }
@@ -86,8 +85,7 @@
       .book-card, .book-card img { width: 120px; }
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
-      .shelf-more-tile { width: 78px; height: 180px; font-size: .72rem; }
-      .shelf-more-icon { width: 30px; height: 30px; }
+      .shelf-more-btn { width: 40px; height: 40px; margin: 0 12px; }
       .cat-tab { font-size: .65rem; padding: 2px 6px; }
     }
   </style>
@@ -103,8 +101,8 @@
       {% if hero.author %}<div class="hero-sub">{{ hero.author }}</div>{% endif %}
       {% if hero.description %}<div class="hero-desc">{{ hero.description }}</div>{% endif %}
       <div>
-        <a href="/preview?title={{ hero.title | urlencode }}&author={{ hero.author | urlencode }}&ol_key={{ hero.ol_key | urlencode }}&cover={{ hero.cover_url | urlencode }}&mode={{ mode | urlencode }}&source={{ book_source | urlencode }}" class="btn-hero">View Details</a>
-        <a href="/search?q={{ (hero.title + ' ' + hero.author) | urlencode }}&mode={{ mode | urlencode }}&source={{ book_source | urlencode }}" class="btn-hero-outline">Download</a>
+        <a href="/preview?title={{ hero.title | urlencode }}&author={{ hero.author | urlencode }}&ol_key={{ hero.ol_key | urlencode }}&cover={{ hero.cover_url | urlencode }}&mode={{ mode | urlencode }}&book_lang={{ book_lang | urlencode }}" class="btn-hero">View Details</a>
+        <a href="/search?q={{ (hero.title + ' ' + hero.author) | urlencode }}&mode={{ mode | urlencode }}&book_lang={{ book_lang | urlencode }}" class="btn-hero-outline">Download</a>
       </div>
     </div>
     <button class="hero-toggle" id="heroToggle" title="Hide hero" aria-label="Toggle hero">&#x25B2;</button>
@@ -135,11 +133,8 @@
         {% for book in shelf.books %}
         {% include "_book_card.html" %}
         {% endfor %}
-        <button class="shelf-more-tile" type="button" aria-label="Load more {{ shelf.name }} books">
-          <span class="shelf-more-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
-          </span>
-          <span class="shelf-more-label">More</span>
+        <button class="shelf-more-btn" type="button" aria-label="Load more {{ shelf.name }} books">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
         </button>
       </div>
     </div>
@@ -148,16 +143,16 @@
 
   <div class="loading-overlay" id="loadingOverlay">
     <div class="spinner"></div>
-    <p>Searching libgen<span class="dot-pulse" style="display:inline-flex;gap:4px;margin-left:4px"><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite"></span><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite;animation-delay:.2s"></span><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite;animation-delay:.4s"></span></span></p>
+    <p>Searching downloads<span class="dot-pulse" style="display:inline-flex;gap:4px;margin-left:4px"><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite"></span><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite;animation-delay:.2s"></span><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite;animation-delay:.4s"></span></span></p>
   </div>
 
   <footer class="text-center text-muted py-4 small">
-    Fiction and non-fiction discovery &mdash; Powered by Open Library / Google Books &amp; libgen.li
+    Fiction and non-fiction discovery &mdash; Powered by Open Library &amp; libgen.li
   </footer>
 
   <script>
     const MODE = {{ mode | tojson }};
-    const BOOK_SOURCE = {{ book_source | tojson }};
+    const BOOK_LANG = {{ book_lang | tojson }};
 
     function esc(s) {
       const d = document.createElement('div');
@@ -166,10 +161,8 @@
     }
 
     function bookCardHtml(b) {
-      const href = '/preview?title=' + encodeURIComponent(b.title) + '&author=' + encodeURIComponent(b.author) + '&ol_key=' + encodeURIComponent(b.ol_key) + '&cover=' + encodeURIComponent(b.cover_url) + '&mode=' + encodeURIComponent(MODE) + '&source=' + encodeURIComponent(BOOK_SOURCE);
-      const fallback = b.cover_url && b.cover_url.startsWith('http')
-        ? 'if(!this.dataset.fb){this.dataset.fb=1;this.src=\'/gbcover/' + encodeURIComponent(b.ol_key) + '\';}else{this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';}'
-        : 'this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';';
+      const href = '/preview?title=' + encodeURIComponent(b.title) + '&author=' + encodeURIComponent(b.author) + '&ol_key=' + encodeURIComponent(b.ol_key) + '&cover=' + encodeURIComponent(b.cover_url) + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG);
+      const fallback = 'this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';';
       const cover = b.cover_url
         ? '<div class="cover-skeleton"></div><img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>'
         : '<div class="placeholder">?</div>';
@@ -183,11 +176,9 @@
       const totalPages = Number(shelf.dataset.totalPages || '25');
       if (!topic || nextPage > totalPages) return;
       shelf.dataset.loading = '1';
-      const btn = shelf.querySelector('.shelf-more-tile');
-      const label = btn ? btn.querySelector('.shelf-more-label') : null;
+      const btn = shelf.querySelector('.shelf-more-btn');
       if (btn) btn.classList.add('loading');
-      if (label) label.textContent = 'Loading';
-      fetch('/api/shelf/' + encodeURIComponent(topic) + '?page=' + nextPage + '&mode=' + encodeURIComponent(MODE) + '&source=' + encodeURIComponent(BOOK_SOURCE))
+      fetch('/api/shelf/' + encodeURIComponent(topic) + '?page=' + nextPage + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
         .then(r => r.json())
         .then(data => {
           if (!data.success || !data.books.length) {
@@ -205,14 +196,36 @@
         .finally(() => {
           shelf.dataset.loading = '0';
           if (btn) btn.classList.remove('loading');
-          if (label) label.textContent = 'More';
         });
     }
 
+    function maybeLoadShelfMore(shelf) {
+      if (!shelf || shelf.dataset.loading === '1') return;
+      const row = shelf.querySelector('.shelf-row');
+      const totalPages = Number(shelf.dataset.totalPages || '25');
+      const currentPage = Number(shelf.dataset.page || '1');
+      if (!row || currentPage >= totalPages) return;
+      const remaining = row.scrollWidth - row.clientWidth - row.scrollLeft;
+      if (remaining < Math.max(360, row.clientWidth * 0.35)) loadShelfMore(shelf);
+    }
+
+    function primeShelf(shelf) {
+      const row = shelf.querySelector('.shelf-row');
+      if (!row) return;
+      const count = row.querySelectorAll('.book-card').length;
+      if (count < 12 || row.scrollWidth <= row.clientWidth + 80) {
+        loadShelfMore(shelf);
+      }
+    }
+
     document.querySelectorAll('.shelf').forEach(shelf => {
-      const btn = shelf.querySelector('.shelf-more-tile');
+      const row = shelf.querySelector('.shelf-row');
+      const btn = shelf.querySelector('.shelf-more-btn');
       if (btn) btn.addEventListener('click', () => loadShelfMore(shelf));
+      if (row) row.addEventListener('scroll', () => maybeLoadShelfMore(shelf), { passive: true });
     });
+
+    setTimeout(() => document.querySelectorAll('.shelf').forEach(primeShelf), 250);
 
     document.getElementById('loadingOverlay').style.display = 'none';
     document.querySelectorAll('a[href^="/search"]').forEach(a => {

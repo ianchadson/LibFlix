@@ -1,80 +1,159 @@
-# LibFlix — Book Discovery Library
+# LibFlix - Book Discovery Library
 
-A "Netflix for books" web app that combines **Open Library** or **Google Books**
-for discovery and **libgen.li** for downloads. Includes separate fiction and
-non-fiction browsing modes with curated shelves and category tabs.
+LibFlix is a Netflix-style web app for browsing books, previewing metadata, and
+finding download options. Discovery is powered by Open Library. Downloads are
+handled separately through the modular downloader layer, currently backed by
+libgen.li.
+
+The app supports fiction and non-fiction browsing, English and Chinese discovery
+filters, Open Library search, book previews, similar-book shelves, inline
+download search, direct downloads, and Send to Kindle via the user's SMTP
+settings.
 
 ## Quick Start
 
 ```bash
 pip install -r requirements.txt
-
-# Default (Open Library, no key needed):
 python3 app.py
 
-# Or with Google Books (faster, richer metadata):
-export GOOGLE_BOOKS_API_KEY="your-key"
-export BOOK_SOURCE=google
-python3 app.py
-
-# → http://localhost:5800
+# App URL:
+# http://127.0.0.1:5800
 ```
 
-## Features
+No API key is required. Open Library is the only discovery backend.
 
-- **Fiction / Non-Fiction switch** — separate shelf sets and category tabs
-- **12 non-fiction shelves** — New & Popular, Personal Development, Business, Science, Psychology, History, Biography, Health, Education, Politics, Classics, Awards
-- **12 fiction shelves** — New Releases, Sci-Fi, Fantasy, Mystery, Romance, Horror, Historical Fiction, Adventure, YA, Graphic Novels, Literary Fiction, Contemporary Fiction
-- **Dynamic hero** — random featured book with synopsis on each visit
-- **Category browsing** — dedicated category pages with explicit **Load More** pagination
-- **Horizontal shelf expansion** — homepage shelves load more cached pages as you scroll right or press More
-- **Google Books backend** (optional) — faster, richer descriptions, clean categories, API key required
-- **Open Library backend** (default) — free, no key needed
-- **Inline download search** — download options embedded in the book preview page (auto-searches title + author)
-- **Persistent discovery cache** — category pages, book details, similar books, and cover checks are cached across restarts
-- **Instant search** — page shell renders immediately, results load via AJAX
-- **One-click download** — streams EPUB/PDF/MOBI from libgen through Flask proxy
-- **Send to Kindle** — email books directly to your Kindle via SMTP (Gmail app password)
-- **Dedup** — groups editions by normalized title+author, keeps highest-quality format (EPUB preferred, newest year, has publisher/pages)
-- **Previews** — async description + subject tags + "More Like This" shelf
-- **Filters** — sort by year/title/size, filter by format/language, toggle dedup
+## Current Feature Set
 
-## Architecture
+### Discovery
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed data flows, API reference,
-and caching strategy.
+- **Open Library-only discovery** - Google Books integration and all source
+  switching UI were removed. Old URLs containing `source=google` are ignored and
+  are not re-emitted by the app.
+- **Fiction / Non-Fiction mode switch** - each mode has its own shelf set and
+  category tabs.
+- **EN / CN language toggle** - the navbar can switch discovery between English
+  (`eng`) and Chinese (`chi`) Open Library records.
+- **Search bar searches discovery first** - the global search bar routes to
+  `/discover`, which searches Open Library for books. It does not jump directly
+  to download search.
+- **Download search is contextual** - download options are searched from the book
+  preview page using the selected title and author.
 
-## Tech Stack
+### Homepage
 
-- **Backend:** Flask, BeautifulSoup4, requests (with Session + connection pooling)
-- **Frontend:** Bootstrap 5, vanilla JS (no framework)
-- **Discovery APIs:** Open Library (free, no key) or Google Books (1,000 req/day free tier)
-- **Download source:** modular downloader interface, currently libgen.li (scraped HTML)
-- **Port:** 5800 (avoids macOS AirPlay conflict on 5000)
+- **Dynamic hero** - the homepage picks a random trending book from the active
+  mode and language, then loads its Open Library description when available.
+- **Fuller shelves by default** - shelf requests fetch larger Open Library
+  batches and render up to 40 books per shelf initially.
+- **No global shelf dedupe** - shelves keep their own results, avoiding short
+  rows caused by books being removed because they appeared in an earlier shelf.
+- **Horizontal infinite scroll** - homepage shelves automatically load another
+  page when the user scrolls near the end of a row.
+- **Compact More affordance** - a small round arrow button remains as a fallback
+  at the end of each shelf instead of a full-height tile.
+- **Hidden horizontal scrollbars** - homepage shelf rows hide scrollbars while
+  preserving horizontal scrolling.
+
+### Category Pages
+
+- **Vertical infinite scroll** - category pages render the first batch
+  server-side, then automatically append more books as the user nears the bottom
+  of the grid.
+- **No manual Load More button** - category pagination is automatic via a scroll
+  sentinel and scroll fallback.
+- **No visible total counts** - labels such as `80 books`, `x shown`, and
+  result totals were removed because they do not help the browsing experience.
+
+### Book Preview
+
+- **Async Open Library details** - description and subject tags load after the
+  preview shell renders.
+- **More Like This** - the first subject loads a horizontal similar-books shelf.
+- **Hidden More Like This scrollbar** - the shelf scrolls horizontally without a
+  visible scrollbar.
+- **Inline download options** - libgen download results load directly below the
+  metadata for the current title and author.
+- **Send to Kindle** - users can save SMTP and Kindle email settings in
+  localStorage, then email a downloaded file to Kindle.
+
+### Download Search
+
+- **AJAX results** - download results update without a full page reload.
+- **Filters** - sort, format, limit, language, and dedupe controls update the
+  download search.
+- **Deduplication** - results can be grouped by normalized title and author,
+  keeping the highest-scored candidate.
+- **No visible result totals** - count summaries were removed from search and
+  preview download tables.
+
+## Main Routes
+
+| Route | Purpose |
+|---|---|
+| `/` | Homepage with hero and horizontal shelves |
+| `/category/<topic>` | Category grid with vertical infinite scroll |
+| `/discover?q=...` | Open Library discovery search results |
+| `/preview?title=...&author=...&ol_key=...` | Book detail, similar books, download search |
+| `/search?q=...` | Direct libgen download search page |
+| `/download/<md5>` | Proxied file download |
+| `/api/shelf/<topic>` | JSON endpoint for homepage shelf pagination |
+| `/api/category/<topic>` | JSON endpoint for category infinite scroll |
+| `/api/discover` | JSON endpoint for discovery search pagination |
+| `/api/book` | JSON endpoint for Open Library work details |
+| `/api/similar` | JSON endpoint for similar Open Library books |
+| `/api/search` | JSON endpoint for libgen download search |
+| `/api/sendtokindle` | Send selected download to Kindle via SMTP |
 
 ## Configuration
 
 | Env Variable | Values | Purpose |
 |---|---|---|
-| `BOOK_SOURCE` | `openlibrary` (default) or `google` | Choose book discovery backend |
-| `GOOGLE_BOOKS_API_KEY` | Your API key | Required when `BOOK_SOURCE=google` |
+| `BOOK_LANG` | `en` or `cn` | Optional default discovery language |
 
-Get a Google Books API key: https://console.cloud.google.com/apis/credentials
+Runtime Send to Kindle settings are configured in the browser and stored in
+localStorage. The SMTP password is sent only to `/api/sendtokindle` when sending
+a book.
 
-Send to Kindle requires a Gmail app password and your Kindle email (configured
-in-browser — stored in localStorage, never sent to the server).
+## Runtime Cache Files
 
-## Performance
+The app writes local runtime cache files to speed up restart and repeated API
+requests. They are ignored by git.
 
-| Metric | Open Library | Google Books |
-|---|---|---|
-| Homepage books | ~131 | ~207 |
-| Shelf response | ~3-5s (cold) | ~1-2s (cold) |
-| Description coverage | ~40% | ~90% |
-| Cache warm | 2.8s | ~1.5s |
-| Disk cache on restart | Instant | Instant |
+| File Pattern | Purpose |
+|---|---|
+| `api_cache.json` | Disk cache for Open Library/API responses |
+| `shelf_cache_<lang>_<mode>.json` | Warm shelf cache for each language and mode |
+| `shelf_cache*.json` | Historical and current shelf cache files ignored by git |
 
-Discovery API responses are stored in `api_cache.json` for 6 hours, and Google
-cover validation checks are cached for 7 days. Category pages use an explicit
-Load More button rather than automatic infinite scroll to avoid burning through
-Google Books quota accidentally. Runtime cache files are ignored by git.
+## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for data flow, API contracts, caching
+details, and template responsibilities.
+
+See [CHANGELOG.md](CHANGELOG.md) for the recent Open Library-only discovery,
+language, search, infinite scroll, and count-removal changes.
+
+## Tech Stack
+
+- **Backend:** Flask, requests, BeautifulSoup4
+- **Frontend:** Bootstrap 5 and vanilla JavaScript
+- **Discovery:** Open Library Search/Works/Covers APIs
+- **Downloads:** Modular downloader interface, currently libgen.li
+- **Port:** 5800
+
+## Verification
+
+Useful local checks:
+
+```bash
+python3 -m compileall app.py
+python3 app.py
+```
+
+Then open:
+
+```text
+http://127.0.0.1:5800
+http://127.0.0.1:5800/category/history?mode=nonfiction&book_lang=en
+http://127.0.0.1:5800/discover?q=三体&mode=fiction&book_lang=cn
+```

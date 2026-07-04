@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ shelf.name }} - LibFlix</title>
+  <title>Search: {{ query }} - LibFlix</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     * { box-sizing: border-box; }
@@ -16,17 +16,14 @@
     .search-bar input::placeholder { color: rgba(255,255,255,.4); font-size: .78rem; }
     .search-bar button { background: #e50914; border: none; border-radius: 4px; white-space: nowrap; }
     .search-bar button:hover { background: #f40612; }
-
-    .mode-toggle { display: flex; background: rgba(255,255,255,.08); border-radius: 20px; padding: 1px; }
-    .mode-btn { padding: 2px 10px; border-radius: 18px; font-size: .7rem; color: #aaa; text-decoration: none; white-space: nowrap; transition: all .15s; }
-    .mode-btn.active { background: #e50914; color: #fff; }
     .cat-tabs::-webkit-scrollbar { display: none; }
     .cat-tab { flex-shrink: 0; padding: 2px 10px; border-radius: 20px; font-size: .75rem; color: #aaa; text-decoration: none; transition: all .15s; white-space: nowrap; }
     .cat-tab:hover { background: rgba(255,255,255,.1); color: #fff; }
     .cat-tab.active { background: #e50914; color: #fff; }
-
-    .page-title { font-size: 1.6rem; font-weight: 700; padding: 1.5rem 1rem .5rem; }
-
+    .discover-head { padding: 1.6rem 1rem .8rem; }
+    .discover-title { font-size: 1.55rem; font-weight: 700; line-height: 1.15; margin: 0; }
+    .discover-meta { color: #777; font-size: .83rem; margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .source-pill { border: 1px solid rgba(255,255,255,.12); border-radius: 999px; padding: 2px 8px; color: #bbb; background: rgba(255,255,255,.06); }
     .book-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 1rem 2rem; justify-content: center; }
     .book-card { width: 150px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; background:#242424; }
     .book-card:hover { transform: scale(1.08); z-index: 5; }
@@ -39,67 +36,68 @@
     .book-card .info .t { font-size: .82rem; font-weight: 600; line-height: 1.2; }
     .book-card .info .a { font-size: .7rem; color: #bbb; margin-top: 2px; }
     .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 4px; position: relative; z-index: 2; }
-
+    .empty-state { text-align:center; padding: 2rem 1rem 4rem; color:#777; }
+    .load-more-wrap { text-align:center; padding: 0 1rem 2rem; }
+    .load-more-btn { border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.07); color:#ddd; border-radius:999px; padding:8px 22px; font-size:.85rem; transition:all .15s; }
+    .load-more-btn:hover { background:rgba(255,255,255,.14); border-color:rgba(255,255,255,.2); color:#fff; }
+    .load-more-btn:disabled { opacity:.45; pointer-events:none; }
     .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #141414; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; }
     .loading-overlay .spinner { width: 50px; height: 50px; border: 4px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .inf-loading { text-align: center; padding: 1.5rem; color: #666; display: none; }
-    .inf-loading .spinner-sm { width: 28px; height: 28px; border: 3px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto 8px; }
-    .scroll-sentinel { height: 1px; }
-
+    @media (max-width: 992px) {
+      .cat-tab { font-size: .7rem; padding: 2px 8px; }
+      .navbar-brand { font-size: 1.1rem; }
+    }
     @media (max-width: 768px) {
       .book-card, .book-card img { width: 120px; }
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
       .cat-tab { font-size: .65rem; padding: 2px 6px; }
     }
-    @media (max-width: 992px) {
-      .cat-tab { font-size: .7rem; padding: 2px 8px; }
-    }
   </style>
 </head>
 <body>
-  {% set active_tab = topic %}
+  {% set active_tab = '' %}
   {% include "_navbar.html" %}
 
-  <div class="page-title">{{ shelf.name }}</div>
+  <main>
+    <section class="discover-head">
+      <h1 class="discover-title">Search results for "{{ query }}"</h1>
+      <div class="discover-meta">
+        <span class="source-pill">Open Library</span>
+      </div>
+    </section>
 
-  <div class="book-grid" id="bookGrid">
-    {% for book in shelf.books %}
-    {% include "_book_card.html" %}
-    {% endfor %}
-  </div>
-  {% if not shelf.books %}
-  <div style="text-align:center;padding:1rem 3rem 2rem;color:#666;font-style:italic" id="emptyState">No books loaded yet. Try loading more.</div>
-  {% endif %}
+    <div class="book-grid" id="bookGrid">
+      {% for book in books %}
+      {% include "_book_card.html" %}
+      {% endfor %}
+    </div>
 
-  <div id="scrollSentinel" class="scroll-sentinel" aria-hidden="true"></div>
-  <div class="inf-loading" id="infLoading">
-    <div class="spinner-sm"></div>
-    <div>Loading more...</div>
-  </div>
+    {% if not books %}
+    <div class="empty-state" id="emptyState">No books found from Open Library. Try a different title or author.</div>
+    {% endif %}
+
+    <div class="load-more-wrap">
+      <button class="load-more-btn" id="loadMoreBtn" type="button">Load more books</button>
+    </div>
+  </main>
 
   <div class="loading-overlay" id="loadingOverlay">
     <div class="spinner"></div>
   </div>
 
-  <footer class="text-center text-muted py-4 small">
-    Powered by Open Library &amp; libgen.li
-  </footer>
-
   <script>
-    const TOPIC = {{ topic | tojson }};
+    const QUERY = {{ query | tojson }};
     const MODE = {{ mode | tojson if mode else 'nonfiction' | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
-    let currentPage = 1;
-    let totalPages = Infinity;
+    let currentPage = {{ page | int }};
+    let totalPages = {{ total_pages | int }};
     let loading = false;
-    let finished = false;
-    const scrollSentinel = document.getElementById('scrollSentinel');
-    const infLoading = document.getElementById('infLoading');
+    const loadMoreBtn = document.getElementById('loadMoreBtn');
 
     document.getElementById('loadingOverlay').style.display = 'none';
-    document.querySelectorAll('a[href^="/search"], a[href^="/preview"]').forEach(a => {
+    document.querySelectorAll('a[href^="/preview"]').forEach(a => {
       a.addEventListener('click', function() {
         document.getElementById('loadingOverlay').style.display = 'flex';
       });
@@ -109,6 +107,12 @@
       const d = document.createElement('div');
       d.textContent = s || '';
       return d.innerHTML;
+    }
+
+    function updateLoadMore() {
+      if (currentPage >= totalPages) {
+        loadMoreBtn.style.display = 'none';
+      }
     }
 
     function renderBooks(books) {
@@ -130,65 +134,35 @@
       }
     }
 
-    function setLoading(on) {
-      infLoading.style.display = on ? 'block' : 'none';
-    }
-
-    function finishLoading() {
-      finished = true;
-      if (scrollSentinel) scrollSentinel.style.display = 'none';
-    }
-
     function loadMore() {
-      if (loading || finished || currentPage >= totalPages) return;
+      if (loading || currentPage >= totalPages) return;
       loading = true;
-      setLoading(true);
-      const nextPage = currentPage + 1;
-      fetch('/api/category/' + encodeURIComponent(TOPIC) + '?page=' + nextPage + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
+      loadMoreBtn.disabled = true;
+      loadMoreBtn.textContent = 'Loading...';
+      currentPage++;
+      fetch('/api/discover?q=' + encodeURIComponent(QUERY) + '&page=' + currentPage + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
         .then(r => r.json())
         .then(data => {
-          if (!data.success || !data.books.length) {
-            totalPages = nextPage;
-            finishLoading();
-            return;
+          if (data.success) {
+            if (data.books.length === 0) {
+              totalPages = currentPage;
+            } else {
+              renderBooks(data.books);
+              totalPages = data.total_pages;
+            }
+            updateLoadMore();
           }
-          renderBooks(data.books);
-          currentPage = data.page || nextPage;
-          totalPages = data.total_pages || totalPages;
-          if (currentPage >= totalPages) finishLoading();
         })
         .catch(() => {})
         .finally(() => {
           loading = false;
-          setLoading(false);
-          fillViewportIfNeeded();
+          loadMoreBtn.disabled = false;
+          loadMoreBtn.textContent = 'Load more books';
         });
     }
 
-    function nearPageBottom() {
-      return window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 700;
-    }
-
-    function maybeLoadMore() {
-      if (nearPageBottom()) loadMore();
-    }
-
-    function fillViewportIfNeeded() {
-      if (!finished && document.documentElement.scrollHeight <= window.innerHeight + 120) {
-        loadMore();
-      }
-    }
-
-    if ('IntersectionObserver' in window && scrollSentinel) {
-      const observer = new IntersectionObserver(entries => {
-        if (entries.some(entry => entry.isIntersecting)) loadMore();
-      }, { rootMargin: '700px 0px' });
-      observer.observe(scrollSentinel);
-    }
-
-    window.addEventListener('scroll', maybeLoadMore, { passive: true });
-    window.addEventListener('resize', fillViewportIfNeeded);
-    setTimeout(fillViewportIfNeeded, 250);
+    loadMoreBtn.addEventListener('click', loadMore);
+    updateLoadMore();
   </script>
 </body>
 </html>

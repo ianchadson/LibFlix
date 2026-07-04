@@ -2,216 +2,362 @@
 
 ## Overview
 
-LibFlix is a Flask-based web application that transforms libgen.li into a
-"Netflix for books" browsing and download experience. It supports **two book
-discovery backends**: Open Library (free, no key) and Google Books (faster,
-richer metadata, requires free API key).
+LibFlix is a Flask app with two distinct data paths:
 
-## Core UX Flows
+1. **Discovery path:** Open Library powers browsing, shelves, category pages,
+   search discovery, book details, covers, and similar books.
+2. **Download path:** the `downloaders/` package powers libgen search, download
+   resolution, streaming, and Send to Kindle delivery.
 
-### 1. Homepage Browsing (`GET /`)
-```
-User visits /
-  → Server returns cached shelves (warmed on startup, persisted to disk)
-  → Hero picks random trending book for the selected mode (with description from source)
-  → 12 horizontal shelves render immediately (~3ms with cache hit)
-  → User clicks a book card → `/preview?title=...&ol_key=...`
-  → Horizontal shelves fetch `/api/shelf/<topic>?page=N` when user scrolls near the end
-  → Category tabs in navbar → `/category/<topic>` (explicit Load More pagination)
-```
+Google Books support was removed. The app no longer contains source switching,
+Google Books API calls, Google cover proxying, or `BOOK_SOURCE` configuration.
 
-### 2. Category Browsing (`GET /category/<topic>`)
-```
-Page shell renders instantly with first batch of books (server-side)
-  → User clicks Load More
-  → GET /api/category/<topic>?page=N
-  → New books appended to grid, book count updates
-  → Loading spinner shown during fetch
-```
+## User-Facing Flow Map
 
-### 3. Book Preview (`GET /preview?title=&author=&ol_key=`)
-```
-Page shell renders instantly (cover, title, author)
-  → JS fetches `/api/book?ol_key=` for description + subjects (async)
-  → Description appears with skeleton shimmer while loading (HTML stripped)
-  → Subjects become clickable tags
-  → First subject triggers `/api/similar?subject=` → "More Like This" shelf
-  → Libgen download options shown inline (auto-searches title + author)
+### Homepage (`GET /`)
+
+```text
+Browser requests /
+  -> Flask reads mode and book_lang
+  -> get_shelves(mode, lang)
+       -> memory cache
+       -> disk shelf cache
+       -> Open Library search in parallel when cache is cold
+  -> render index.html with hero + 12 shelves
+  -> user scrolls a shelf horizontally
+  -> JS fetches /api/shelf/<topic>?page=N&mode=...&book_lang=...
+  -> new book cards are inserted before the compact arrow button
 ```
 
-### 4. Search (`GET /search?q=...`)
+Important behavior:
+
+- Shelves are language-aware.
+- Each shelf initially renders up to 40 books.
+- Shelves are not deduped across each other, so rows stay full.
+- Horizontal scrollbars are hidden.
+- The compact More button is a fallback; normal loading is scroll-triggered.
+
+### Category Page (`GET /category/<topic>`)
+
+```text
+Browser requests /category/history?mode=nonfiction&book_lang=en
+  -> Flask validates topic against the active mode
+  -> fetch_one_shelf(name, topic, lang)
+  -> render category.html with first batch
+  -> IntersectionObserver watches a bottom sentinel
+  -> user scrolls near bottom
+  -> JS fetches /api/category/<topic>?page=N&mode=...&book_lang=...
+  -> cards append to the grid
 ```
-Page renders instantly with search form + spinner
-  → JS calls `/api/search?q=...&sort=...&page=...` via fetch
-  → Results appear as table with cover thumbnails
-  → Filters (sort, order, format, lang, dedup) trigger re-fetch via JS
-  → Pagination is AJAX-based — no full page reload
-  → "Download" streams file from libgen via Flask proxy
-  → "Send to Kindle" opens settings modal on first use, emails file on subsequent
+
+Important behavior:
+
+- There is no visible Load More button.
+- A scroll listener acts as a fallback when IntersectionObserver is unavailable.
+- The loading spinner appears only while a page is being fetched.
+- Category pages do not show total count labels.
+
+### Discovery Search (`GET /discover`)
+
+```text
+Navbar search form submits to /discover
+  -> Flask uses fetch_discovery_books(q, page, lang)
+  -> Open Library search results render as book cards
+  -> Load More on discover pages fetches /api/discover
+  -> clicking a card opens /preview
 ```
 
-## Key Components
+This route searches Open Library discovery data only. It does not search the
+download source directly.
 
-### `app.py` (~760 lines)
+### Book Preview (`GET /preview`)
 
-| Component | Lines | Purpose |
-|---|---|---|
-| Cache layer | 18-42 | In-memory TTL-based cache for OL/GB API (10min) and libgen HTML (15min) |
-| Book source config | 17 | `BOOK_SOURCE` env var: `openlibrary` (default) or `google` |
-| `SHELVES_DEF` / `FICTION_SHELVES_DEF` | app.py | Separate non-fiction and fiction subject categories for homepage shelves |
-| `ol_get` | 27-40 | Open Library API caller with caching |
-| `gb_get` | 109-123 | Google Books API caller with caching (uses `GOOGLE_BOOKS_API_KEY` env) |
-| `extract_book` / `gb_extract_book` | 65-84, 125-140 | Filters OL/GB results to English + cover + author only |
-| `fetch_one_shelf` | 144-175 | Fetches a single category from OL or GB (based on `BOOK_SOURCE`) |
-| `fetch_shelves` | 177-185 | Parallel (6 workers) fetcher for all 12 shelves |
-| `fetch_search` | 195-212 | Libgen.li search with caching |
-| `parse_results` | 215-260 | BS4 parser for libgen's HTML table |
-| `dedup` | 340-349 | Groups by normalized title+author, keeps highest-scored format |
-| `strip_html` | 363-368 | Strips HTML tags and unescapes entities from descriptions |
-| `GET /` | 428-456 | Returns cached shelves + random hero |
-| `GET /category/<topic>` | 458-465 | Server-rendered category page with first batch of books |
-| `GET /api/category/<topic>` | app.py | Paginated JSON endpoint for explicit Load More category browsing |
-| `GET /api/shelf/<topic>` | app.py | Paginated JSON endpoint for horizontal shelf expansion |
-| `GET /preview` | 477-485 | Instant page render, async description load |
-| `GET /api/book` | 521-558 | JSON endpoint for book details (OL or GB) |
-| `GET /api/similar` | 498-520 | JSON endpoint for similar books |
-| `GET /api/search` | 401-445 | JSON endpoint for libgen search |
-| `GET /download/<md5>` | 530-539 | Proxies file download from libgen |
-| `POST /api/sendtokindle` | 562-620 | Downloads from libgen, emails via user's SMTP |
-| `/olcover` / `/gbcover` | 607-633 | Proxies cover images (S/M/L sizes) |
-| `warm_cache` | 636-648 | Background thread on startup, loads disk cache instantly |
+```text
+Browser requests /preview?title=...&author=...&ol_key=/works/...
+  -> Flask renders book.html immediately
+  -> JS fetches /api/book?ol_key=...&book_lang=...
+  -> description and subject tags render asynchronously
+  -> first subject triggers /api/similar
+  -> JS fetches /api/search for download options
+```
 
-### Templates
+Important behavior:
 
-| Template | Purpose |
+- `/api/book` accepts Open Library work keys only.
+- Similar books are Open Library subject searches.
+- The More Like This shelf hides horizontal scrollbars.
+- Download result count summaries are hidden.
+
+### Download Search (`GET /search`)
+
+```text
+Browser requests /search?q=...
+  -> Flask renders search.html shell
+  -> JS calls /api/search with filters
+  -> libgen results render in a table
+  -> user can download or send to Kindle
+```
+
+This is intentionally separate from `/discover`. The global navbar search is
+for discovery; download search is available from previews and direct `/search`
+URLs.
+
+## Backend Components
+
+### Discovery Configuration
+
+```python
+BOOK_LANGS = {"en", "cn"}
+BOOK_LANG_CONFIG = {
+    "en": {"label": "EN", "ol_lang": "eng"},
+    "cn": {"label": "CN", "ol_lang": "chi"},
+}
+```
+
+- `get_book_lang()` reads `book_lang` from query string or cookie.
+- `lang_url()` preserves the current route and query, but strips obsolete
+  `source` parameters from old links.
+- `shelf_query(topic, lang)` adds an Open Library language filter to each query.
+
+### Open Library Helpers
+
+| Function | Responsibility |
 |---|---|
-| `templates/_navbar.html` | Shared navbar — logo, search bar, category tabs inline (responsive, scrollable) |
-| `templates/_book_card.html` | Shared book card partial (cover, title, author overlay) |
-| `templates/index.html` | Homepage — hero + 12 shelves, uses `_navbar` and `_book_card` |
-| `templates/category.html` | Category browsing — server-rendered first batch + explicit Load More pagination |
-| `templates/search.html` | Two-phase search — instant shell + async results + filter controls + Kindle send |
-| `templates/book.html` | Book preview — detail view with async description + inline libgen results + Kindle send |
+| `ol_get(path, params)` | Cached Open Library JSON request |
+| `ol_get_work(ol_key)` | Work detail lookup |
+| `shelf_query(topic, lang)` | Mode/topic/language Open Library query builder |
+| `extract_book(record, lang)` | Normalize Open Library search record to app book card |
+| `first_matching_edition(record, lang)` | Prefer an edition matching the active language |
+| `edition_cover_id(edition)` | Pick a usable Open Library cover id |
+| `fetch_one_shelf(name, topic, lang)` | Server-rendered first shelf/category batch |
+| `fetch_category_books(topic, page, lang)` | Paginated category/home shelf JSON source |
+| `fetch_discovery_books(q, page, lang)` | Paginated `/discover` JSON source |
+| `fetch_shelves(mode, lang)` | Parallel homepage shelf fetcher |
 
-### Data Flow
+### Download Helpers
 
-```
-Browser                    Flask Server                  External APIs
--------                    ------------                  -------------
-[Homepage]                 GET /
-  ↓                           ↓ (cache hit ~3ms)
-  render shelves              fetch_shelves() ──→ ThreadPool(6) ──→ OL or GB API
-  render hero                                             ↓
-  ↓                           ↓                          cache 10min
-[click category tab]        GET /category/<topic>
-  ↓                           ↓ fetch_one_shelf (first batch)
-  render grid                 ↓ render with _book_card partials
-  ↓
-  Click Load More ────────→ GET /api/category/<topic>?page=N ──→ OL or GB API (paginated/cacheable)
-  → append books to grid     ↓ return JSON
-  ↓
-[click card]                GET /preview?ol_key=X
-  ↓                           ↓ (instant)
-  render shell                render book.html
-  fetch /api/book ──────────→ GET /api/book ──────────→ OL work API or GB volume API
-  fetch /api/similar ───────→ GET /api/similar ───────→ OL or GB subject search
-  fetch /api/search ────────→ GET /api/search ────────→ libgen.li HTML
-  ↓ render results table
-[click Download]             GET /download/<md5>
-  ↓                           ↓ resolve_download() ─→ libgen.li ads.php
-  stream file                 ↓ stream from dl link
-  ↓
-[click Send to Kindle]       POST /api/sendtokindle
-  ↓                           ↓ resolve + download
-  show sending overlay        ↓ email via SMTP (user's Gmail)
-  show ✓ Sent                 ↓ return JSON
+Download logic is intentionally modular:
+
+```text
+downloaders/
+  __init__.py      selects the active downloader
+  base.py          downloader protocol and shared session
+  libgen.py        libgen.li implementation
 ```
 
-## API Reference
+The Flask layer uses `DOWNLOADER.search()` and
+`DOWNLOADER.resolve_download()` rather than hardcoding libgen behavior in the
+route handlers.
+
+## Routes And API Contracts
+
+### `GET /`
+
+Renders homepage shelves and hero.
+
+Params:
+
+| Param | Values | Purpose |
+|---|---|---|
+| `mode` | `fiction`, `nonfiction` | Active browsing mode |
+| `book_lang` | `en`, `cn` | Active discovery language |
+
+### `GET /category/<topic>`
+
+Renders the first page of a category grid. The template then handles infinite
+scroll by calling `/api/category/<topic>`.
 
 ### `GET /api/category/<topic>`
-Fetch paginated books for a category shelf.
 
-**Params:** `page` (1-based)
+Params:
 
-### `GET /api/shelf/<topic>`
-Fetch paginated books for a homepage horizontal shelf.
+| Param | Values | Purpose |
+|---|---|---|
+| `page` | integer | 1-based Open Library page |
+| `mode` | `fiction`, `nonfiction` | Validates topic against mode |
+| `book_lang` | `en`, `cn` | Language filter |
 
-**Params:** `page` (1-based), `mode` (`fiction` or `nonfiction`)
+Returns:
 
-**Returns:**
 ```json
 {
   "success": true,
-  "books": [{"title": "...", "author": "...", "cover_url": "/gbcover/...", "ol_key": "..."}],
-  "page": 1,
-  "total_pages": 16,
-  "total": 300
+  "books": [
+    {
+      "title": "A Brief History of Time",
+      "author": "Stephen Hawking",
+      "cover_url": "/olcover/240726",
+      "ol_key": "/works/OL82563W"
+    }
+  ],
+  "page": 2,
+  "total_pages": 25,
+  "total": 12345
 }
 ```
 
-### `GET /api/search`
-Search libgen.li for books.
+### `GET /api/shelf/<topic>`
 
-**Params:** `q`, `sort` (y|title|author|filesize|extension), `order` (ASC|DESC), `limit`, `page`, `format` (epub|pdf|mobi|all), `lang` (English|all), `dedup` (0|1)
+Same shape as `/api/category/<topic>`. Used by horizontal homepage shelves.
 
-**Returns:**
-```json
-{
-  "success": true, "query": "atomic habits", "total": 42,
-  "total_pages": 2, "page": 1,
-  "books": [{"idx": 1, "title": "Atomic Habits", "author": "James Clear", "year": "2019", "ext": "epub", "size": "2.5 MB", "md5": "...", "cover_url": "/cover/...?dir=4322000", "publisher": "", "language": "English", "pages": ""}]
-}
-```
+### `GET /discover`
+
+Renders discovery results from Open Library.
+
+Params:
+
+| Param | Values | Purpose |
+|---|---|---|
+| `q` | string | Title, author, or subject-like discovery query |
+| `page` | integer | 1-based results page |
+| `mode` | `fiction`, `nonfiction` | Maintains navbar mode |
+| `book_lang` | `en`, `cn` | Language filter |
+
+### `GET /api/discover`
+
+JSON endpoint backing discover pagination. Returns the same book-card shape as
+category and shelf APIs.
 
 ### `GET /api/book`
-Fetch book details (description + subjects) from the configured source.
 
-**Params:** `ol_key` (OL work key `/works/OL123W` or GB volume ID)
+Params:
 
-**Returns:** `{ success, title, description, subjects[] }`
+| Param | Values | Purpose |
+|---|---|---|
+| `ol_key` | `/works/...` | Open Library work key |
+| `book_lang` | `en`, `cn` | Active language context |
+
+Returns:
+
+```json
+{
+  "success": true,
+  "title": "Cosmos",
+  "description": "...",
+  "subjects": ["Science", "Astronomy"]
+}
+```
+
+Non-Open-Library keys return `Book not found`.
 
 ### `GET /api/similar`
-Find similar books by subject.
 
-**Params:** `subject`, `ol_key` (to exclude self)
+Params:
 
-**Returns:** `{ success, books: [{ title, author, cover_url, ol_key }] }`
+| Param | Purpose |
+|---|---|
+| `subject` | Open Library subject string |
+| `ol_key` | Current work key, excluded from results |
+| `book_lang` | Language filter |
+
+### `GET /api/search`
+
+Libgen download search.
+
+Params:
+
+| Param | Values |
+|---|---|
+| `q` | query string |
+| `sort` | `y`, `id`, `title`, `author`, `filesize`, `extension`, `time_added` |
+| `order` | `ASC`, `DESC` |
+| `limit` | `25`, `50`, `100` |
+| `format` | `epub`, `pdf`, `mobi`, `all` |
+| `lang` | `English`, `all` |
+| `dedup` | `0`, `1` |
+| `page` | integer |
+
+### `GET /download/<md5>`
+
+Resolves the md5 through the active downloader and streams the remote file
+through Flask.
 
 ### `POST /api/sendtokindle`
-Email a book to Kindle via SMTP.
 
-**Body:** `{ md5, title, ext, kindle_email, smtp_host, smtp_port, smtp_user, smtp_pass, sender_email }`
+Downloads the selected file, builds an email attachment, and sends it through
+the SMTP credentials supplied by the browser.
 
-**Returns:** `{ success }` or `{ success: false, error }`
+## Template Responsibilities
+
+| Template | Responsibility |
+|---|---|
+| `_navbar.html` | Shared nav, mode switch, EN/CN switch, category tabs, discovery search form |
+| `_book_card.html` | Shared card link, cover, placeholder, hover metadata |
+| `index.html` | Hero, homepage shelves, horizontal shelf infinite scroll |
+| `category.html` | Category grid and vertical infinite scroll |
+| `discover.html` | Open Library discovery result cards and discover pagination |
+| `book.html` | Preview metadata, similar shelf, download results, Kindle modal |
+| `search.html` | Direct download search page and Kindle modal |
+| `results.html` | Older server-rendered download table fallback |
+
+## Frontend Interaction Details
+
+### Homepage Shelf Infinite Scroll
+
+Each shelf stores state on the shelf element:
+
+```html
+<div class="shelf" data-topic="history" data-page="1" data-total-pages="25" data-loading="0">
+```
+
+When the row scroll position approaches the right edge, `loadShelfMore()` calls
+`/api/shelf/<topic>` and inserts cards before the compact arrow button.
+
+### Category Infinite Scroll
+
+`category.html` uses:
+
+- `#scrollSentinel` at the bottom of the grid
+- `IntersectionObserver` with a `700px` root margin
+- `window.scroll` fallback via `nearPageBottom()`
+- `fillViewportIfNeeded()` for short initial grids
+
+### Hidden Counts
+
+The UI intentionally avoids visible total/count text in browsing surfaces. The
+API still returns `total` and `total_pages` so pagination logic can work, but
+templates do not render count summaries such as:
+
+- `80 books`
+- `x shown`
+- `x of y results`
+- `Page x of y`
+
+### Hidden Scrollbars
+
+Homepage shelves and the More Like This shelf keep scroll behavior but hide
+visible scrollbars using:
+
+```css
+scrollbar-width: none;
+-ms-overflow-style: none;
+```
+
+and WebKit scrollbar hiding rules.
 
 ## Caching Strategy
 
-| Data | TTL | Key Format | Warmed On |
+| Data | Store | Key Pattern | TTL / Lifetime |
 |---|---|---|---|
-| Open Library / Google Books API | 10 min | `ol:{path}:{params}` or `gb:{path}:{params}` | First request |
-| Open Library / Google Books API disk cache | 6 hours | hashed cache key in `api_cache.json` | Reused across restarts |
-| Google cover validation | 7 days | `gbcover-check:{volume_id}:zoom3` in memory + `api_cache.json` | First verified cover |
-| Libgen search HTML | 15 min | `lg:{query}:{sort}:{order}:{page}:{limit}` | First search |
-| Homepage shelves | 1 hour | `shelves_{mode}` (in-memory + `shelf_cache_{mode}.json` on disk) | **Server startup** (instant from disk, refreshed in background) |
-| Cover images | 24h | (HTTP Cache-Control) | First load |
+| Open Library JSON | memory | `ol:{path}:{params}` | 1 hour |
+| Open Library JSON | disk `api_cache.json` | SHA-256 of request key | 6 hours |
+| Homepage shelves | memory | `shelves_{lang}_{mode}` | 1 hour |
+| Homepage shelves | disk | `shelf_cache_{lang}_{mode}.json` | reused on restart |
+| Cover images | HTTP response | `/olcover/<cover_id>/<size>` | 24 hours |
 
-## Configuration
+Runtime cache files are ignored by git.
 
-### Book Source
-Set via environment variable:
-```bash
-export BOOK_SOURCE=google          # Use Google Books API
-export BOOK_SOURCE=openlibrary     # Use Open Library (default)
-```
+## Removed Google Books Surface
 
-### Google Books API Key
-Required only when `BOOK_SOURCE=google`:
-```bash
-export GOOGLE_BOOKS_API_KEY="your-key-here"
-```
-Get a free key from https://console.cloud.google.com/apis/credentials
-(1,000 requests/day free tier). Never hardcode the key.
+The following older surfaces were removed or neutralized:
 
-### Templates
+- `BOOK_SOURCE`
+- `GOOGLE_BOOKS_API_KEY`
+- Google Books API callers
+- Google Books cover proxy route
+- `source` navbar toggle
+- `source=` propagation in app-generated URLs
+- Google placeholder-cover validation
 
-All templates use shared partials (`_navbar.html`, `_book_card.html`) for consistency. The navbar includes the Fiction / Non-Fiction switch and mode-specific category tabs. Category pages use explicit Load More pagination to keep Google Books quota use user-driven. Searching/navigating shows a full-screen loading overlay (triggered by `a[href^="/search"]` and `a[href^="/preview"]` click handlers).
+The language URL helper strips stale `source` parameters so old bookmarks do
+not reintroduce removed source state.
