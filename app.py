@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
-from flask import Flask, render_template, request, Response, stream_with_context, jsonify
+from flask import Flask, render_template, request, Response, stream_with_context, jsonify, g, redirect
 
 # Modular download source — see ``downloaders/`` package.
 from downloaders import DOWNLOADER
@@ -22,6 +22,10 @@ API_DISK_CACHE_TTL = 21600
 SHELF_DISK_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shelf_cache.json")
 API_DISK_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_cache.json")
 OL_BOOK_FIELDS = "key,title,author_name,cover_i,cover_id,language,editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id"
+SHELF_BOOK_TARGET = 40
+SHELF_SEARCH_LIMIT = 100
+SHELF_MAX_OPEN_LIBRARY_PAGES = 25
+SHELF_REFILL_OPEN_LIBRARY_PAGES = 4
 
 BOOK_LANGS = {"en", "cn"}
 BOOK_LANG_CONFIG = {
@@ -43,18 +47,56 @@ def normalize_book_lang(lang):
 DEFAULT_BOOK_LANG = normalize_book_lang(os.environ.get("BOOK_LANG")) or "en"
 
 def get_book_lang():
+    override = getattr(g, "book_lang_override", None)
+    if override:
+        return override
     return (
         normalize_book_lang(request.args.get("book_lang"))
         or normalize_book_lang(request.cookies.get("book_lang"))
         or DEFAULT_BOOK_LANG
     )
 
-def lang_url(lang):
+def clean_prefix(mode=None, lang=None):
+    mode = mode if mode in ("fiction", "nonfiction") else "nonfiction"
+    lang = normalize_book_lang(lang) or get_book_lang()
+    parts = []
+    if mode == "fiction":
+        parts.append("fiction")
+    if lang == "cn":
+        parts.append("cn")
+    return "/" + "/".join(parts) if parts else ""
+
+def clean_home_url(mode=None, lang=None):
+    return clean_prefix(mode, lang) or "/"
+
+def clean_category_url(topic, mode=None, lang=None):
+    return f"{clean_prefix(mode, lang)}/category/{topic}"
+
+def clean_discover_url(mode=None, lang=None):
+    return f"{clean_prefix(mode, lang)}/discover"
+
+def preserve_query_redirect(path, drop=("mode", "book_lang")):
     args = request.args.to_dict(flat=True)
-    args.pop("source", None)
-    args["book_lang"] = lang
+    for key in drop:
+        args.pop(key, None)
     query = urlencode(args)
-    return request.path + (f"?{query}" if query else "")
+    return redirect(path + (f"?{query}" if query else ""))
+
+def lang_url(lang):
+    mode = request.args.get("mode") if request.args.get("mode") in ("fiction", "nonfiction") else None
+    mode = mode or getattr(g, "mode_override", None) or "nonfiction"
+    endpoint = request.endpoint or ""
+    topic = (request.view_args or {}).get("topic")
+    if endpoint == "category_page" and topic:
+        return clean_category_url(topic, mode, lang)
+    if endpoint == "discover":
+        path = clean_discover_url(mode, lang)
+        args = request.args.to_dict(flat=True)
+        args.pop("mode", None)
+        args.pop("book_lang", None)
+        query = urlencode(args)
+        return path + (f"?{query}" if query else "")
+    return clean_home_url(mode, lang)
 
 SESSION = requests.Session()
 SESSION.mount("https://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
@@ -254,29 +296,41 @@ def extract_book(w, lang=None):
     ol_key = w.get("key", "")
     return {"title": title, "author": author, "cover_url": cover_url, "ol_key": ol_key}
 
-def fetch_one_shelf(name, topic, lang=None):
-    lang = lang or DEFAULT_BOOK_LANG
-    try:
-        q, sort = shelf_query(topic, lang)
-        limit = 100
-        params = {"q": q, "sort": sort, "limit": limit, "fields": OL_BOOK_FIELDS}
-        data = ol_get("/search.json", params)
-        works = (data or {}).get("docs", [])[:limit]
-        books = []
-        for w in works:
-            b = extract_book(w, lang)
-            if b is not None:
-                books.append(b)
-                if len(books) >= 40:
-                    break
-        return {"name": name, "topic": topic, "books": books}
-    except:
-        return {"name": name, "topic": topic, "books": []}
+def book_identity_keys(book):
+    keys = []
+    ol_key = str(book.get("ol_key") or "").strip()
+    if ol_key:
+        keys.append(("ol", ol_key))
+    title_key = normalize_title(book.get("title", ""))
+    author_key = normalize_author(book.get("author", ""))
+    if title_key and author_key:
+        keys.append(("ta", title_key, author_key))
+    elif title_key:
+        keys.append(("t", title_key))
+    return keys
 
-def fetch_category_books(topic, page=1, lang=None):
+def book_seen(book, seen_keys):
+    return any(key in seen_keys for key in book_identity_keys(book))
+
+def remember_book(book, seen_keys):
+    for key in book_identity_keys(book):
+        seen_keys.add(key)
+
+def select_unique_books(books, seen_keys=None, target=SHELF_BOOK_TARGET):
+    seen_keys = seen_keys if seen_keys is not None else set()
+    selected = []
+    for book in books:
+        if book_seen(book, seen_keys):
+            continue
+        selected.append(book)
+        remember_book(book, seen_keys)
+        if len(selected) >= target:
+            break
+    return selected
+
+def fetch_topic_page_books(topic, page=1, lang=None, limit=SHELF_SEARCH_LIMIT):
     lang = lang or DEFAULT_BOOK_LANG
     q, sort = shelf_query(topic, lang)
-    limit = 60
     params = {"q": q, "sort": sort, "limit": limit, "page": page, "fields": OL_BOOK_FIELDS}
     data = ol_get("/search.json", params)
     total = data.get("numFound", 0) if data else 0
@@ -285,10 +339,78 @@ def fetch_category_books(topic, page=1, lang=None):
         b = extract_book(w, lang)
         if b:
             books.append(b)
-            if len(books) >= 40:
-                break
-    total_pages = min(25, max(1, (total + limit - 1) // limit))
+    total_pages = min(SHELF_MAX_OPEN_LIBRARY_PAGES, max(1, (total + limit - 1) // limit))
     return books, total, total_pages
+
+def collect_unique_topic_books(topic, lang=None, seen_keys=None, target=SHELF_BOOK_TARGET, max_pages=SHELF_REFILL_OPEN_LIBRARY_PAGES):
+    seen_keys = seen_keys if seen_keys is not None else set()
+    selected = []
+    total = 0
+    total_pages = 1
+    for page in range(1, max_pages + 1):
+        page_books, total, total_pages = fetch_topic_page_books(topic, page, lang)
+        for book in page_books:
+            if book_seen(book, seen_keys):
+                continue
+            selected.append(book)
+            remember_book(book, seen_keys)
+            if len(selected) >= target:
+                return selected, total, total_pages
+        if page >= total_pages:
+            break
+    return selected, total, total_pages
+
+def prefetch_topic_pages(topics, lang=None, max_pages=SHELF_REFILL_OPEN_LIBRARY_PAGES):
+    lang = lang or DEFAULT_BOOK_LANG
+    candidate_pages = {}
+    jobs = [(topic, page) for topic in topics for page in range(1, max_pages + 1)]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {pool.submit(fetch_topic_page_books, topic, page, lang): (topic, page) for topic, page in jobs}
+        for future in as_completed(futures):
+            topic, page = futures[future]
+            try:
+                candidate_pages[(topic, page)] = future.result()
+            except:
+                candidate_pages[(topic, page)] = ([], 0, 1)
+    return candidate_pages
+
+def select_unique_from_prefetched(topic, candidate_pages, seen_keys, target=SHELF_BOOK_TARGET, max_pages=SHELF_REFILL_OPEN_LIBRARY_PAGES):
+    selected = []
+    for page in range(1, max_pages + 1):
+        page_books = candidate_pages.get((topic, page), ([], 0, 1))[0]
+        for book in page_books:
+            if book_seen(book, seen_keys):
+                continue
+            selected.append(book)
+            remember_book(book, seen_keys)
+            if len(selected) >= target:
+                return selected
+    return selected
+
+def fetch_one_shelf(name, topic, lang=None):
+    lang = lang or DEFAULT_BOOK_LANG
+    try:
+        candidates, _, _ = fetch_topic_page_books(topic, 1, lang)
+        books = select_unique_books(candidates, set(), SHELF_BOOK_TARGET)
+        return {"name": name, "topic": topic, "books": books}
+    except:
+        return {"name": name, "topic": topic, "books": []}
+
+def fetch_category_books(topic, page=1, lang=None):
+    lang = lang or DEFAULT_BOOK_LANG
+    candidates, total, total_pages = fetch_topic_page_books(topic, page, lang)
+    books = select_unique_books(candidates, set(), SHELF_BOOK_TARGET)
+    return books, total, total_pages
+
+def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
+    lang = lang or DEFAULT_BOOK_LANG
+    page = max(1, page)
+    target = SHELF_BOOK_TARGET * page
+    seen_keys = seen_keys_before_shelf(topic, mode, lang)
+    max_pages = min(SHELF_MAX_OPEN_LIBRARY_PAGES, max(SHELF_REFILL_OPEN_LIBRARY_PAGES, page + 2))
+    books, total, total_pages = collect_unique_topic_books(topic, lang, seen_keys, target, max_pages)
+    start = SHELF_BOOK_TARGET * (page - 1)
+    return books[start:target], total, total_pages
 
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
@@ -309,12 +431,12 @@ def fetch_discovery_books(q, page=1, lang=None):
 def fetch_shelves(mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     sd = get_shelves_def(mode)
+    candidate_pages = prefetch_topic_pages([topic for _, topic in sd], lang)
     shelves = []
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {pool.submit(fetch_one_shelf, name, topic, lang): name for name, topic in sd}
-        for f in as_completed(futures):
-            shelves.append(f.result())
-    shelves.sort(key=lambda s: [n for n, _ in sd].index(s["name"]))
+    seen_keys = set()
+    for name, topic in sd:
+        books = select_unique_from_prefetched(topic, candidate_pages, seen_keys, SHELF_BOOK_TARGET)
+        shelves.append({"name": name, "topic": topic, "books": books})
     return shelves
 
 # ---------------------------------------------------------------------------
@@ -424,6 +546,9 @@ def inject_book_context():
         "book_lang": get_book_lang(),
         "book_lang_label": BOOK_LANG_CONFIG[get_book_lang()]["label"],
         "lang_url": lang_url,
+        "home_url": clean_home_url,
+        "category_url": clean_category_url,
+        "discover_url": clean_discover_url,
     }
 
 @app.template_filter("size_url")
@@ -474,55 +599,109 @@ def get_shelves(mode="nonfiction", lang=None):
         return cached
     disk = disk_load_shelves(mode, lang)
     if disk:
-        cache_set(ckey, disk)
-        return disk
+        shelves = dedupe_and_refill_shelves(disk, mode, lang)
+        cache_set(ckey, shelves)
+        disk_save_shelves(shelves, mode, lang)
+        return shelves
     shelves = fetch_shelves(mode, lang)
     cache_set(ckey, shelves)
     disk_save_shelves(shelves, mode, lang)
     return shelves
+
+def dedupe_and_refill_shelves(shelves, mode="nonfiction", lang=None):
+    lang = lang or DEFAULT_BOOK_LANG
+    by_topic = {shelf.get("topic"): shelf for shelf in shelves}
+    by_name = {shelf.get("name"): shelf for shelf in shelves}
+    sd = get_shelves_def(mode)
+    candidate_pages = None
+    seen_keys = set()
+    output = []
+    for name, topic in sd:
+        shelf = by_topic.get(topic) or by_name.get(name) or {"name": name, "topic": topic, "books": []}
+        books = select_unique_books(shelf.get("books", []), seen_keys, SHELF_BOOK_TARGET)
+        if len(books) < SHELF_BOOK_TARGET:
+            if candidate_pages is None:
+                candidate_pages = prefetch_topic_pages([shelf_topic for _, shelf_topic in sd], lang)
+            extra = select_unique_from_prefetched(topic, candidate_pages, seen_keys, SHELF_BOOK_TARGET - len(books))
+            books.extend(extra)
+        output.append({"name": name, "topic": topic, "books": books})
+    return output
+
+def seen_keys_before_shelf(topic, mode="nonfiction", lang=None):
+    seen_keys = set()
+    shelves = get_shelves(mode, lang)
+    by_topic = {shelf.get("topic"): shelf for shelf in shelves}
+    for _, shelf_topic in get_shelves_def(mode):
+        if shelf_topic == topic:
+            break
+        for book in by_topic.get(shelf_topic, {}).get("books", []):
+            remember_book(book, seen_keys)
+    return seen_keys
 
 def dedup_across_shelves(shelves):
     seen = set()
     for shelf in shelves:
         deduped = []
         for book in shelf["books"]:
-            key = (normalize_title(book["title"]), normalize_author(book.get("author", "")))
-            if key not in seen:
-                seen.add(key)
+            if not book_seen(book, seen):
+                remember_book(book, seen)
                 deduped.append(book)
         shelf["books"] = deduped
         if "topic" not in shelf:
             shelf["topic"] = next((topic for name, topic in SHELVES_DEF + FICTION_SHELVES_DEF if name == shelf.get("name")), "")
     return shelves
 
-@app.route("/")
-def index():
-    mode = request.args.get("mode", "nonfiction")
-    if mode not in ("fiction", "nonfiction"):
-        mode = "nonfiction"
-    lang = get_book_lang()
+def render_home(mode="nonfiction", lang=None, error=None):
+    mode = mode if mode in ("fiction", "nonfiction") else "nonfiction"
+    lang = normalize_book_lang(lang) or get_book_lang()
+    g.mode_override = mode
+    g.book_lang_override = lang
     shelves = get_shelves(mode, lang)
     hero = None
+    hero_books = []
+    hero_items = []
     if shelves:
         trending = shelves[0].get("books", [])
+        hero_books = trending[:7]
         if trending:
-            candidates = random.sample(trending, min(len(trending), 8))
-            for b in candidates:
-                hero = dict(b)
-                hero["description"] = ""
-                if hero.get("ol_key"):
-                    work = ol_get_work(hero["ol_key"])
-                    if work:
-                        desc = extract_desc(work)
-                        if desc and text_matches_lang(desc, lang):
-                            hero["description"] = desc[:300]
-                            break
-    return render_template("index.html", shelves=shelves, hero=hero, mode=mode)
+            hero = dict(random.choice(trending[:min(len(trending), 16)]))
+            hero["description"] = ""
+            if hero:
+                hero_key = hero.get("ol_key") or f"{hero.get('title')}|{hero.get('author')}"
+                hero_books = [hero] + [
+                    b for b in hero_books
+                    if (b.get("ol_key") or f"{b.get('title')}|{b.get('author')}") != hero_key
+                ]
+                hero_books = hero_books[:7]
+                hero_items = [dict(b, description=b.get("description", "")) for b in hero_books]
+    return render_template("index.html", shelves=shelves, hero=hero, hero_books=hero_books, hero_items=hero_items, mode=mode, error=error)
 
-@app.route("/category/<topic>")
-def category_page(topic):
-    mode = request.args.get("mode", "nonfiction")
-    lang = get_book_lang()
+@app.route("/", defaults={"clean_mode": None, "clean_lang": None})
+@app.route("/fiction", defaults={"clean_mode": "fiction", "clean_lang": None})
+@app.route("/cn", defaults={"clean_mode": "nonfiction", "clean_lang": "cn"})
+@app.route("/fiction/cn", defaults={"clean_mode": "fiction", "clean_lang": "cn"})
+def index(clean_mode, clean_lang):
+    mode = clean_mode or request.args.get("mode", "nonfiction")
+    if mode not in ("fiction", "nonfiction"):
+        mode = "nonfiction"
+    lang = clean_lang or get_book_lang()
+    if clean_mode is None and ("mode" in request.args or "book_lang" in request.args):
+        return preserve_query_redirect(clean_home_url(mode, lang))
+    return render_home(mode, lang)
+
+@app.route("/category/<topic>", defaults={"clean_mode": None, "clean_lang": None})
+@app.route("/fiction/category/<topic>", defaults={"clean_mode": "fiction", "clean_lang": None})
+@app.route("/cn/category/<topic>", defaults={"clean_mode": "nonfiction", "clean_lang": "cn"})
+@app.route("/fiction/cn/category/<topic>", defaults={"clean_mode": "fiction", "clean_lang": "cn"})
+def category_page(topic, clean_mode, clean_lang):
+    mode = clean_mode or request.args.get("mode", "nonfiction")
+    if mode not in ("fiction", "nonfiction"):
+        mode = "nonfiction"
+    lang = clean_lang or get_book_lang()
+    g.mode_override = mode
+    g.book_lang_override = lang
+    if clean_mode is None and ("mode" in request.args or "book_lang" in request.args):
+        return preserve_query_redirect(clean_category_url(topic, mode, lang))
     sd = get_shelves_def(mode)
     valid_topics = {t for _, t in sd}
     if topic not in valid_topics:
@@ -556,19 +735,25 @@ def api_shelf(topic):
     valid_topics = {t for _, t in sd}
     if topic not in valid_topics:
         return jsonify({"success": False, "error": "Invalid topic"})
-    books, total, total_pages = fetch_category_books(topic, page, lang)
+    books, total, total_pages = fetch_shelf_page_books(topic, page, mode, lang)
     return jsonify({"success": True, "books": books, "page": page, "total_pages": total_pages, "total": total})
 
-@app.route("/discover")
-def discover():
+@app.route("/discover", defaults={"clean_mode": None, "clean_lang": None})
+@app.route("/fiction/discover", defaults={"clean_mode": "fiction", "clean_lang": None})
+@app.route("/cn/discover", defaults={"clean_mode": "nonfiction", "clean_lang": "cn"})
+@app.route("/fiction/cn/discover", defaults={"clean_mode": "fiction", "clean_lang": "cn"})
+def discover(clean_mode, clean_lang):
     q = request.args.get("q", "").strip()
-    mode = request.args.get("mode", "nonfiction")
+    mode = clean_mode or request.args.get("mode", "nonfiction")
     if mode not in ("fiction", "nonfiction"):
         mode = "nonfiction"
-    lang = get_book_lang()
+    lang = clean_lang or get_book_lang()
+    g.mode_override = mode
+    g.book_lang_override = lang
+    if clean_mode is None and ("mode" in request.args or "book_lang" in request.args):
+        return preserve_query_redirect(clean_discover_url(mode, lang))
     if not q:
-        shelves = get_shelves(mode, lang)
-        return render_template("index.html", shelves=shelves, error="Enter a search query.", mode=mode)
+        return render_home(mode, lang, error="Enter a search query.")
 
     page = int(request.args.get("page", 1))
     books, total, total_pages = fetch_discovery_books(q, page, lang)

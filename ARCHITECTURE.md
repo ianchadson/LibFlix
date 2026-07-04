@@ -22,8 +22,9 @@ Browser requests /
   -> get_shelves(mode, lang)
        -> memory cache
        -> disk shelf cache
-       -> Open Library search in parallel when cache is cold
-  -> render index.html with hero + 12 shelves
+       -> shelf-order dedupe and refill
+       -> Open Library search when cache is cold or a shelf needs refill
+  -> render index.html with cycleable hero + 12 shelves
   -> user scrolls a shelf horizontally
   -> JS fetches /api/shelf/<topic>?page=N&mode=...&book_lang=...
   -> new book cards are inserted before the compact arrow button
@@ -33,7 +34,10 @@ Important behavior:
 
 - Shelves are language-aware.
 - Each shelf initially renders up to 40 books.
-- Shelves are not deduped across each other, so rows stay full.
+- Shelves are deduped in top-to-bottom priority order. A book that appears in
+  an earlier shelf is excluded from later shelves.
+- Later shelves try to refill from deeper Open Library pages after duplicates
+  are removed.
 - Horizontal scrollbars are hidden.
 - The compact More button is a fallback; normal loading is scroll-triggered.
 
@@ -63,7 +67,7 @@ Important behavior:
 Navbar search form submits to /discover
   -> Flask uses fetch_discovery_books(q, page, lang)
   -> Open Library search results render as book cards
-  -> Load More on discover pages fetches /api/discover
+  -> bottom scroll sentinel fetches /api/discover automatically
   -> clicking a card opens /preview
 ```
 
@@ -131,8 +135,14 @@ BOOK_LANG_CONFIG = {
 | `edition_cover_id(edition)` | Pick a usable Open Library cover id |
 | `fetch_one_shelf(name, topic, lang)` | Server-rendered first shelf/category batch |
 | `fetch_category_books(topic, page, lang)` | Paginated category/home shelf JSON source |
+| `collect_unique_topic_books(topic, lang, seen_keys, target)` | Pull deeper Open Library pages until a shelf has unique books or pages are exhausted |
+| `prefetch_topic_pages(topics, lang, max_pages)` | Fetch bounded candidate pages for homepage shelves in parallel |
+| `select_unique_from_prefetched(topic, candidate_pages, seen_keys, target)` | Select unique shelf books from prefetched candidates without more network calls |
+| `dedupe_and_refill_shelves(shelves, mode, lang)` | Apply homepage shelf priority and top up later shelves |
+| `seen_keys_before_shelf(topic, mode, lang)` | Build exclusion keys from all earlier homepage shelves |
+| `fetch_shelf_page_books(topic, page, mode, lang)` | Return logical horizontal shelf pages after cross-shelf dedupe |
 | `fetch_discovery_books(q, page, lang)` | Paginated `/discover` JSON source |
-| `fetch_shelves(mode, lang)` | Parallel homepage shelf fetcher |
+| `fetch_shelves(mode, lang)` | Homepage shelf builder using parallel candidate prefetch plus top-to-bottom dedupe |
 
 ### Download Helpers
 
@@ -281,11 +291,11 @@ the SMTP credentials supplied by the browser.
 
 | Template | Responsibility |
 |---|---|
-| `_navbar.html` | Shared nav, mode switch, EN/CN switch, category tabs, discovery search form |
+| `_navbar.html` | Shared nav, wide-screen category tabs, expandable discovery search, expandable mode/language settings |
 | `_book_card.html` | Shared card link, cover, placeholder, hover metadata |
 | `index.html` | Hero, homepage shelves, horizontal shelf infinite scroll |
 | `category.html` | Category grid and vertical infinite scroll |
-| `discover.html` | Open Library discovery result cards and discover pagination |
+| `discover.html` | Open Library discovery result cards and vertical infinite scroll |
 | `book.html` | Preview metadata, similar shelf, download results, Kindle modal |
 | `search.html` | Direct download search page and Kindle modal |
 | `results.html` | Older server-rendered download table fallback |
@@ -302,6 +312,11 @@ Each shelf stores state on the shelf element:
 
 When the row scroll position approaches the right edge, `loadShelfMore()` calls
 `/api/shelf/<topic>` and inserts cards before the compact arrow button.
+
+Homepage book cards carry Open Library key, title, and author data attributes.
+The browser runs a shelf-priority sweep on initial render and after horizontal
+loads, removing any duplicate card from later shelves if an earlier shelf has
+already claimed the same work/title-author identity.
 
 ### Category Infinite Scroll
 

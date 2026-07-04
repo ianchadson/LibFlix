@@ -1,66 +1,258 @@
 <style>
-  .mode-toggle { display:flex; background:rgba(255,255,255,.08); border-radius:20px; padding:1px; }
-  .mode-btn { padding:2px 10px; border-radius:18px; font-size:.7rem; color:#aaa; text-decoration:none; white-space:nowrap; transition:all .15s; }
+  .lib-nav { background: linear-gradient(180deg, rgba(16,16,16,.96) 0%, rgba(16,16,16,.78) 74%, rgba(16,16,16,0) 100%); padding: 12px 24px 18px; }
+  .lib-nav-shell { width: 100%; }
+  .lib-nav-main { display:grid; grid-template-columns:auto minmax(0, 1fr) auto; align-items:center; gap:18px; width:100%; }
+  .navbar-brand { margin:0 !important; line-height:1; }
+  .nav-actions { display:flex; align-items:center; justify-content:flex-end; gap:8px; min-width:0; position:relative; }
+  .nav-icon-btn { height:38px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.075); color:#ddd; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:0 13px; font-size:.78rem; font-weight:700; transition:background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease; }
+  .nav-icon-btn:hover { background:rgba(255,255,255,.13); border-color:rgba(255,255,255,.18); color:#fff; transform:translateY(-1px); }
+  .nav-icon-btn[aria-expanded="true"] { background:rgba(229,9,20,.16); border-color:rgba(229,9,20,.42); color:#fff; }
+  .nav-search-icon { position:relative; width:16px; height:16px; display:inline-block; flex:0 0 auto; }
+  .nav-search-icon::before { content:""; position:absolute; width:10px; height:10px; border:2px solid currentColor; border-radius:50%; left:1px; top:1px; }
+  .nav-search-icon::after { content:""; position:absolute; width:7px; height:2px; background:currentColor; border-radius:999px; transform:rotate(45deg); right:0; bottom:2px; }
+  .nav-gear-icon { position:relative; width:16px; height:16px; display:inline-block; flex:0 0 auto; border:2px solid currentColor; border-radius:50%; opacity:.9; }
+  .nav-gear-icon::before { content:""; position:absolute; inset:4px; background:currentColor; border-radius:50%; }
+  .nav-gear-icon::after { content:""; position:absolute; left:50%; top:-4px; width:2px; height:20px; background:currentColor; border-radius:999px; transform:translateX(-50%); box-shadow:0 0 0 0 currentColor; opacity:.55; }
+  .mode-toggle { display:flex; background:rgba(255,255,255,.075); border:1px solid rgba(255,255,255,.07); border-radius:999px; padding:2px; }
+  .mode-btn { padding:5px 12px; border-radius:999px; font-size:.72rem; color:#aaa; text-decoration:none; white-space:nowrap; transition:all .15s; line-height:1; }
   .mode-btn:hover { color:#fff; background:rgba(255,255,255,.1); }
   .mode-btn.active { background:#e50914; color:#fff; }
-  .lang-toggle { display:flex; background:rgba(255,255,255,.08); border-radius:20px; padding:1px; }
-  .lang-btn { padding:2px 8px; border-radius:18px; font-size:.7rem; color:#aaa; text-decoration:none; white-space:nowrap; transition:all .15s; }
+  .lang-toggle { display:flex; background:rgba(255,255,255,.075); border:1px solid rgba(255,255,255,.07); border-radius:999px; padding:2px; }
+  .lang-btn { padding:5px 9px; border-radius:999px; font-size:.72rem; color:#aaa; text-decoration:none; white-space:nowrap; transition:all .15s; line-height:1; }
   .lang-btn:hover { color:#fff; background:rgba(255,255,255,.1); }
   .lang-btn.active { background:#e50914; color:#fff; }
-  @media (max-width: 900px) {
-    .lang-btn { padding:2px 7px; }
+  .search-bar { width:42px; min-width:42px; max-width:42px; justify-self:end; overflow:hidden; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.075); border-radius:999px; padding:3px; box-shadow:0 12px 28px rgba(0,0,0,.18); transition:width .24s ease, max-width .24s ease, background .16s ease, border-color .16s ease; }
+  .search-bar.open, .search-bar:focus-within { width:min(390px, 36vw); max-width:390px; background:rgba(255,255,255,.105); border-color:rgba(255,255,255,.18); }
+  .search-bar input { height:34px !important; min-width:0; border:0 !important; border-radius:999px !important; background:transparent !important; padding:0 11px !important; font-size:.9rem !important; opacity:0; transform:translateX(-6px); transition:opacity .16s ease, transform .16s ease; }
+  .search-bar.open input, .search-bar:focus-within input { opacity:1; transform:none; }
+  .search-bar input:focus { box-shadow:none !important; background:transparent !important; }
+  .search-bar button { height:34px; min-width:34px; border-radius:999px !important; padding:0 !important; font-size:0 !important; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
+  .search-submit-label { width:0; overflow:hidden; opacity:0; transition:opacity .12s ease, width .12s ease; }
+  .search-bar.open .search-submit-label, .search-bar:focus-within .search-submit-label { width:auto; opacity:1; font-size:.76rem; padding:0 11px; }
+  .search-bar.open button, .search-bar:focus-within button { min-width:44px; font-size:.76rem !important; }
+  .settings-wrap { position:relative; }
+  .settings-panel { position:absolute; right:0; top:calc(100% + 10px); width:260px; padding:12px; border:1px solid rgba(255,255,255,.1); background:rgba(24,24,24,.94); backdrop-filter:blur(14px); border-radius:14px; box-shadow:0 22px 60px rgba(0,0,0,.38); opacity:0; transform:translateY(-6px) scale(.98); pointer-events:none; transition:opacity .18s ease, transform .18s ease; z-index:30; }
+  .settings-panel.open { opacity:1; transform:none; pointer-events:auto; }
+  .settings-group + .settings-group { margin-top:10px; }
+  .settings-label { color:rgba(255,255,255,.48); font-size:.68rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; margin:0 0 6px 2px; }
+  .settings-panel .mode-toggle, .settings-panel .lang-toggle { width:100%; }
+  .settings-panel .mode-btn, .settings-panel .lang-btn { flex:1; text-align:center; padding:8px 10px; font-size:.76rem; }
+  .cat-tabs { width:100%; max-width:100% !important; justify-content:flex-start; gap:4px !important; padding:0 0 2px; mask-image:linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent); }
+  .lib-nav-main > .cat-tabs { min-width:0; }
+  .cat-tab { padding:5px 11px !important; border-radius:999px !important; font-size:.74rem !important; line-height:1; }
+  body { animation: appPageIn .2s ease both; }
+  body.is-leaving { cursor: progress; }
+  .app-transition { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; background:rgba(15,15,15,.82); backdrop-filter:blur(8px); opacity:0; pointer-events:none; transition:opacity .18s ease; }
+  body.is-leaving .app-transition { opacity:1; pointer-events:auto; }
+  .app-transition-core { display:flex; flex-direction:column; align-items:center; gap:12px; color:#fff; transform:translateY(4px); transition:transform .18s ease; }
+  body.is-leaving .app-transition-core { transform:translateY(0); }
+  .app-transition-mark { font-size:1.4rem; font-weight:800; color:#e50914; letter-spacing:-.03em; text-shadow:0 12px 34px rgba(229,9,20,.26); }
+  .app-transition-spinner { width:34px; height:34px; border-radius:999px; border:3px solid rgba(229,9,20,.2); border-top-color:#e50914; animation: appSpin .72s linear infinite; }
+  .lib-nav,
+  .hero,
+  .shelf-title,
+  .page-title,
+  .discover-title,
+  .dl-section-title,
+  .detail-title,
+  .detail-author,
+  .book-card .info,
+  .book-card .placeholder,
+  .empty-state,
+  .loading-message,
+  .lg-loading,
+  .lg-error,
+  .no-results,
+  button,
+  .btn,
+  label,
+  footer {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  input,
+  textarea,
+  select,
+  option,
+  .book-table,
+  .title-cell,
+  .detail-desc,
+  #descText,
+  #resultsBody {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  @keyframes appSpin { to { transform:rotate(360deg); } }
+  @keyframes appPageIn { from { opacity:.55; transform:translateY(3px); } to { opacity:1; transform:none; } }
+  @media (prefers-reduced-motion: reduce) {
+    body { animation:none; }
+    .app-transition, .app-transition-core { transition:none; }
+    .app-transition-spinner { animation:none; border-color:rgba(229,9,20,.45); }
+  }
+  @media (min-width: 1180px) {
+    .search-bar.open, .search-bar:focus-within { width:420px; max-width:420px; }
+    .cat-tabs { justify-content:center; }
+  }
+  @media (max-width: 980px) {
+    .lib-nav { padding: 9px 16px 14px; }
+    .lib-nav-main { grid-template-columns:auto 1fr auto; gap:10px; }
+    .nav-actions { justify-self:end; }
+    .cat-tabs { grid-column:1 / -1; grid-row:2; }
+    .search-bar.open, .search-bar:focus-within { width:min(360px, 52vw); max-width:360px; }
   }
   @media (max-width: 600px) {
-    .navbar .container-fluid { flex-wrap: wrap !important; overflow: visible !important; }
-    .search-bar { order: 3; flex: 1 0 100%; max-width: none !important; width: 100%; margin-top: 4px; }
-    .cat-tabs { order: 4; width: 100%; max-width: 100% !important; }
+    .lib-nav { padding: 8px 12px 12px; }
+    .lib-nav-main { grid-template-columns:1fr auto; gap:8px; }
+    .navbar-brand { font-size:1.15rem !important; }
+    .nav-actions { justify-self:end; }
+    .cat-tabs { grid-column:1 / -1; grid-row:2; }
+    .search-bar.open, .search-bar:focus-within { position:absolute; right:0; top:0; width:calc(100vw - 24px); max-width:none; z-index:35; }
+    .settings-panel { right:0; width:calc(100vw - 24px); }
+    .mode-btn { padding:5px 10px; font-size:.68rem; }
+    .lang-btn { padding:5px 8px; font-size:.68rem; }
   }
 </style>
 {% set nav_mode = mode | default('nonfiction') %}
-<nav class="navbar navbar-dark px-3 py-1">
-  <div class="container-fluid d-flex align-items-center gap-1 gap-md-2 flex-nowrap overflow-hidden">
-    <a class="navbar-brand flex-shrink-0 me-1" href="/?mode={{ nav_mode | urlencode }}&book_lang={{ book_lang | urlencode }}">LibFlix</a>
-    <div class="mode-toggle flex-shrink-0 me-1">
-      <a href="/?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="mode-btn {% if nav_mode != 'fiction' %}active{% endif %}">Non-Fiction</a>
-      <a href="/?mode=fiction&book_lang={{ book_lang | urlencode }}" class="mode-btn {% if nav_mode == 'fiction' %}active{% endif %}">Fiction</a>
-    </div>
-    <div class="lang-toggle flex-shrink-0 me-1" aria-label="Book language">
-      <a href="{{ lang_url('en') }}" class="lang-btn {% if book_lang == 'en' %}active{% endif %}" title="English books">EN</a>
-      <a href="{{ lang_url('cn') }}" class="lang-btn {% if book_lang == 'cn' %}active{% endif %}" title="Chinese books">CN</a>
-    </div>
-    <form {% if search_id %}id="{{ search_id }}" action="javascript:"{% else %}action="{{ search_action | default('/discover') }}" method="get"{% endif %} class="search-bar d-flex flex-shrink-1" style="min-width:0;max-width:280px">
-      <input type="hidden" name="mode" value="{{ nav_mode }}">
-      <input type="hidden" name="book_lang" value="{{ book_lang }}">
-      <input type="text" class="form-control" name="q" value="{{ search_value or '' }}" placeholder="Search..." aria-label="Search">
-      <button class="btn ms-1" type="submit" style="font-size:.78rem;padding:4px 10px">Go</button>
-    </form>
-    <div class="cat-tabs d-flex gap-1 overflow-auto ms-auto flex-shrink-0" style="scrollbar-width:none;max-width:50%">
+<nav class="navbar navbar-dark lib-nav">
+  <div class="lib-nav-shell">
+    <div class="lib-nav-main">
+      <a class="navbar-brand" href="{{ home_url(nav_mode, book_lang) }}">LibFlix</a>
+      <div class="cat-tabs d-flex overflow-auto" style="scrollbar-width:none">
       {% if nav_mode == 'fiction' %}
-      <a href="/?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">Home</a>
-      <a href="/category/trending_fiction?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">New</a>
-      <a href="/category/science_fiction?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'science_fiction' %}active{% endif %}">Sci-Fi</a>
-      <a href="/category/fantasy?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'fantasy' %}active{% endif %}">Fantasy</a>
-      <a href="/category/mystery?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'mystery' %}active{% endif %}">Mystery</a>
-      <a href="/category/romance?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'romance' %}active{% endif %}">Romance</a>
-      <a href="/category/horror?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'horror' %}active{% endif %}">Horror</a>
-      <a href="/category/historical_fiction?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'historical_fiction' %}active{% endif %}">Historical</a>
-      <a href="/category/adventure?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'adventure' %}active{% endif %}">Adventure</a>
-      <a href="/category/young_adult?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'young_adult' %}active{% endif %}">YA</a>
-      <a href="/category/graphic_novels?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'graphic_novels' %}active{% endif %}">Graphic</a>
-      <a href="/category/literary_fiction?mode=fiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'literary_fiction' %}active{% endif %}">Literary</a>
+      <a href="{{ home_url('fiction', book_lang) }}" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">Home</a>
+      <a href="{{ category_url('trending_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">New</a>
+      <a href="{{ category_url('science_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'science_fiction' %}active{% endif %}">Sci-Fi</a>
+      <a href="{{ category_url('fantasy', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'fantasy' %}active{% endif %}">Fantasy</a>
+      <a href="{{ category_url('mystery', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'mystery' %}active{% endif %}">Mystery</a>
+      <a href="{{ category_url('romance', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'romance' %}active{% endif %}">Romance</a>
+      <a href="{{ category_url('horror', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'horror' %}active{% endif %}">Horror</a>
+      <a href="{{ category_url('historical_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'historical_fiction' %}active{% endif %}">Historical</a>
+      <a href="{{ category_url('adventure', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'adventure' %}active{% endif %}">Adventure</a>
+      <a href="{{ category_url('young_adult', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'young_adult' %}active{% endif %}">YA</a>
+      <a href="{{ category_url('graphic_novels', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'graphic_novels' %}active{% endif %}">Graphic</a>
+      <a href="{{ category_url('literary_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'literary_fiction' %}active{% endif %}">Literary</a>
       {% else %}
-      <a href="/?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'home' %}active{% endif %}">Home</a>
-      <a href="/category/trending?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'trending' %}active{% endif %}">New</a>
-      <a href="/category/self_help?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'self_help' %}active{% endif %}">Self Dev</a>
-      <a href="/category/business?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'business' %}active{% endif %}">Business</a>
-      <a href="/category/technology?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'technology' %}active{% endif %}">Science</a>
-      <a href="/category/psychology?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'psychology' %}active{% endif %}">Psychology</a>
-      <a href="/category/history?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'history' %}active{% endif %}">History</a>
-      <a href="/category/biography?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'biography' %}active{% endif %}">Biography</a>
-      <a href="/category/health?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'health' %}active{% endif %}">Health</a>
-      <a href="/category/politics?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'politics' %}active{% endif %}">Politics</a>
-      <a href="/category/classics?mode=nonfiction&book_lang={{ book_lang | urlencode }}" class="cat-tab {% if active_tab == 'classics' %}active{% endif %}">Classics</a>
+      <a href="{{ home_url('nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'home' %}active{% endif %}">Home</a>
+      <a href="{{ category_url('trending', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'trending' %}active{% endif %}">New</a>
+      <a href="{{ category_url('self_help', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'self_help' %}active{% endif %}">Self Dev</a>
+      <a href="{{ category_url('business', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'business' %}active{% endif %}">Business</a>
+      <a href="{{ category_url('technology', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'technology' %}active{% endif %}">Science</a>
+      <a href="{{ category_url('psychology', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'psychology' %}active{% endif %}">Psychology</a>
+      <a href="{{ category_url('history', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'history' %}active{% endif %}">History</a>
+      <a href="{{ category_url('biography', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'biography' %}active{% endif %}">Biography</a>
+      <a href="{{ category_url('health', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'health' %}active{% endif %}">Health</a>
+      <a href="{{ category_url('politics', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'politics' %}active{% endif %}">Politics</a>
+      <a href="{{ category_url('classics', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'classics' %}active{% endif %}">Classics</a>
       {% endif %}
+      </div>
+      <div class="nav-actions">
+        <form {% if search_id %}id="{{ search_id }}" action="javascript:"{% else %}action="{{ search_action | default(discover_url(nav_mode, book_lang)) }}" method="get"{% endif %} class="search-bar d-flex" role="search">
+          <input type="text" class="form-control" name="q" value="{{ search_value or '' }}" placeholder="Search..." aria-label="Search books">
+          <button class="btn ms-1 search-submit" type="submit" aria-label="Search" aria-expanded="false">
+            <span class="nav-search-icon" aria-hidden="true"></span>
+            <span class="search-submit-label">Go</span>
+          </button>
+        </form>
+        <div class="settings-wrap">
+          <button class="nav-icon-btn" id="navSettingsToggle" type="button" aria-expanded="false" aria-controls="navSettingsPanel">
+            <span class="nav-gear-icon" aria-hidden="true"></span>
+            <span>Settings</span>
+          </button>
+          <div class="settings-panel" id="navSettingsPanel" aria-label="Browse settings">
+            <div class="settings-group">
+              <div class="settings-label">Shelf</div>
+              <div class="mode-toggle">
+                <a href="{{ home_url('nonfiction', book_lang) }}" class="mode-btn {% if nav_mode != 'fiction' %}active{% endif %}">Non-Fiction</a>
+                <a href="{{ home_url('fiction', book_lang) }}" class="mode-btn {% if nav_mode == 'fiction' %}active{% endif %}">Fiction</a>
+              </div>
+            </div>
+            <div class="settings-group">
+              <div class="settings-label">Language</div>
+              <div class="lang-toggle" aria-label="Book language">
+                <a href="{{ lang_url('en') }}" class="lang-btn {% if book_lang == 'en' %}active{% endif %}" title="English books">EN</a>
+                <a href="{{ lang_url('cn') }}" class="lang-btn {% if book_lang == 'cn' %}active{% endif %}" title="Chinese books">CN</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </nav>
+<div class="app-transition" id="appTransition" aria-hidden="true">
+  <div class="app-transition-core">
+    <div class="app-transition-spinner"></div>
+    <div class="app-transition-mark">LibFlix</div>
+  </div>
+</div>
+<script>
+  (() => {
+    const showTransition = () => {
+      document.body.classList.add('is-leaving');
+    };
+    const isInternalNavigation = href => {
+      if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return false;
+      const url = new URL(href, window.location.href);
+      if (url.origin !== window.location.origin) return false;
+      if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/download/')) return false;
+      if (url.pathname === window.location.pathname && url.search === window.location.search && url.hash) return false;
+      return true;
+    };
+    window.addEventListener('pageshow', () => document.body.classList.remove('is-leaving'));
+    document.addEventListener('click', event => {
+      const link = event.target.closest('a[href]');
+      if (!link || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      if (link.target && link.target !== '_self') return;
+      if (link.hasAttribute('download')) return;
+      if (isInternalNavigation(link.getAttribute('href'))) showTransition();
+    });
+    document.addEventListener('submit', event => {
+      const form = event.target;
+      if (!form || event.defaultPrevented) return;
+      const action = form.getAttribute('action') || window.location.href;
+      if (isInternalNavigation(action)) showTransition();
+    });
+
+    const searchForm = document.querySelector('.search-bar');
+    const searchInput = searchForm?.querySelector('input[name="q"]');
+    const searchButton = searchForm?.querySelector('button[type="submit"]');
+    const setSearchOpen = open => {
+      if (!searchForm) return;
+      searchForm.classList.toggle('open', open);
+      searchButton?.setAttribute('aria-expanded', String(open));
+    };
+    searchButton?.addEventListener('click', event => {
+      if (!searchInput?.value.trim() && document.activeElement !== searchInput) {
+        event.preventDefault();
+        setSearchOpen(true);
+        window.setTimeout(() => searchInput?.focus(), 80);
+      }
+    });
+    searchForm?.addEventListener('focusin', () => setSearchOpen(true));
+    searchInput?.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !searchInput.value.trim()) {
+        setSearchOpen(false);
+        searchInput.blur();
+      }
+    });
+
+    const settingsToggle = document.getElementById('navSettingsToggle');
+    const settingsPanel = document.getElementById('navSettingsPanel');
+    const setSettingsOpen = open => {
+      settingsPanel?.classList.toggle('open', open);
+      settingsToggle?.setAttribute('aria-expanded', String(open));
+    };
+    settingsToggle?.addEventListener('click', event => {
+      event.stopPropagation();
+      setSettingsOpen(!settingsPanel?.classList.contains('open'));
+    });
+    document.addEventListener('click', event => {
+      const target = event.target;
+      if (searchForm && !searchForm.contains(target) && !searchInput?.value.trim()) setSearchOpen(false);
+      if (settingsPanel && settingsToggle && !settingsPanel.contains(target) && !settingsToggle.contains(target)) setSettingsOpen(false);
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') setSettingsOpen(false);
+    });
+  })();
+</script>

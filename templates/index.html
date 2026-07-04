@@ -25,24 +25,42 @@
     .cat-tab:hover { background: rgba(255,255,255,.1); color: #fff; }
     .cat-tab.active { background: #e50914; color: #fff; }
 
-    .hero { height: 55vh; min-height: 360px; background: linear-gradient(rgba(20,20,20,.55), rgba(20,20,20,.95)), center/cover no-repeat; display: flex; align-items: center; padding: 0 4%; margin-bottom: .5rem; position: relative; transition: height .4s ease, min-height .4s ease, opacity .4s ease; overflow: hidden; }
-    .hero.collapsed { height: 0 !important; min-height: 0 !important; opacity: 0; margin: 0; padding: 0; }
-    .hero .hero-content { max-width: 600px; }
-    .hero h1 { font-size: 2.8rem; font-weight: 700; text-shadow: 0 2px 10px rgba(0,0,0,.5); }
-    .hero .hero-sub { font-size: 1.05rem; color: #ccc; max-width: 500px; margin-top: 4px; text-shadow: 0 1px 6px rgba(0,0,0,.5); }
-    .hero .hero-desc { font-size: .88rem; color: #999; max-width: 500px; margin-top: 8px; line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-    .hero .btn-hero { background: #e50914; border: none; padding: 8px 28px; font-weight: 600; border-radius: 4px; color: #fff; text-decoration: none; display: inline-block; margin-top: 8px; font-size: .9rem; }
+    .hero { height: 430px; padding: 38px 4% 34px; margin-bottom: .8rem; position: relative; overflow: hidden; background: radial-gradient(circle at 78% 28%, rgba(229,9,20,.18), transparent 34%), linear-gradient(135deg, #191919 0%, #101010 62%, #171312 100%); border-bottom: 1px solid rgba(255,255,255,.05); isolation:isolate; }
+    .hero::before { content: ""; position: absolute; inset: -12%; background-image: linear-gradient(rgba(255,255,255,.026) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.02) 1px, transparent 1px); background-size: 36px 36px; mask-image: linear-gradient(90deg, rgba(0,0,0,.25), rgba(0,0,0,.82)); animation: heroGridDrift 24s linear infinite; pointer-events: none; will-change: transform; }
+    .hero::after { content:""; position:absolute; width:46vw; height:46vw; right:-18vw; top:-23vw; border-radius:50%; background:radial-gradient(circle, rgba(229,9,20,.18), rgba(229,9,20,.055) 34%, transparent 66%); filter:blur(3px); opacity:.8; animation: heroGlowFloat 14s ease-in-out infinite alternate; pointer-events:none; will-change:transform, opacity; }
+    @keyframes heroGridDrift { to { transform: translate3d(-36px, 36px, 0); } }
+    @keyframes heroGlowFloat { from { transform: translate3d(0,0,0) scale(1); opacity:.68; } to { transform: translate3d(-4vw, 3vw, 0) scale(1.08); opacity:.92; } }
+    .hero-inner { position: relative; z-index: 1; height:100%; display: grid; grid-template-columns: minmax(0, .86fr) minmax(520px, 56vw); align-items: center; gap: clamp(24px, 5vw, 78px); }
+    .hero .hero-content { max-width: 620px; transition:opacity .22s ease, transform .22s ease; }
+    .hero .hero-content.is-fading { opacity:.2; transform:translateY(4px); }
+    .hero h1 { font-size: clamp(2.2rem, 4.8vw, 4.8rem); font-weight: 800; letter-spacing: 0; line-height: .96; margin: 0; min-height:1.92em; max-height:1.92em; text-shadow: 0 14px 30px rgba(0,0,0,.28); display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+    .hero .hero-sub { font-size: 1rem; color: rgba(255,255,255,.76); max-width: 500px; margin-top: 12px; min-height:1.4em; }
+    .hero .hero-desc { font-size: .93rem; color: rgba(255,255,255,.58); max-width: 560px; margin-top: 14px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .hero-actions { display: flex; align-items: center; gap: 10px; margin-top: 18px; flex-wrap: wrap; }
+    .hero .btn-hero { background: #e50914; border: none; padding: 9px 24px; font-weight: 700; border-radius: 6px; color: #fff; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; min-height: 38px; font-size: .9rem; box-shadow: 0 10px 26px rgba(229,9,20,.22); }
     .hero .btn-hero:hover { background: #f40612; color: #fff; }
-    .hero .btn-hero-outline { background: rgba(255,255,255,.1); border: none; padding: 8px 20px; font-weight: 500; border-radius: 4px; color: #fff; text-decoration: none; display: inline-block; margin-top: 8px; margin-left: 8px; font-size: .9rem; }
-    .hero .btn-hero-outline:hover { background: rgba(255,255,255,.2); color: #fff; }
-
-    .hero-toggle { position: absolute; bottom: 0; left: 50%; transform: translateX(-50%); background: rgba(255,255,255,.08); border: none; color: #aaa; padding: 2px 18px; border-radius: 8px 8px 0 0; cursor: pointer; font-size: .9rem; line-height: 1; transition: background .15s; z-index: 2; }
-    .hero-toggle:hover { background: rgba(255,255,255,.15); color: #fff; }
-    .hero.collapsed + .hero-toggle { bottom: auto; top: 0; border-radius: 0 0 8px 8px; background: rgba(255,255,255,.06); }
-    .hero.collapsed + .hero-toggle:hover { background: rgba(255,255,255,.12); }
-    .hero-toggle-bar { display: none; align-items: center; justify-content: center; height: 28px; cursor: pointer; color: #555; font-size: .75rem; gap: 4px; transition: color .15s; }
-    .hero-toggle-bar:hover { color: #aaa; }
-    .hero-toggle-bar .line { width: 24px; height: 2px; background: currentColor; border-radius: 1px; }
+    .hero .btn-hero-outline { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.1); padding: 8px 18px; font-weight: 650; border-radius: 6px; color: #fff; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; min-height: 38px; font-size: .9rem; }
+    .hero .btn-hero-outline:hover { background: rgba(255,255,255,.14); color: #fff; }
+    .hero-cycler { display:flex; align-items:center; gap:10px; margin-top:18px; }
+    .hero-cycle-btn { width:34px; height:34px; border-radius:999px; border:1px solid rgba(255,255,255,.13); background:rgba(255,255,255,.07); color:#fff; display:inline-flex; align-items:center; justify-content:center; transition:background .15s ease, border-color .15s ease, transform .15s ease; }
+    .hero-cycle-btn:hover { background:rgba(255,255,255,.14); border-color:rgba(255,255,255,.22); transform:translateY(-1px); }
+    .hero-cycle-btn svg { width:18px; height:18px; stroke:currentColor; stroke-width:2.2; fill:none; stroke-linecap:round; stroke-linejoin:round; }
+    .hero-dots { display:flex; align-items:center; gap:7px; }
+    .hero-dot { width:7px; height:7px; padding:0; border:0; border-radius:999px; background:rgba(255,255,255,.24); transition:width .16s ease, background .16s ease; }
+    .hero-dot.active { width:22px; background:#e50914; }
+    .hero-visual { min-height: 340px; display: flex; justify-content: center; align-items: center; perspective: 1200px; }
+    .hero-stack { position: relative; width: min(700px, 100%); height: 360px; contain:layout paint; }
+    .hero-stack-layer { position:absolute; inset:0; opacity:0; transition:opacity .58s ease; pointer-events:none; }
+    .hero-stack-layer.active { opacity:1; }
+    .hero-book { position: absolute; bottom: 0; width: 178px; height: 267px; border-radius: 10px; overflow: hidden; background: #252525; box-shadow: 0 22px 60px rgba(0,0,0,.42); transform-origin: bottom center; border: 1px solid rgba(255,255,255,.08); transition: transform .22s ease, opacity .22s ease; }
+    .hero-book img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .hero-book .placeholder { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #555; background: #242424; }
+    .hero-book.primary { left: 50%; width: 230px; height: 345px; transform: translateX(-50%) translateY(0) rotate(0deg); z-index: 5; box-shadow: 0 32px 88px rgba(0,0,0,.58); }
+    .hero-book.side-1 { left: 2%; transform: rotate(-8deg) translateY(42px); z-index: 2; opacity: .82; }
+    .hero-book.side-2 { left: 22%; transform: rotate(-4deg) translateY(56px); z-index: 3; opacity: .92; }
+    .hero-book.side-3 { right: 22%; transform: rotate(4deg) translateY(56px); z-index: 3; opacity: .92; }
+    .hero-book.side-4 { right: 2%; transform: rotate(9deg) translateY(42px); z-index: 2; opacity: .82; }
+    .hero-shadow { position: absolute; left: 12%; right: 12%; bottom: -12px; height: 36px; background: radial-gradient(ellipse at center, rgba(0,0,0,.5), transparent 68%); filter: blur(6px); }
 
     .shelf { margin-bottom: 2rem; }
     .shelf-head { display:flex; align-items:center; gap:12px; margin-bottom:.6rem; }
@@ -51,37 +69,53 @@
     .shelf-row::-webkit-scrollbar { display: none; }
     .shelf-more-btn { flex: 0 0 auto; align-self: center; width: 44px; height: 44px; margin: 0 18px; border: 1px solid rgba(255,255,255,.16); background: #e50914; color: #fff; border-radius: 999px; display: flex; align-items: center; justify-content: center; transition: background .18s ease, border-color .18s ease, opacity .18s ease, transform .18s ease; }
     .shelf-more-btn:hover { background: #f40612; border-color: rgba(255,255,255,.28); transform: translateX(2px); }
-    .shelf-more-btn.loading { opacity: .55; pointer-events: none; transform: none; }
+    .shelf-more-btn.loading { opacity: .88; pointer-events: none; transform: none; cursor: progress; }
     .shelf-more-btn svg { width: 20px; height: 20px; stroke: currentColor; stroke-width: 2.25; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+    .shelf-more-btn .more-spinner { display: none; width: 18px; height: 18px; border-radius: 999px; border: 2px solid rgba(255,255,255,.36); border-top-color: #fff; animation: shelfMoreSpin .72s linear infinite; }
+    .shelf-more-btn.loading svg { display: none; }
+    .shelf-more-btn.loading .more-spinner { display: block; }
+    @keyframes shelfMoreSpin { to { transform: rotate(360deg); } }
 
-    .book-card { flex: 0 0 auto; width: 150px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; background:#242424; }
-    .book-card:hover { transform: scale(1.08); z-index: 5; }
-    .book-card img { width: 150px; height: 225px; object-fit: cover; border-radius: 4px; display: block; background: #333; opacity: 0; transition: opacity .22s ease; position: relative; z-index: 2; }
+    .book-card { flex: 0 0 auto; width: 150px; cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; position: relative; border-radius: 8px; overflow: hidden; background:#242424; box-shadow: 0 8px 22px rgba(0,0,0,.18); }
+    .book-card:hover { transform: scale(1.06); z-index: 5; box-shadow: 0 18px 42px rgba(0,0,0,.46); }
+    .book-card img { width: 150px; height: 225px; object-fit: cover; border-radius: 8px; display: block; background: #333; opacity: 0; transition: opacity .22s ease; position: relative; z-index: 2; }
     .book-card img.loaded { opacity: 1; }
     .book-card .cover-skeleton { position:absolute; inset:0; background: linear-gradient(110deg,#232323 8%,#303030 18%,#232323 33%); background-size: 200% 100%; animation: coverShimmer 1.15s linear infinite; z-index: 0; }
     @keyframes coverShimmer { to { background-position-x: -200%; } }
-    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 30px 8px 8px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .25s; z-index: 3; }
+    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 58px 10px 10px; background: linear-gradient(180deg, transparent 0%, rgba(4,5,8,.45) 38%, rgba(4,5,8,.9) 74%, rgba(4,5,8,.98) 100%); opacity: .96; transition: opacity .22s ease; z-index: 3; text-shadow: 0 1px 3px rgba(0,0,0,.78); }
     .book-card:hover .info { opacity: 1; }
-    .book-card .info .t { font-size: .82rem; font-weight: 600; line-height: 1.2; }
-    .book-card .info .a { font-size: .7rem; color: #bbb; margin-top: 2px; }
-    .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 4px; position: relative; z-index: 2; }
+    .book-card .info .t { font-size: .82rem; font-weight: 700; line-height: 1.12; color: #fff; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .book-card .info .a { font-size: .7rem; font-weight: 500; color: rgba(255,255,255,.76); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 8px; position: relative; z-index: 2; }
 
     .error-banner { background: rgba(229,9,20,.2); border: 1px solid #e50914; color: #ff6b6b; padding: 8px 16px; border-radius: 4px; margin-bottom: 1rem; text-align: center; }
 
     .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #141414; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; }
     .loading-overlay .spinner { width: 50px; height: 50px; border: 4px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    @keyframes pulse2 { 0%,80%,100% { opacity:.2; transform:scale(.8); } 40% { opacity:1; transform:scale(1.1); } }
-    .loading-overlay p { margin-top: 1rem; color: #888; font-size: .9rem; }
 
     @media (max-width: 992px) {
       .cat-tab { font-size: .7rem; padding: 2px 8px; }
       .navbar-brand { font-size: 1.1rem; }
     }
+    @media (prefers-reduced-motion: reduce) {
+      .hero::before, .hero::after { animation:none; }
+      .hero-stack-layer, .hero .hero-content { transition:none; }
+    }
     @media (max-width: 768px) {
-      .hero { height: 35vh; min-height: 260px; }
-      .hero h1 { font-size: 1.6rem; }
-      .hero .hero-desc { display: none; }
+      .hero { height: 520px; padding: 26px 16px 20px; }
+      .hero-inner { grid-template-columns: 1fr; gap: 18px; }
+      .hero h1 { font-size: 2rem; line-height: 1; min-height:2em; max-height:2em; }
+      .hero .hero-desc { -webkit-line-clamp: 2; }
+      .hero-cycler { margin-top:14px; }
+      .hero-visual { min-height: 214px; justify-content: flex-start; overflow: hidden; }
+      .hero-stack { height: 214px; width: 460px; }
+      .hero-book { width: 108px; height: 162px; border-radius: 8px; }
+      .hero-book.primary { width: 136px; height: 204px; left: 38%; }
+      .hero-book.side-1 { left: 0; transform: rotate(-8deg) translateY(34px); }
+      .hero-book.side-2 { left: 18%; transform: rotate(-4deg) translateY(44px); }
+      .hero-book.side-3 { right: 24%; transform: rotate(4deg) translateY(44px); }
+      .hero-book.side-4 { right: 7%; transform: rotate(9deg) translateY(34px); }
       .book-card, .book-card img { width: 120px; }
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
@@ -95,28 +129,53 @@
   {% include "_navbar.html" %}
 
   {% if hero %}
-  <div id="heroSection" class="hero" style="background-image: linear-gradient(rgba(20,20,20,.55), rgba(20,20,20,.95)), url('{{ hero.cover_url | size_url("L") }}')">
-    <div class="hero-content">
-      <h1>{{ hero.title[:80] }}</h1>
-      {% if hero.author %}<div class="hero-sub">{{ hero.author }}</div>{% endif %}
-      {% if hero.description %}<div class="hero-desc">{{ hero.description }}</div>{% endif %}
-      <div>
-        <a href="/preview?title={{ hero.title | urlencode }}&author={{ hero.author | urlencode }}&ol_key={{ hero.ol_key | urlencode }}&cover={{ hero.cover_url | urlencode }}&mode={{ mode | urlencode }}&book_lang={{ book_lang | urlencode }}" class="btn-hero">View Details</a>
-        <a href="/search?q={{ (hero.title + ' ' + hero.author) | urlencode }}&mode={{ mode | urlencode }}&book_lang={{ book_lang | urlencode }}" class="btn-hero-outline">Download</a>
+  <section class="hero">
+    <div class="hero-inner">
+      <div class="hero-content">
+        <h1 id="heroTitle">{{ hero.title[:96] }}</h1>
+        <div class="hero-sub" id="heroAuthor" {% if not hero.author %}style="display:none"{% endif %}>{{ hero.author }}</div>
+        <div class="hero-desc" id="heroDesc" {% if not hero.description %}style="display:none"{% endif %}>{{ hero.description }}</div>
+        <div class="hero-actions">
+          <a id="heroPreviewLink" href="/preview?title={{ hero.title | urlencode }}&author={{ hero.author | urlencode }}&ol_key={{ hero.ol_key | urlencode }}&cover={{ hero.cover_url | urlencode }}&mode={{ mode | urlencode }}&book_lang={{ book_lang | urlencode }}" class="btn-hero">View Details</a>
+          <a id="heroDownloadLink" href="/search?q={{ (hero.title + ' ' + hero.author) | urlencode }}&mode={{ mode | urlencode }}&book_lang={{ book_lang | urlencode }}" class="btn-hero-outline">Download</a>
+        </div>
+        <div class="hero-cycler" {% if not hero_items or hero_items|length < 2 %}style="display:none"{% endif %}>
+          <button class="hero-cycle-btn" id="heroPrev" type="button" aria-label="Previous featured book">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+          </button>
+          <div class="hero-dots" id="heroDots" aria-label="Featured books"></div>
+          <button class="hero-cycle-btn" id="heroNext" type="button" aria-label="Next featured book">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>
+          </button>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="hero-stack" id="heroStack" aria-hidden="true">
+          <div class="hero-stack-layer active">
+            <div class="hero-shadow"></div>
+            {% for hero_book in hero_books[:5] %}
+            <div class="hero-book {{ 'primary' if loop.index == 1 else 'side-' ~ (loop.index - 1) }}">
+              {% if hero_book.cover_url %}
+              <img src="{{ hero_book.cover_url | size_url('L') }}" alt="" loading="eager" referrerpolicy="no-referrer">
+              {% else %}
+              <div class="placeholder">?</div>
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
+        </div>
       </div>
     </div>
-    <button class="hero-toggle" id="heroToggle" title="Hide hero" aria-label="Toggle hero">&#x25B2;</button>
-  </div>
-  <div class="hero-toggle-bar" id="heroToggleBar" title="Show hero">
-    <span class="line"></span><span style="font-size:.7rem;letter-spacing:1px;text-transform:uppercase">Hero</span><span class="line"></span>
-  </div>
+  </section>
   {% else %}
-  <div class="hero" style="background-image: linear-gradient(rgba(20,20,20,.6), rgba(20,20,20,1))">
-    <div class="hero-content">
-      <h1>Unlock Knowledge</h1>
-      <div class="hero-sub">Curated non-fiction for self-development, business, science, and more. Download any book free.</div>
+  <section class="hero">
+    <div class="hero-inner">
+      <div class="hero-content">
+        <h1>Unlock Knowledge</h1>
+        <div class="hero-sub">Curated fiction and non-fiction from Open Library.</div>
+      </div>
     </div>
-  </div>
+  </section>
   {% endif %}
 
   <div class="px-3 px-md-4">
@@ -135,29 +194,243 @@
         {% endfor %}
         <button class="shelf-more-btn" type="button" aria-label="Load more {{ shelf.name }} books">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
+          <span class="more-spinner" aria-hidden="true"></span>
         </button>
       </div>
     </div>
     {% endfor %}
   </div>
 
-  <div class="loading-overlay" id="loadingOverlay">
-    <div class="spinner"></div>
-    <p>Searching downloads<span class="dot-pulse" style="display:inline-flex;gap:4px;margin-left:4px"><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite"></span><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite;animation-delay:.2s"></span><span style="width:5px;height:5px;background:#e50914;border-radius:50%;animation:pulse2 1.4s ease-in-out infinite;animation-delay:.4s"></span></span></p>
-  </div>
+  <div class="loading-overlay" id="loadingOverlay"><div class="spinner"></div></div>
 
   <footer class="text-center text-muted py-4 small">
-    Fiction and non-fiction discovery &mdash; Powered by Open Library &amp; libgen.li
+    Powered by Open Library &amp; libgen.li
   </footer>
 
   <script>
     const MODE = {{ mode | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
+    const SHELF_TARGET = 40;
+    const HERO_BOOKS = {{ (hero_items | default([])) | tojson }};
+    let heroIndex = 0;
+    let heroCycleTimer = null;
 
     function esc(s) {
       const d = document.createElement('div');
       d.textContent = s || '';
       return d.innerHTML;
+    }
+
+    function heroCoverSrc(url) {
+      if (!url) return '';
+      if (url.startsWith('/')) return url.replace(/\/$/, '') + '/L';
+      return url.replace(/zoom=\d+/, 'zoom=5');
+    }
+
+    function heroPreviewUrl(book) {
+      return '/preview?title=' + encodeURIComponent(book.title || '') +
+        '&author=' + encodeURIComponent(book.author || '') +
+        '&ol_key=' + encodeURIComponent(book.ol_key || '') +
+        '&cover=' + encodeURIComponent(book.cover_url || '') +
+        '&mode=' + encodeURIComponent(MODE) +
+        '&book_lang=' + encodeURIComponent(BOOK_LANG);
+    }
+
+    function heroDownloadUrl(book) {
+      return '/search?q=' + encodeURIComponent(((book.title || '') + ' ' + (book.author || '')).trim()) +
+        '&mode=' + encodeURIComponent(MODE) +
+        '&book_lang=' + encodeURIComponent(BOOK_LANG);
+    }
+
+    function heroBookHtml(book, index) {
+      const cls = index === 0 ? 'primary' : 'side-' + index;
+      const cover = heroCoverSrc(book.cover_url || '');
+      return '<div class="hero-book ' + cls + '">' +
+        (cover ? '<img src="' + esc(cover) + '" alt="" loading="' + (index === 0 ? 'eager' : 'lazy') + '" referrerpolicy="no-referrer">' : '<div class="placeholder">?</div>') +
+        '</div>';
+    }
+
+    function visibleHeroBooks() {
+      const count = Math.min(5, HERO_BOOKS.length);
+      const visible = [];
+      for (let i = 0; i < count; i++) {
+        visible.push(HERO_BOOKS[(heroIndex + i) % HERO_BOOKS.length]);
+      }
+      return visible;
+    }
+
+    function renderHeroStack(animate) {
+      const stackEl = document.getElementById('heroStack');
+      if (!stackEl) return;
+      const layerHtml = '<div class="hero-stack-layer">' +
+        '<div class="hero-shadow"></div>' + visibleHeroBooks().map(heroBookHtml).join('') +
+        '</div>';
+      if (!animate) {
+        stackEl.innerHTML = layerHtml;
+        const layer = stackEl.querySelector('.hero-stack-layer');
+        if (layer) layer.classList.add('active');
+        return;
+      }
+      stackEl.insertAdjacentHTML('beforeend', layerHtml);
+      const layers = stackEl.querySelectorAll('.hero-stack-layer');
+      const incoming = layers[layers.length - 1];
+      requestAnimationFrame(() => {
+        layers.forEach(layer => {
+          if (layer !== incoming) layer.classList.remove('active');
+        });
+        incoming.classList.add('active');
+      });
+      setTimeout(() => {
+        stackEl.querySelectorAll('.hero-stack-layer:not(:last-child)').forEach(layer => layer.remove());
+      }, 680);
+    }
+
+    function renderHero(nextIndex, animate = true) {
+      if (!HERO_BOOKS.length) return;
+      const previousIndex = heroIndex;
+      heroIndex = (nextIndex + HERO_BOOKS.length) % HERO_BOOKS.length;
+      const book = HERO_BOOKS[heroIndex];
+      const titleEl = document.getElementById('heroTitle');
+      const authorEl = document.getElementById('heroAuthor');
+      const descEl = document.getElementById('heroDesc');
+      const previewEl = document.getElementById('heroPreviewLink');
+      const downloadEl = document.getElementById('heroDownloadLink');
+      const contentEl = document.querySelector('.hero-content');
+      const applyContent = () => {
+        if (titleEl) titleEl.textContent = (book.title || '').slice(0, 96);
+        if (authorEl) {
+          authorEl.textContent = book.author || '';
+          authorEl.style.visibility = book.author ? 'visible' : 'hidden';
+        }
+        if (descEl) {
+          descEl.textContent = book.description || '';
+          descEl.style.visibility = book.description ? 'visible' : 'hidden';
+        }
+        if (previewEl) previewEl.href = heroPreviewUrl(book);
+        if (downloadEl) downloadEl.href = heroDownloadUrl(book);
+      };
+      if (animate && previousIndex !== heroIndex && contentEl) {
+        contentEl.classList.add('is-fading');
+        setTimeout(() => {
+          applyContent();
+          contentEl.classList.remove('is-fading');
+        }, 140);
+      } else {
+        applyContent();
+      }
+      renderHeroStack(animate && previousIndex !== heroIndex);
+      document.querySelectorAll('.hero-dot').forEach((dot, i) => {
+        dot.classList.toggle('active', i === heroIndex);
+        dot.setAttribute('aria-current', i === heroIndex ? 'true' : 'false');
+      });
+    }
+
+    function buildHeroDots() {
+      const dotsEl = document.getElementById('heroDots');
+      if (!dotsEl || HERO_BOOKS.length < 2) return;
+      dotsEl.innerHTML = HERO_BOOKS.map((_, i) =>
+        '<button class="hero-dot' + (i === heroIndex ? ' active' : '') + '" type="button" aria-label="Show featured book ' + (i + 1) + '"' + (i === heroIndex ? ' aria-current="true"' : '') + '></button>'
+      ).join('');
+      dotsEl.querySelectorAll('.hero-dot').forEach((dot, i) => {
+        dot.addEventListener('click', () => {
+          renderHero(i);
+          scheduleHeroCycle();
+        });
+      });
+    }
+
+    function scheduleHeroCycle() {
+      if (HERO_BOOKS.length < 2) return;
+      if (heroCycleTimer) clearInterval(heroCycleTimer);
+      heroCycleTimer = setInterval(() => renderHero(heroIndex + 1), 8500);
+    }
+
+    buildHeroDots();
+    renderHero(0, false);
+    const heroPrev = document.getElementById('heroPrev');
+    const heroNext = document.getElementById('heroNext');
+    if (heroPrev) heroPrev.addEventListener('click', () => { renderHero(heroIndex - 1); scheduleHeroCycle(); });
+    if (heroNext) heroNext.addEventListener('click', () => { renderHero(heroIndex + 1); scheduleHeroCycle(); });
+    scheduleHeroCycle();
+
+    function normalizeTitle(s) {
+      return (s || '')
+        .toLowerCase()
+        .replace(/[;,.:!?()[\]{}"'\/\\]/g, ' ')
+        .replace(/\d+(st|nd|rd|th)\s*(ed|edition|edn)?/g, ' ')
+        .replace(/\d+\s*\.?\s*ed(ition)?\b/g, ' ')
+        .replace(/\bfirst\s+edition\b/g, ' ')
+        .replace(/\b(reprint|paperback|hardcover|hardback|paperbound)\b/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60);
+    }
+
+    function normalizeAuthor(s) {
+      return (s || '')
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+        .split(';')[0]
+        .split(/\s+/)
+        .filter(w => w.length > 2 && !/^\d+$/.test(w))
+        .sort()
+        .join(' ')
+        .slice(0, 60);
+    }
+
+    function bookKeys(book) {
+      const keys = [];
+      const olKey = (book.ol_key || book.olKey || '').trim();
+      const title = normalizeTitle(book.title || '');
+      const author = normalizeAuthor(book.author || '');
+      if (olKey) keys.push('ol:' + olKey);
+      if (title && author) keys.push('ta:' + title + '::' + author);
+      else if (title) keys.push('t:' + title);
+      return keys;
+    }
+
+    function cardKeys(card) {
+      return bookKeys({
+        ol_key: card.dataset.olKey || '',
+        title: card.dataset.title || '',
+        author: card.dataset.author || ''
+      });
+    }
+
+    function enforceShelfPriority() {
+      const seen = new Set();
+      let removed = 0;
+      document.querySelectorAll('.shelf').forEach(shelf => {
+        shelf.querySelectorAll('.book-card').forEach(card => {
+          const keys = cardKeys(card);
+          if (keys.some(key => seen.has(key))) {
+            const wrapper = card.closest('a');
+            if (wrapper) wrapper.remove();
+            else card.remove();
+            removed += 1;
+            return;
+          }
+          keys.forEach(key => seen.add(key));
+        });
+      });
+      return removed;
+    }
+
+    function filterIncomingBooks(shelf, books) {
+      const shelves = Array.from(document.querySelectorAll('.shelf'));
+      const shelfIndex = shelves.indexOf(shelf);
+      const blocked = new Set();
+      shelves.slice(0, shelfIndex + 1).forEach(activeShelf => {
+        activeShelf.querySelectorAll('.book-card').forEach(card => {
+          cardKeys(card).forEach(key => blocked.add(key));
+        });
+      });
+      return (books || []).filter(book => {
+        const keys = bookKeys(book);
+        if (keys.some(key => blocked.has(key))) return false;
+        keys.forEach(key => blocked.add(key));
+        return true;
+      });
     }
 
     function bookCardHtml(b) {
@@ -166,7 +439,7 @@
       const cover = b.cover_url
         ? '<div class="cover-skeleton"></div><img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>'
         : '<div class="placeholder">?</div>';
-      return '<a href="' + href + '" class="text-decoration-none"><div class="book-card">' + cover + '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' + (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') + '</div></div></a>';
+      return '<a href="' + href + '" class="text-decoration-none"><div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">' + cover + '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' + (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') + '</div></div></a>';
     }
 
     function loadShelfMore(shelf) {
@@ -186,11 +459,19 @@
             if (btn) btn.style.display = 'none';
             return;
           }
-          const row = shelf.querySelector('.shelf-row');
-          if (btn) btn.insertAdjacentHTML('beforebegin', data.books.map(bookCardHtml).join(''));
-          else row.insertAdjacentHTML('beforeend', data.books.map(bookCardHtml).join(''));
+          const incoming = filterIncomingBooks(shelf, data.books);
           shelf.dataset.page = String(data.page);
           shelf.dataset.totalPages = String(data.total_pages || totalPages);
+          if (!incoming.length) {
+            if (data.page >= data.total_pages && btn) btn.style.display = 'none';
+            else setTimeout(() => maybeLoadShelfMore(shelf), 60);
+            return;
+          }
+          const row = shelf.querySelector('.shelf-row');
+          if (btn) btn.insertAdjacentHTML('beforebegin', incoming.map(bookCardHtml).join(''));
+          else row.insertAdjacentHTML('beforeend', incoming.map(bookCardHtml).join(''));
+          const removed = enforceShelfPriority();
+          if (removed) setTimeout(() => document.querySelectorAll('.shelf').forEach(primeShelf), 80);
           if (data.page >= data.total_pages && btn) btn.style.display = 'none';
         })
         .finally(() => {
@@ -213,10 +494,12 @@
       const row = shelf.querySelector('.shelf-row');
       if (!row) return;
       const count = row.querySelectorAll('.book-card').length;
-      if (count < 12 || row.scrollWidth <= row.clientWidth + 80) {
+      if (count < SHELF_TARGET || row.scrollWidth <= row.clientWidth + 80) {
         loadShelfMore(shelf);
       }
     }
+
+    enforceShelfPriority();
 
     document.querySelectorAll('.shelf').forEach(shelf => {
       const row = shelf.querySelector('.shelf-row');
@@ -234,35 +517,6 @@
       });
     });
 
-    const heroEl = document.getElementById('heroSection');
-    const heroToggle = document.getElementById('heroToggle');
-    const heroToggleBar = document.getElementById('heroToggleBar');
-
-    if (heroEl && heroToggle && heroToggleBar) {
-      const HERO_KEY = 'libflix_hide_hero';
-
-      function setHeroState(hidden) {
-        if (hidden) {
-          heroEl.classList.add('collapsed');
-          heroToggle.textContent = '\u25BC';
-          heroToggle.title = 'Show hero';
-          heroToggleBar.style.display = 'flex';
-        } else {
-          heroEl.classList.remove('collapsed');
-          heroToggle.textContent = '\u25B2';
-          heroToggle.title = 'Hide hero';
-          heroToggleBar.style.display = 'none';
-        }
-        try { localStorage.setItem(HERO_KEY, hidden ? '1' : '0'); } catch {}
-      }
-
-      if (localStorage.getItem(HERO_KEY) === '1') {
-        setHeroState(true);
-      }
-
-      heroToggle.addEventListener('click', () => setHeroState(true));
-      heroToggleBar.addEventListener('click', () => setHeroState(false));
-    }
   </script>
 </body>
 </html>

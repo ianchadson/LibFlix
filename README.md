@@ -29,24 +29,36 @@ No API key is required. Open Library is the only discovery backend.
 - **Open Library-only discovery** - Google Books integration and all source
   switching UI were removed. Old URLs containing `source=google` are ignored and
   are not re-emitted by the app.
-- **Fiction / Non-Fiction mode switch** - each mode has its own shelf set and
-  category tabs.
-- **EN / CN language toggle** - the navbar can switch discovery between English
+- **Expandable browse settings** - Fiction / Non-Fiction and EN / CN controls
+  live in the top-right Settings menu instead of always occupying the toolbar.
+  Each mode has its own shelf set and category tabs, while EN/CN maps to English
   (`eng`) and Chinese (`chi`) Open Library records.
-- **Search bar searches discovery first** - the global search bar routes to
-  `/discover`, which searches Open Library for books. It does not jump directly
-  to download search.
+- **Expandable discovery search** - the global search opens from a compact icon
+  control, animates into a full search field, and routes to `/discover`. It does
+  not jump directly to download search.
 - **Download search is contextual** - download options are searched from the book
   preview page using the selected title and author.
 
 ### Homepage
 
-- **Dynamic hero** - the homepage picks a random trending book from the active
-  mode and language, then loads its Open Library description when available.
+- **Cycleable hero** - the homepage builds a small featured set from active
+  mode/language trending books, shows larger cover art, and lets users cycle
+  through the featured titles.
+- **Stable animated hero** - the hero keeps a fixed height while covers
+  crossfade, with a subtle low-cost animated background.
+- **App-like top navigation** - category tabs stay at the top on wide screens,
+  while search and browse settings expand from compact controls with lightweight
+  animation.
+- **App-style route transitions** - internal page navigation fades through a
+  lightweight loading overlay instead of exposing a blank wait.
+- **Clean browsing URLs** - main home, mode, language, category, and discovery
+  routes use paths like `/fiction`, `/cn/category/history`, and
+  `/fiction/discover?q=dune` instead of exposing mode/language query args.
 - **Fuller shelves by default** - shelf requests fetch larger Open Library
   batches and render up to 40 books per shelf initially.
-- **No global shelf dedupe** - shelves keep their own results, avoiding short
-  rows caused by books being removed because they appeared in an earlier shelf.
+- **Shelf-order dedupe** - books shown in an earlier homepage shelf are removed
+  from all later shelves. Later shelves are refilled from deeper Open Library
+  pages where possible so rows stay useful without repeating entries.
 - **Horizontal infinite scroll** - homepage shelves automatically load another
   page when the user scrolls near the end of a row.
 - **Compact More affordance** - a small round arrow button remains as a fallback
@@ -59,8 +71,8 @@ No API key is required. Open Library is the only discovery backend.
 - **Vertical infinite scroll** - category pages render the first batch
   server-side, then automatically append more books as the user nears the bottom
   of the grid.
-- **No manual Load More button** - category pagination is automatic via a scroll
-  sentinel and scroll fallback.
+- **No manual Load More button** - category and discovery pagination are
+  automatic via scroll sentinels and scroll fallbacks.
 - **No visible total counts** - labels such as `80 books`, `x shown`, and
   result totals were removed because they do not help the browsing experience.
 
@@ -73,6 +85,8 @@ No API key is required. Open Library is the only discovery backend.
   visible scrollbar.
 - **Inline download options** - libgen download results load directly below the
   metadata for the current title and author.
+- **Collapsible download filters** - format, sort, limit, and dedupe controls
+  stay behind a compact `Filters` button on preview pages.
 - **Send to Kindle** - users can save SMTP and Kindle email settings in
   localStorage, then email a downloaded file to Kindle.
 
@@ -131,7 +145,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for data flow, API contracts, caching
 details, and template responsibilities.
 
 See [CHANGELOG.md](CHANGELOG.md) for the recent Open Library-only discovery,
-language, search, infinite scroll, and count-removal changes.
+language, expandable toolbar, infinite scroll, and count-removal changes.
 
 ## Tech Stack
 

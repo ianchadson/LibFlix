@@ -32,13 +32,30 @@
 - Added `templates/discover.html`.
 - Added `/discover` and `/api/discover`.
 - Discovery results render as book cards.
-- Discover pagination still uses a manual Load More control.
+- Discovery pagination now matches category pages with automatic vertical
+  infinite scroll and no visible provider label.
 
 ### Improved homepage shelves
 
 - Increased initial shelf fetch volume.
 - Homepage shelves now render up to 40 books per shelf.
-- Removed global dedupe across shelves to avoid short later shelves.
+- Added shelf-order dedupe so books from earlier homepage shelves are excluded
+  from later shelves.
+- Later shelves now refill from deeper Open Library pages when duplicates are
+  removed.
+- Homepage shelf refill uses bounded parallel Open Library candidate prefetching
+  before applying shelf-order priority.
+- Homepage JavaScript also removes duplicate cards from stale cached markup and
+  newly loaded horizontal pages.
+- Homepage hero now cycles through multiple featured books, removes the
+  language/mode metadata chips, and gives the cover stack more visual space.
+- Reworked the top navigation so wide screens keep category tabs in the primary
+  row while search and mode/language settings expand from compact controls.
+- Locked hero dimensions while cycling and changed cover swaps to a gradual
+  crossfade over a subtle animated background.
+- Added shared app-style page fade/loading transitions for internal navigation.
+- Added clean browsing routes for mode/language/category/discovery paths while
+  keeping older query-string URLs as redirects.
 - Added horizontal infinite scroll for homepage shelf rows.
 - Replaced the old full-height More tile with a compact round arrow button.
 - Hidden visible horizontal scrollbars on homepage shelves.
@@ -58,6 +75,8 @@
 - Removed discovery summary text such as `x shown from y matches`.
 - Removed download result summary text such as `x of y results`.
 - Removed page summary text such as `Page x of y`.
+- Collapsed preview-page download filters behind a compact `Filters` button so
+  results stay closer to the top of the page.
 - Kept API `total` and `total_pages` fields for pagination logic.
 
 ### Improved book detail shelves
