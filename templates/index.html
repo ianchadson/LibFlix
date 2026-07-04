@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>LibFlix - Non-Fiction Library</title>
+  <title>LibFlix - Book Discovery Library</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     * { box-sizing: border-box; }
@@ -45,20 +45,27 @@
     .hero-toggle-bar .line { width: 24px; height: 2px; background: currentColor; border-radius: 1px; }
 
     .shelf { margin-bottom: 2rem; }
-    .shelf-title { font-size: 1.3rem; font-weight: 600; margin-bottom: .6rem; padding-left: 4px; }
-    .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; }
-    .shelf-row::-webkit-scrollbar { height: 6px; }
-    .shelf-row::-webkit-scrollbar-track { background: transparent; }
-    .shelf-row::-webkit-scrollbar-thumb { background: rgba(255,255,255,.2); border-radius: 3px; }
+    .shelf-head { display:flex; align-items:center; gap:12px; margin-bottom:.6rem; }
+    .shelf-title { font-size: 1.3rem; font-weight: 600; padding-left: 4px; }
+    .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; scrollbar-width: none; -ms-overflow-style: none; }
+    .shelf-row::-webkit-scrollbar { display: none; }
+    .shelf-more-tile { flex: 0 0 auto; width: 96px; height: 225px; border: 1px solid rgba(255,255,255,.1); background: rgba(255,255,255,.055); color: #bbb; border-radius: 4px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 9px; font-size: .78rem; font-weight: 600; transition: all .18s ease; }
+    .shelf-more-tile:hover { background: rgba(255,255,255,.11); border-color: rgba(255,255,255,.2); color: #fff; }
+    .shelf-more-tile.loading { opacity: .55; pointer-events: none; }
+    .shelf-more-icon { width: 34px; height: 34px; border-radius: 999px; display: flex; align-items: center; justify-content: center; background: #e50914; color: #fff; }
+    .shelf-more-icon svg { width: 18px; height: 18px; stroke: currentColor; stroke-width: 2.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 
-    .book-card { flex: 0 0 auto; width: 150px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; }
+    .book-card { flex: 0 0 auto; width: 150px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; background:#242424; }
     .book-card:hover { transform: scale(1.08); z-index: 5; }
-    .book-card img { width: 150px; height: 225px; object-fit: cover; border-radius: 4px; display: block; background: #333; }
-    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 30px 8px 8px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .25s; }
+    .book-card img { width: 150px; height: 225px; object-fit: cover; border-radius: 4px; display: block; background: #333; opacity: 0; transition: opacity .22s ease; position: relative; z-index: 2; }
+    .book-card img.loaded { opacity: 1; }
+    .book-card .cover-skeleton { position:absolute; inset:0; background: linear-gradient(110deg,#232323 8%,#303030 18%,#232323 33%); background-size: 200% 100%; animation: coverShimmer 1.15s linear infinite; z-index: 0; }
+    @keyframes coverShimmer { to { background-position-x: -200%; } }
+    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 30px 8px 8px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .25s; z-index: 3; }
     .book-card:hover .info { opacity: 1; }
     .book-card .info .t { font-size: .82rem; font-weight: 600; line-height: 1.2; }
     .book-card .info .a { font-size: .7rem; color: #bbb; margin-top: 2px; }
-    .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 4px; }
+    .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 4px; position: relative; z-index: 2; }
 
     .error-banner { background: rgba(229,9,20,.2); border: 1px solid #e50914; color: #ff6b6b; padding: 8px 16px; border-radius: 4px; margin-bottom: 1rem; text-align: center; }
 
@@ -79,6 +86,8 @@
       .book-card, .book-card img { width: 120px; }
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
+      .shelf-more-tile { width: 78px; height: 180px; font-size: .72rem; }
+      .shelf-more-icon { width: 30px; height: 30px; }
       .cat-tab { font-size: .65rem; padding: 2px 6px; }
     }
   </style>
@@ -94,8 +103,8 @@
       {% if hero.author %}<div class="hero-sub">{{ hero.author }}</div>{% endif %}
       {% if hero.description %}<div class="hero-desc">{{ hero.description }}</div>{% endif %}
       <div>
-        <a href="/preview?title={{ hero.title | urlencode }}&author={{ hero.author | urlencode }}&ol_key={{ hero.ol_key | urlencode }}&cover={{ hero.cover_url | urlencode }}" class="btn-hero">View Details</a>
-        <a href="/search?q={{ (hero.title + ' ' + hero.author) | urlencode }}" class="btn-hero-outline">Download</a>
+        <a href="/preview?title={{ hero.title | urlencode }}&author={{ hero.author | urlencode }}&ol_key={{ hero.ol_key | urlencode }}&cover={{ hero.cover_url | urlencode }}&mode={{ mode | urlencode }}&source={{ book_source | urlencode }}" class="btn-hero">View Details</a>
+        <a href="/search?q={{ (hero.title + ' ' + hero.author) | urlencode }}&mode={{ mode | urlencode }}&source={{ book_source | urlencode }}" class="btn-hero-outline">Download</a>
       </div>
     </div>
     <button class="hero-toggle" id="heroToggle" title="Hide hero" aria-label="Toggle hero">&#x25B2;</button>
@@ -118,12 +127,20 @@
     {% endif %}
 
     {% for shelf in shelves %}
-    <div class="shelf">
-      <div class="shelf-title">{{ shelf.name }}</div>
+    <div class="shelf" data-topic="{{ shelf.topic }}" data-page="1" data-total-pages="25" data-loading="0">
+      <div class="shelf-head">
+        <div class="shelf-title">{{ shelf.name }}</div>
+      </div>
       <div class="shelf-row">
         {% for book in shelf.books %}
         {% include "_book_card.html" %}
         {% endfor %}
+        <button class="shelf-more-tile" type="button" aria-label="Load more {{ shelf.name }} books">
+          <span class="shelf-more-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
+          </span>
+          <span class="shelf-more-label">More</span>
+        </button>
       </div>
     </div>
     {% endfor %}
@@ -135,10 +152,68 @@
   </div>
 
   <footer class="text-center text-muted py-4 small">
-    Non-fiction focus &mdash; Powered by Open Library &amp; libgen.li
+    Fiction and non-fiction discovery &mdash; Powered by Open Library / Google Books &amp; libgen.li
   </footer>
 
   <script>
+    const MODE = {{ mode | tojson }};
+    const BOOK_SOURCE = {{ book_source | tojson }};
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s || '';
+      return d.innerHTML;
+    }
+
+    function bookCardHtml(b) {
+      const href = '/preview?title=' + encodeURIComponent(b.title) + '&author=' + encodeURIComponent(b.author) + '&ol_key=' + encodeURIComponent(b.ol_key) + '&cover=' + encodeURIComponent(b.cover_url) + '&mode=' + encodeURIComponent(MODE) + '&source=' + encodeURIComponent(BOOK_SOURCE);
+      const fallback = b.cover_url && b.cover_url.startsWith('http')
+        ? 'if(!this.dataset.fb){this.dataset.fb=1;this.src=\'/gbcover/' + encodeURIComponent(b.ol_key) + '\';}else{this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';}'
+        : 'this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';';
+      const cover = b.cover_url
+        ? '<div class="cover-skeleton"></div><img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>'
+        : '<div class="placeholder">?</div>';
+      return '<a href="' + href + '" class="text-decoration-none"><div class="book-card">' + cover + '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' + (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') + '</div></div></a>';
+    }
+
+    function loadShelfMore(shelf) {
+      if (!shelf || shelf.dataset.loading === '1') return;
+      const topic = shelf.dataset.topic;
+      const nextPage = Number(shelf.dataset.page || '1') + 1;
+      const totalPages = Number(shelf.dataset.totalPages || '25');
+      if (!topic || nextPage > totalPages) return;
+      shelf.dataset.loading = '1';
+      const btn = shelf.querySelector('.shelf-more-tile');
+      const label = btn ? btn.querySelector('.shelf-more-label') : null;
+      if (btn) btn.classList.add('loading');
+      if (label) label.textContent = 'Loading';
+      fetch('/api/shelf/' + encodeURIComponent(topic) + '?page=' + nextPage + '&mode=' + encodeURIComponent(MODE) + '&source=' + encodeURIComponent(BOOK_SOURCE))
+        .then(r => r.json())
+        .then(data => {
+          if (!data.success || !data.books.length) {
+            shelf.dataset.totalPages = String(nextPage - 1);
+            if (btn) btn.style.display = 'none';
+            return;
+          }
+          const row = shelf.querySelector('.shelf-row');
+          if (btn) btn.insertAdjacentHTML('beforebegin', data.books.map(bookCardHtml).join(''));
+          else row.insertAdjacentHTML('beforeend', data.books.map(bookCardHtml).join(''));
+          shelf.dataset.page = String(data.page);
+          shelf.dataset.totalPages = String(data.total_pages || totalPages);
+          if (data.page >= data.total_pages && btn) btn.style.display = 'none';
+        })
+        .finally(() => {
+          shelf.dataset.loading = '0';
+          if (btn) btn.classList.remove('loading');
+          if (label) label.textContent = 'More';
+        });
+    }
+
+    document.querySelectorAll('.shelf').forEach(shelf => {
+      const btn = shelf.querySelector('.shelf-more-tile');
+      if (btn) btn.addEventListener('click', () => loadShelfMore(shelf));
+    });
+
     document.getElementById('loadingOverlay').style.display = 'none';
     document.querySelectorAll('a[href^="/search"]').forEach(a => {
       a.addEventListener('click', function(e) {

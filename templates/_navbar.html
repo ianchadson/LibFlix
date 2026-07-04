@@ -1,40 +1,67 @@
+<style>
+  .mode-toggle { display:flex; background:rgba(255,255,255,.08); border-radius:20px; padding:1px; }
+  .mode-btn { padding:2px 10px; border-radius:18px; font-size:.7rem; color:#aaa; text-decoration:none; white-space:nowrap; transition:all .15s; }
+  .mode-btn:hover { color:#fff; background:rgba(255,255,255,.1); }
+  .mode-btn.active { background:#e50914; color:#fff; }
+  .source-toggle { display:flex; background:rgba(255,255,255,.08); border-radius:20px; padding:1px; }
+  .source-btn { padding:2px 9px; border-radius:18px; font-size:.7rem; color:#aaa; text-decoration:none; white-space:nowrap; transition:all .15s; }
+  .source-btn:hover { color:#fff; background:rgba(255,255,255,.1); }
+  .source-btn.active { background:#e50914; color:#fff; }
+  .source-short { display:none; }
+  @media (max-width: 900px) {
+    .source-btn { padding:2px 8px; }
+    .source-long { display:none; }
+    .source-short { display:inline; }
+  }
+</style>
+{% set nav_mode = mode | default('nonfiction') %}
 <nav class="navbar navbar-dark px-3 py-1">
   <div class="container-fluid d-flex align-items-center gap-1 gap-md-2 flex-nowrap overflow-hidden">
-    <a class="navbar-brand flex-shrink-0 me-1" href="/">LibFlix</a>
+    <a class="navbar-brand flex-shrink-0 me-1" href="/?mode={{ nav_mode | urlencode }}&source={{ book_source | urlencode }}">LibFlix</a>
     <div class="mode-toggle flex-shrink-0 me-1">
-      <a href="/?mode=nonfiction" class="mode-btn {% if mode != 'fiction' %}active{% endif %}">Non-Fiction</a>
-      <a href="/?mode=fiction" class="mode-btn {% if mode == 'fiction' %}active{% endif %}">Fiction</a>
+      <a href="/?mode=nonfiction&source={{ book_source | urlencode }}" class="mode-btn {% if nav_mode != 'fiction' %}active{% endif %}">Non-Fiction</a>
+      <a href="/?mode=fiction&source={{ book_source | urlencode }}" class="mode-btn {% if nav_mode == 'fiction' %}active{% endif %}">Fiction</a>
+    </div>
+    <div class="source-toggle flex-shrink-0 me-1" aria-label="Book discovery source">
+      <a href="{{ source_url('openlibrary') }}" class="source-btn {% if book_source == 'openlibrary' %}active{% endif %}" title="Open Library">
+        <span class="source-long">Open Library</span><span class="source-short">OL</span>
+      </a>
+      <a href="{{ source_url('google') }}" class="source-btn {% if book_source == 'google' %}active{% endif %}" title="Google Books API">
+        <span class="source-long">Google Books</span><span class="source-short">GB</span>
+      </a>
     </div>
     <form {% if search_id %}id="{{ search_id }}" action="javascript:"{% else %}action="/search" method="get"{% endif %} class="search-bar d-flex flex-shrink-1" style="min-width:0;max-width:280px">
+      <input type="hidden" name="mode" value="{{ nav_mode }}">
+      <input type="hidden" name="source" value="{{ book_source }}">
       <input type="text" class="form-control" name="q" value="{{ search_value or '' }}" placeholder="Search..." aria-label="Search">
       <button class="btn ms-1" type="submit" style="font-size:.78rem;padding:4px 10px">Go</button>
     </form>
     <div class="cat-tabs d-flex gap-1 overflow-auto ms-auto flex-shrink-0" style="scrollbar-width:none;max-width:50%">
-      {% if mode == 'fiction' %}
-      <a href="/?mode=fiction" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">Home</a>
-      <a href="/category/trending_fiction?mode=fiction" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">New</a>
-      <a href="/category/science_fiction?mode=fiction" class="cat-tab {% if active_tab == 'science_fiction' %}active{% endif %}">Sci-Fi</a>
-      <a href="/category/fantasy?mode=fiction" class="cat-tab {% if active_tab == 'fantasy' %}active{% endif %}">Fantasy</a>
-      <a href="/category/mystery?mode=fiction" class="cat-tab {% if active_tab == 'mystery' %}active{% endif %}">Mystery</a>
-      <a href="/category/romance?mode=fiction" class="cat-tab {% if active_tab == 'romance' %}active{% endif %}">Romance</a>
-      <a href="/category/horror?mode=fiction" class="cat-tab {% if active_tab == 'horror' %}active{% endif %}">Horror</a>
-      <a href="/category/historical_fiction?mode=fiction" class="cat-tab {% if active_tab == 'historical_fiction' %}active{% endif %}">Historical</a>
-      <a href="/category/adventure?mode=fiction" class="cat-tab {% if active_tab == 'adventure' %}active{% endif %}">Adventure</a>
-      <a href="/category/young_adult?mode=fiction" class="cat-tab {% if active_tab == 'young_adult' %}active{% endif %}">YA</a>
-      <a href="/category/graphic_novels?mode=fiction" class="cat-tab {% if active_tab == 'graphic_novels' %}active{% endif %}">Graphic</a>
-      <a href="/category/literary_fiction?mode=fiction" class="cat-tab {% if active_tab == 'literary_fiction' %}active{% endif %}">Literary</a>
+      {% if nav_mode == 'fiction' %}
+      <a href="/?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">Home</a>
+      <a href="/category/trending_fiction?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">New</a>
+      <a href="/category/science_fiction?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'science_fiction' %}active{% endif %}">Sci-Fi</a>
+      <a href="/category/fantasy?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'fantasy' %}active{% endif %}">Fantasy</a>
+      <a href="/category/mystery?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'mystery' %}active{% endif %}">Mystery</a>
+      <a href="/category/romance?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'romance' %}active{% endif %}">Romance</a>
+      <a href="/category/horror?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'horror' %}active{% endif %}">Horror</a>
+      <a href="/category/historical_fiction?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'historical_fiction' %}active{% endif %}">Historical</a>
+      <a href="/category/adventure?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'adventure' %}active{% endif %}">Adventure</a>
+      <a href="/category/young_adult?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'young_adult' %}active{% endif %}">YA</a>
+      <a href="/category/graphic_novels?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'graphic_novels' %}active{% endif %}">Graphic</a>
+      <a href="/category/literary_fiction?mode=fiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'literary_fiction' %}active{% endif %}">Literary</a>
       {% else %}
-      <a href="/" class="cat-tab {% if active_tab == 'home' %}active{% endif %}">Home</a>
-      <a href="/category/trending" class="cat-tab {% if active_tab == 'trending' %}active{% endif %}">New</a>
-      <a href="/category/self_help" class="cat-tab {% if active_tab == 'self_help' %}active{% endif %}">Self Dev</a>
-      <a href="/category/business" class="cat-tab {% if active_tab == 'business' %}active{% endif %}">Business</a>
-      <a href="/category/technology" class="cat-tab {% if active_tab == 'technology' %}active{% endif %}">Science</a>
-      <a href="/category/psychology" class="cat-tab {% if active_tab == 'psychology' %}active{% endif %}">Psychology</a>
-      <a href="/category/history" class="cat-tab {% if active_tab == 'history' %}active{% endif %}">History</a>
-      <a href="/category/biography" class="cat-tab {% if active_tab == 'biography' %}active{% endif %}">Biography</a>
-      <a href="/category/health" class="cat-tab {% if active_tab == 'health' %}active{% endif %}">Health</a>
-      <a href="/category/politics" class="cat-tab {% if active_tab == 'politics' %}active{% endif %}">Politics</a>
-      <a href="/category/classics" class="cat-tab {% if active_tab == 'classics' %}active{% endif %}">Classics</a>
+      <a href="/?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'home' %}active{% endif %}">Home</a>
+      <a href="/category/trending?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'trending' %}active{% endif %}">New</a>
+      <a href="/category/self_help?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'self_help' %}active{% endif %}">Self Dev</a>
+      <a href="/category/business?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'business' %}active{% endif %}">Business</a>
+      <a href="/category/technology?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'technology' %}active{% endif %}">Science</a>
+      <a href="/category/psychology?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'psychology' %}active{% endif %}">Psychology</a>
+      <a href="/category/history?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'history' %}active{% endif %}">History</a>
+      <a href="/category/biography?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'biography' %}active{% endif %}">Biography</a>
+      <a href="/category/health?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'health' %}active{% endif %}">Health</a>
+      <a href="/category/politics?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'politics' %}active{% endif %}">Politics</a>
+      <a href="/category/classics?mode=nonfiction&source={{ book_source | urlencode }}" class="cat-tab {% if active_tab == 'classics' %}active{% endif %}">Classics</a>
       {% endif %}
     </div>
   </div>

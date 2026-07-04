@@ -1,10 +1,11 @@
-<a href="/preview?title={{ book.title | urlencode }}&author={{ book.author | urlencode }}&ol_key={{ book.ol_key | urlencode }}&cover={{ book.cover_url | urlencode }}" class="text-decoration-none">
+<a href="/preview?title={{ book.title | urlencode }}&author={{ book.author | urlencode }}&ol_key={{ book.ol_key | urlencode }}&cover={{ book.cover_url | urlencode }}&mode={{ mode | default('nonfiction') | urlencode }}&source={{ book_source | urlencode }}" class="text-decoration-none">
   <div class="book-card">
     {% if book.cover_url %}
+    <div class="cover-skeleton"></div>
     {% if book.cover_url.startswith('http') %}
-    <img src="{{ book.cover_url }}" alt="{{ book.title }}" referrerpolicy="no-referrer" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='/gbcover/{{ book.ol_key }}';}else{this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';}">
+    <img src="{{ book.cover_url }}" alt="{{ book.title }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="if(!this.dataset.fb){this.dataset.fb=1;this.src='/gbcover/{{ book.ol_key }}';}else{this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';}">
     {% else %}
-    <img src="{{ book.cover_url }}" alt="{{ book.title }}" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';">
+    <img src="{{ book.cover_url }}" alt="{{ book.title }}" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';">
     {% endif %}
     <div class="placeholder ph-fallback" style="display:none">?</div>
     {% else %}

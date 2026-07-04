@@ -26,10 +26,12 @@ python3 app.py
 - **12 non-fiction shelves** — New & Popular, Personal Development, Business, Science, Psychology, History, Biography, Health, Education, Politics, Classics, Awards
 - **12 fiction shelves** — New Releases, Sci-Fi, Fantasy, Mystery, Romance, Horror, Historical Fiction, Adventure, YA, Graphic Novels, Literary Fiction, Contemporary Fiction
 - **Dynamic hero** — random featured book with synopsis on each visit
-- **Category browsing** — dedicated category pages with **infinite scroll** (IntersectionObserver)
+- **Category browsing** — dedicated category pages with explicit **Load More** pagination
+- **Horizontal shelf expansion** — homepage shelves load more cached pages as you scroll right or press More
 - **Google Books backend** (optional) — faster, richer descriptions, clean categories, API key required
 - **Open Library backend** (default) — free, no key needed
 - **Inline download search** — download options embedded in the book preview page (auto-searches title + author)
+- **Persistent discovery cache** — category pages, book details, similar books, and cover checks are cached across restarts
 - **Instant search** — page shell renders immediately, results load via AJAX
 - **One-click download** — streams EPUB/PDF/MOBI from libgen through Flask proxy
 - **Send to Kindle** — email books directly to your Kindle via SMTP (Gmail app password)
@@ -71,3 +73,8 @@ in-browser — stored in localStorage, never sent to the server).
 | Description coverage | ~40% | ~90% |
 | Cache warm | 2.8s | ~1.5s |
 | Disk cache on restart | Instant | Instant |
+
+Discovery API responses are stored in `api_cache.json` for 6 hours, and Google
+cover validation checks are cached for 7 days. Category pages use an explicit
+Load More button rather than automatic infinite scroll to avoid burning through
+Google Books quota accidentally. Runtime cache files are ignored by git.

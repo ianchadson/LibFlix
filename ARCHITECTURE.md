@@ -16,14 +16,15 @@ User visits /
   → Hero picks random trending book for the selected mode (with description from source)
   → 12 horizontal shelves render immediately (~3ms with cache hit)
   → User clicks a book card → `/preview?title=...&ol_key=...`
-  → Category tabs in navbar → `/category/<topic>` (infinite scroll)
+  → Horizontal shelves fetch `/api/shelf/<topic>?page=N` when user scrolls near the end
+  → Category tabs in navbar → `/category/<topic>` (explicit Load More pagination)
 ```
 
 ### 2. Category Browsing (`GET /category/<topic>`)
 ```
 Page shell renders instantly with first batch of books (server-side)
-  → JS sets up IntersectionObserver on scroll sentinel
-  → When user scrolls near bottom → GET /api/category/<topic>?page=N
+  → User clicks Load More
+  → GET /api/category/<topic>?page=N
   → New books appended to grid, book count updates
   → Loading spinner shown during fetch
 ```
@@ -69,7 +70,8 @@ Page renders instantly with search form + spinner
 | `strip_html` | 363-368 | Strips HTML tags and unescapes entities from descriptions |
 | `GET /` | 428-456 | Returns cached shelves + random hero |
 | `GET /category/<topic>` | 458-465 | Server-rendered category page with first batch of books |
-| `GET /api/category/<topic>` | 467-497 | Paginated JSON endpoint for infinite scroll |
+| `GET /api/category/<topic>` | app.py | Paginated JSON endpoint for explicit Load More category browsing |
+| `GET /api/shelf/<topic>` | app.py | Paginated JSON endpoint for horizontal shelf expansion |
 | `GET /preview` | 477-485 | Instant page render, async description load |
 | `GET /api/book` | 521-558 | JSON endpoint for book details (OL or GB) |
 | `GET /api/similar` | 498-520 | JSON endpoint for similar books |
@@ -86,7 +88,7 @@ Page renders instantly with search form + spinner
 | `templates/_navbar.html` | Shared navbar — logo, search bar, category tabs inline (responsive, scrollable) |
 | `templates/_book_card.html` | Shared book card partial (cover, title, author overlay) |
 | `templates/index.html` | Homepage — hero + 12 shelves, uses `_navbar` and `_book_card` |
-| `templates/category.html` | Category browsing — server-rendered first batch + infinite scroll via IntersectionObserver |
+| `templates/category.html` | Category browsing — server-rendered first batch + explicit Load More pagination |
 | `templates/search.html` | Two-phase search — instant shell + async results + filter controls + Kindle send |
 | `templates/book.html` | Book preview — detail view with async description + inline libgen results + Kindle send |
 
@@ -104,7 +106,7 @@ Browser                    Flask Server                  External APIs
   ↓                           ↓ fetch_one_shelf (first batch)
   render grid                 ↓ render with _book_card partials
   ↓
-  IntersectionObserver ────→ GET /api/category/<topic>?page=N ──→ OL or GB API (paginated)
+  Click Load More ────────→ GET /api/category/<topic>?page=N ──→ OL or GB API (paginated/cacheable)
   → append books to grid     ↓ return JSON
   ↓
 [click card]                GET /preview?ol_key=X
@@ -130,6 +132,11 @@ Browser                    Flask Server                  External APIs
 Fetch paginated books for a category shelf.
 
 **Params:** `page` (1-based)
+
+### `GET /api/shelf/<topic>`
+Fetch paginated books for a homepage horizontal shelf.
+
+**Params:** `page` (1-based), `mode` (`fiction` or `nonfiction`)
 
 **Returns:**
 ```json
@@ -182,6 +189,8 @@ Email a book to Kindle via SMTP.
 | Data | TTL | Key Format | Warmed On |
 |---|---|---|---|
 | Open Library / Google Books API | 10 min | `ol:{path}:{params}` or `gb:{path}:{params}` | First request |
+| Open Library / Google Books API disk cache | 6 hours | hashed cache key in `api_cache.json` | Reused across restarts |
+| Google cover validation | 7 days | `gbcover-check:{volume_id}:zoom3` in memory + `api_cache.json` | First verified cover |
 | Libgen search HTML | 15 min | `lg:{query}:{sort}:{order}:{page}:{limit}` | First search |
 | Homepage shelves | 1 hour | `shelves_{mode}` (in-memory + `shelf_cache_{mode}.json` on disk) | **Server startup** (instant from disk, refreshed in background) |
 | Cover images | 24h | (HTTP Cache-Control) | First load |
@@ -205,4 +214,4 @@ Get a free key from https://console.cloud.google.com/apis/credentials
 
 ### Templates
 
-All templates use shared partials (`_navbar.html`, `_book_card.html`) for consistency. The navbar includes the Fiction / Non-Fiction switch and mode-specific category tabs. The category page uses IntersectionObserver-based infinite scroll with a sentinel element. Searching/navigating shows a full-screen loading overlay (triggered by `a[href^="/search"]` and `a[href^="/preview"]` click handlers).
+All templates use shared partials (`_navbar.html`, `_book_card.html`) for consistency. The navbar includes the Fiction / Non-Fiction switch and mode-specific category tabs. Category pages use explicit Load More pagination to keep Google Books quota use user-driven. Searching/navigating shows a full-screen loading overlay (triggered by `a[href^="/search"]` and `a[href^="/preview"]` click handlers).

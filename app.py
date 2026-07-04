@@ -1,5 +1,5 @@
-import re, os, json, html as htmlmod, warnings, time, random, threading
-from urllib.parse import urljoin, quote
+import re, os, json, html as htmlmod, warnings, time, random, threading, hashlib
+from urllib.parse import urljoin, quote, urlencode
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -18,15 +18,71 @@ warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.
 OL = "https://openlibrary.org"
 CACHE = {}
 CACHE_TTL_OL = 3600
+API_DISK_CACHE_TTL = 21600
+COVER_CHECK_TTL = 604800
 SHELF_DISK_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shelf_cache.json")
+API_DISK_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_cache.json")
 
-BOOK_SOURCE = os.environ.get("BOOK_SOURCE", "openlibrary").lower()
+BOOK_SOURCES = {"openlibrary", "google"}
+
+def normalize_book_source(source):
+    source = (source or "").strip().lower()
+    return source if source in BOOK_SOURCES else None
+
+DEFAULT_BOOK_SOURCE = normalize_book_source(os.environ.get("BOOK_SOURCE")) or "openlibrary"
 GOOGLE_API_KEY = os.environ.get("GOOGLE_BOOKS_API_KEY", "")
+
+def get_book_source():
+    return (
+        normalize_book_source(request.args.get("source"))
+        or normalize_book_source(request.cookies.get("book_source"))
+        or DEFAULT_BOOK_SOURCE
+    )
+
+def source_url(source):
+    args = request.args.to_dict(flat=True)
+    args["source"] = source
+    query = urlencode(args)
+    return request.path + (f"?{query}" if query else "")
 
 SESSION = requests.Session()
 SESSION.mount("https://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
 SESSION.mount("http://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
 SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
+DISK_CACHE_LOCK = threading.Lock()
+
+def disk_cache_key(key):
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+def disk_cache_get(key, ttl=API_DISK_CACHE_TTL):
+    cache_key = disk_cache_key(key)
+    try:
+        with DISK_CACHE_LOCK:
+            with open(API_DISK_CACHE, "r") as f:
+                data = json.load(f)
+        item = data.get(cache_key)
+        if item and time.time() - item.get("t", 0) < ttl:
+            return item.get("d")
+    except:
+        pass
+    return None
+
+def disk_cache_set(key, data):
+    cache_key = disk_cache_key(key)
+    try:
+        with DISK_CACHE_LOCK:
+            try:
+                with open(API_DISK_CACHE, "r") as f:
+                    cache = json.load(f)
+            except:
+                cache = {}
+            cache[cache_key] = {"t": time.time(), "d": data}
+            tmp = API_DISK_CACHE + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump(cache, f)
+            os.replace(tmp, API_DISK_CACHE)
+    except:
+        pass
 
 def cache_get(key, ttl=CACHE_TTL_OL):
     v = CACHE.get(key)
@@ -42,11 +98,16 @@ def ol_get(path, params=None):
     cached = cache_get(key, CACHE_TTL_OL)
     if cached:
         return cached
+    cached = disk_cache_get(key)
+    if cached:
+        cache_set(key, cached)
+        return cached
     try:
         r = SESSION.get(f"{OL}{path}", params=params, timeout=15)
         r.raise_for_status()
         data = r.json()
         cache_set(key, data)
+        disk_cache_set(key, data)
         return data
     except:
         return None
@@ -171,6 +232,10 @@ def gb_get(path, params=None):
     cached = cache_get(key, CACHE_TTL_OL)
     if cached:
         return cached
+    cached = disk_cache_get(key)
+    if cached:
+        cache_set(key, cached)
+        return cached
     try:
         p = dict(params or {})
         p["key"] = GOOGLE_API_KEY
@@ -178,6 +243,7 @@ def gb_get(path, params=None):
         r.raise_for_status()
         data = r.json()
         cache_set(key, data)
+        disk_cache_set(key, data)
         return data
     except:
         return None
@@ -205,25 +271,37 @@ def verify_covers(books):
         gid = b.get("ol_key", "")
         if not gid:
             return None
+        cache_key = f"gbcover-check:{gid}:zoom3"
+        cached = cache_get(cache_key, COVER_CHECK_TTL)
+        if cached is None:
+            cached = disk_cache_get(cache_key, COVER_CHECK_TTL)
+            if cached is not None:
+                cache_set(cache_key, cached)
+        if cached is not None:
+            return b if cached else None
         try:
             h = SESSION.head(
                 f"https://books.google.com/books/content?id={gid}&printsec=frontcover&img=1&zoom=3&source=gbs_api",
                 timeout=3,
             )
             cl = int(h.headers.get("content-length", 0))
-            return b if h.status_code == 200 and cl >= 10000 else None
+            ok = h.status_code == 200 and cl >= 10000
+            cache_set(cache_key, ok)
+            disk_cache_set(cache_key, ok)
+            return b if ok else None
         except:
             return None
     with ThreadPoolExecutor(max_workers=20) as pool:
         results = list(pool.map(check, books))
     return [b for b in results if b is not None]
 
-def fetch_one_shelf(name, topic):
+def fetch_one_shelf(name, topic, source=None):
+    source = source or DEFAULT_BOOK_SOURCE
     try:
-        if BOOK_SOURCE == "google":
+        if source == "google":
             q, order = gb_shelf_query(topic)
             books = gb_search_shelf_books(q, order, want=25)
-            return {"name": name, "books": books}
+            return {"name": name, "topic": topic, "books": books}
 
         q, sort = shelf_query(topic)
         params = {"q": q, "sort": sort, "limit": 50}
@@ -236,15 +314,46 @@ def fetch_one_shelf(name, topic):
                 books.append(b)
                 if len(books) >= 20:
                     break
-        return {"name": name, "books": books}
+        return {"name": name, "topic": topic, "books": books}
     except:
-        return {"name": name, "books": []}
+        return {"name": name, "topic": topic, "books": []}
 
-def fetch_shelves(mode="nonfiction"):
+def fetch_category_books(topic, page=1, source=None):
+    source = source or DEFAULT_BOOK_SOURCE
+    if source == "google":
+        q, order = gb_shelf_query(topic)
+        start_index = (page - 1) * 40
+        data = gb_get("/volumes", {"q": q, "orderBy": order, "maxResults": 40, "startIndex": start_index})
+        total = data.get("totalItems", 0) if data else 0
+        books = []
+        for item in (data or {}).get("items", [])[:40]:
+            b = gb_extract_book(item)
+            if b:
+                books.append(b)
+        books = verify_covers(books)[:30]
+        total_pages = min(25, max(1, (total + 39) // 40))
+        return books, total, total_pages
+
+    q, sort = shelf_query(topic)
+    params = {"q": q, "sort": sort, "limit": 30, "page": page}
+    data = ol_get("/search.json", params)
+    total = data.get("numFound", 0) if data else 0
+    books = []
+    for w in (data or {}).get("docs", [])[:30]:
+        b = extract_book(w)
+        if b:
+            books.append(b)
+            if len(books) >= 20:
+                break
+    total_pages = min(25, max(1, (total + 29) // 30))
+    return books, total, total_pages
+
+def fetch_shelves(mode="nonfiction", source=None):
+    source = source or DEFAULT_BOOK_SOURCE
     sd = get_shelves_def(mode)
     shelves = []
     with ThreadPoolExecutor(max_workers=6) as pool:
-        futures = {pool.submit(fetch_one_shelf, name, topic): name for name, topic in sd}
+        futures = {pool.submit(fetch_one_shelf, name, topic, source): name for name, topic in sd}
         for f in as_completed(futures):
             shelves.append(f.result())
     shelves.sort(key=lambda s: [n for n, _ in sd].index(s["name"]))
@@ -348,7 +457,15 @@ def no_cache(resp):
         resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         resp.headers["Pragma"] = "no-cache"
         resp.headers["Expires"] = "0"
+    resp.set_cookie("book_source", get_book_source(), max_age=31536000, samesite="Lax")
     return resp
+
+@app.context_processor
+def inject_book_source():
+    return {
+        "book_source": get_book_source(),
+        "source_url": source_url,
+    }
 
 @app.template_filter("size_url")
 def size_url(url, size="M"):
@@ -367,8 +484,9 @@ SORT_OPTIONS = {
     "time_added": "Date Added"
 }
 
-def disk_load_shelves(mode="nonfiction"):
-    path = SHELF_DISK_CACHE.replace(".json", f"_{mode}.json")
+def disk_load_shelves(mode="nonfiction", source=None):
+    source = source or DEFAULT_BOOK_SOURCE
+    path = SHELF_DISK_CACHE.replace(".json", f"_{source}_{mode}.json")
     try:
         with open(path, "r") as f:
             data = json.load(f)
@@ -378,8 +496,9 @@ def disk_load_shelves(mode="nonfiction"):
         pass
     return None
 
-def disk_save_shelves(shelves, mode="nonfiction"):
-    path = SHELF_DISK_CACHE.replace(".json", f"_{mode}.json")
+def disk_save_shelves(shelves, mode="nonfiction", source=None):
+    source = source or DEFAULT_BOOK_SOURCE
+    path = SHELF_DISK_CACHE.replace(".json", f"_{source}_{mode}.json")
     try:
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
@@ -388,18 +507,19 @@ def disk_save_shelves(shelves, mode="nonfiction"):
     except:
         pass
 
-def get_shelves(mode="nonfiction"):
-    ckey = f"shelves_{mode}"
+def get_shelves(mode="nonfiction", source=None):
+    source = source or DEFAULT_BOOK_SOURCE
+    ckey = f"shelves_{source}_{mode}"
     cached = cache_get(ckey, CACHE_TTL_OL)
     if cached:
         return cached
-    disk = disk_load_shelves(mode)
+    disk = disk_load_shelves(mode, source)
     if disk:
         cache_set(ckey, disk)
         return disk
-    shelves = fetch_shelves(mode)
+    shelves = fetch_shelves(mode, source)
     cache_set(ckey, shelves)
-    disk_save_shelves(shelves, mode)
+    disk_save_shelves(shelves, mode, source)
     return shelves
 
 def dedup_across_shelves(shelves):
@@ -412,6 +532,8 @@ def dedup_across_shelves(shelves):
                 seen.add(key)
                 deduped.append(book)
         shelf["books"] = deduped
+        if "topic" not in shelf:
+            shelf["topic"] = next((topic for name, topic in SHELVES_DEF + FICTION_SHELVES_DEF if name == shelf.get("name")), "")
     return shelves
 
 @app.route("/")
@@ -419,7 +541,8 @@ def index():
     mode = request.args.get("mode", "nonfiction")
     if mode not in ("fiction", "nonfiction"):
         mode = "nonfiction"
-    shelves = get_shelves(mode)
+    source = get_book_source()
+    shelves = get_shelves(mode, source)
     shelves = dedup_across_shelves(shelves) if shelves else shelves
     hero = None
     if shelves:
@@ -430,7 +553,7 @@ def index():
                 hero = dict(b)
                 hero["description"] = ""
                 if hero.get("ol_key"):
-                    if BOOK_SOURCE == "google":
+                    if source == "google":
                         data = gb_get(f"/volumes/{hero['ol_key']}")
                         if data:
                             v = data.get("volumeInfo", {})
@@ -453,67 +576,53 @@ def index():
 @app.route("/category/<topic>")
 def category_page(topic):
     mode = request.args.get("mode", "nonfiction")
+    source = get_book_source()
     sd = get_shelves_def(mode)
     valid_topics = {t for _, t in sd}
     if topic not in valid_topics:
         return render_template("category.html", shelf={"name": topic.capitalize(), "books": []}, topic=topic, mode=mode)
     name = {t: n for n, t in sd}.get(topic, topic.capitalize())
-    shelf = fetch_one_shelf(name, topic)
+    shelf = fetch_one_shelf(name, topic, source)
     return render_template("category.html", shelf=shelf, topic=topic, mode=mode)
 
 @app.route("/api/category/<topic>")
 def api_category(topic):
     page = int(request.args.get("page", 1))
     mode = request.args.get("mode", "nonfiction")
+    source = get_book_source()
     sd = get_shelves_def(mode)
     valid_topics = {t for _, t in sd}
     if topic not in valid_topics:
         return jsonify({"success": False, "error": "Invalid topic"})
 
-    name = {t: n for n, t in sd}.get(topic, topic.capitalize())
-
-    if BOOK_SOURCE == "google":
-        q, order = gb_shelf_query(topic)
-        start_index = (page - 1) * 40
-        data = gb_get("/volumes", {"q": q, "orderBy": order, "maxResults": 40, "startIndex": start_index})
-        total = data.get("totalItems", 0) if data else 0
-        items = (data or {}).get("items", [])[:40]
-        books = []
-        for item in items:
-            b = gb_extract_book(item)
-            if b:
-                books.append(b)
-                if len(books) >= 30:
-                    break
-    else:
-        q, sort = shelf_query(topic)
-        params = {"q": q, "sort": sort, "limit": 30, "page": page}
-        data = ol_get("/search.json", params)
-        total = data.get("numFound", 0) if data else 0
-        works = (data or {}).get("docs", [])[:30]
-        books = []
-        for w in works:
-            b = extract_book(w)
-            if b:
-                books.append(b)
-                if len(books) >= 15:
-                    break
-
-    if BOOK_SOURCE == "google":
-        books = verify_covers(books)
-
-    total_pages = min(100, max(1, (total // max(len(books), 1)) + 1))
+    books, total, total_pages = fetch_category_books(topic, page, source)
     return jsonify({
         "success": True, "books": books,
         "page": page, "total_pages": total_pages, "total": total,
     })
 
+@app.route("/api/shelf/<topic>")
+def api_shelf(topic):
+    page = int(request.args.get("page", 1))
+    mode = request.args.get("mode", "nonfiction")
+    source = get_book_source()
+    sd = get_shelves_def(mode)
+    valid_topics = {t for _, t in sd}
+    if topic not in valid_topics:
+        return jsonify({"success": False, "error": "Invalid topic"})
+    books, total, total_pages = fetch_category_books(topic, page, source)
+    return jsonify({"success": True, "books": books, "page": page, "total_pages": total_pages, "total": total})
+
 @app.route("/search")
 def search():
     q = request.args.get("q", "").strip()
+    mode = request.args.get("mode", "nonfiction")
+    if mode not in ("fiction", "nonfiction"):
+        mode = "nonfiction"
+    source = get_book_source()
     if not q:
-        shelves = get_shelves()
-        return render_template("index.html", shelves=shelves, error="Enter a search query.")
+        shelves = get_shelves(mode, source)
+        return render_template("index.html", shelves=shelves, error="Enter a search query.", mode=mode)
     sort = request.args.get("sort", "y")
     order = request.args.get("order", "DESC").upper()
     limit = int(request.args.get("limit", 25))
@@ -524,7 +633,7 @@ def search():
     return render_template("search.html",
         query=q, sort=sort, order=order, limit=limit,
         page=page, fmt=fmt, lang=lang, dedup_on=dedup_on,
-        sort_options=SORT_OPTIONS)
+        sort_options=SORT_OPTIONS, mode=mode)
 
 @app.route("/preview")
 def preview():
@@ -532,18 +641,20 @@ def preview():
     author = request.args.get("author", "").strip()
     ol_key = request.args.get("ol_key", "").strip()
     cover_url = request.args.get("cover", "").strip()
+    mode = request.args.get("mode", "nonfiction")
     return render_template("book.html",
         title=title, author=author, cover_url=cover_url,
-        ol_key=ol_key)
+        ol_key=ol_key, mode=mode)
 
 @app.route("/api/similar")
 def api_similar():
     subject = request.args.get("subject", "").strip()
     ol_key = request.args.get("ol_key", "").strip()
+    source = get_book_source()
     if not subject:
         return jsonify({"success": False, "error": "No subject"})
 
-    if BOOK_SOURCE == "google":
+    if source == "google":
         data = gb_get("/volumes", {"q": f"subject:{subject}", "orderBy": "relevance", "maxResults": 12})
         items = (data or {}).get("items", [])[:12]
         books = []
@@ -558,17 +669,23 @@ def api_similar():
     books = []
     for w in docs:
         b = extract_book(w)
-        if b["ol_key"] != ol_key:
+        if b and b["ol_key"] != ol_key:
             books.append(b)
     return jsonify({"success": True, "books": books})
 
 @app.route("/api/book")
 def api_book():
     ol_key = request.args.get("ol_key", "").strip()
+    source = get_book_source()
     if not ol_key:
         return jsonify({"success": False, "error": "No ol_key provided"})
 
-    if BOOK_SOURCE == "google":
+    if ol_key.startswith("/works/"):
+        source = "openlibrary"
+    elif source == "openlibrary":
+        source = "google"
+
+    if source == "google":
         data = gb_get(f"/volumes/{ol_key}")
         if not data:
             return jsonify({"success": False, "error": "Book not found"})
@@ -782,17 +899,18 @@ def api_sendtokindle():
         return jsonify({"success": False, "error": str(e)})
 
 def warm_cache():
+    source = DEFAULT_BOOK_SOURCE
     for mode in ("nonfiction", "fiction"):
-        disk = disk_load_shelves(mode)
+        disk = disk_load_shelves(mode, source)
         if disk:
-            cache_set(f"shelves_{mode}", disk)
-            print(f"Loaded {len(disk)} {mode} shelves from disk cache (instant)", flush=True)
-    print("Warming cache: fetching fresh shelves...", flush=True)
+            cache_set(f"shelves_{source}_{mode}", disk)
+            print(f"Loaded {len(disk)} {source} {mode} shelves from disk cache (instant)", flush=True)
+    print(f"Warming cache: fetching fresh {source} shelves...", flush=True)
     t0 = time.time()
     for mode in ("nonfiction", "fiction"):
-        shelves = fetch_shelves(mode)
-        cache_set(f"shelves_{mode}", shelves)
-        disk_save_shelves(shelves, mode)
+        shelves = fetch_shelves(mode, source)
+        cache_set(f"shelves_{source}_{mode}", shelves)
+        disk_save_shelves(shelves, mode, source)
         print(f"  {mode}: {len(shelves)} shelves", flush=True)
     print(f"Cache warmed in {time.time()-t0:.1f}s", flush=True)
 

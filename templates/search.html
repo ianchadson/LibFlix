@@ -54,7 +54,8 @@
     .book-table th { background: rgba(255,255,255,.06); color: #aaa; font-weight: 500; padding: 8px 10px; text-align: left; white-space: nowrap; position: sticky; top: 0; }
     .book-table td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.06); vertical-align: middle; }
     .book-table tr:hover { background: rgba(255,255,255,.03); }
-    .cover-thumb { width: 48px; height: 72px; object-fit: cover; border-radius: 3px; background: #333; }
+    .cover-thumb { width: 48px; height: 72px; object-fit: cover; border-radius: 3px; background: #333; opacity: 0; transition: opacity .2s ease; }
+    .cover-thumb.loaded { opacity: 1; }
     .cover-placeholder { width: 48px; height: 72px; background: #2a2a2a; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: #555; }
     .title-cell { max-width: 320px; }
     .title-cell .t { font-weight: 600; color: #fff; }
@@ -90,11 +91,11 @@
 </head>
 <body>
   {% set active_tab = '' %}
-  {% set mode = 'nonfiction' %}
+  {% set mode = mode | default('nonfiction') %}
   {% set search_id = 'searchForm' %}
   {% set search_value = query %}
   {% include "_navbar.html" %}
-  <button id="settingsBtn" class="btn btn-sm ms-auto" style="background:rgba(255,255,255,.08);color:#aaa;border:none;border-radius:4px;padding:4px 10px;font-size:.75rem;position:absolute;top:8px;right:12px;z-index:20" title="Send to Kindle settings">&#x2699; Kindle</button>
+  <button id="settingsBtn" class="btn btn-sm" style="background:rgba(25,25,25,.92);color:#ddd;border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:8px 13px;font-size:.78rem;position:fixed;right:16px;bottom:16px;z-index:20;box-shadow:0 8px 26px rgba(0,0,0,.35)" title="Send to Kindle settings">&#x2699; Kindle</button>
 
   <div class="px-3 px-md-4" style="max-width:1200px;margin:0 auto">
 
@@ -144,7 +145,7 @@
           <button type="submit" class="btn btn-go btn-sm text-white w-100">Go</button>
         </div>
         <div class="col-md-1 col-3 d-flex align-items-end">
-          <a href="/" class="btn btn-sm w-100" style="background:rgba(255,255,255,.1);color:#aaa">Reset</a>
+          <a href="/?mode={{ mode | urlencode }}&source={{ book_source | urlencode }}" class="btn btn-sm w-100" style="background:rgba(255,255,255,.1);color:#aaa">Reset</a>
         </div>
         <div class="col-md-3 col-6 d-flex align-items-end dedup-switch">
           <input class="form-check-input" type="checkbox" id="dedupToggle" {% if dedup_on %}checked{% endif %}>
@@ -192,6 +193,8 @@
 
   <script>
     let currentState = null;
+    const MODE = {{ mode | tojson }};
+    const BOOK_SOURCE = {{ book_source | tojson }};
 
     function getParams() {
       const f = document.getElementById('filterForm');
@@ -205,6 +208,8 @@
         format: fd.get('format') || '{{ fmt }}',
         lang: fd.get('lang') || '{{ lang }}',
         dedup: dedup,
+        mode: MODE,
+        source: BOOK_SOURCE,
         page: '1'
       };
     }
@@ -240,7 +245,7 @@
         html += '<tr>';
         html += '<td class="text-center">';
         if (book.cover_url) {
-          html += '<img class="cover-thumb" src="' + esc(book.cover_url) + '" alt="cover" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
+          html += '<img class="cover-thumb" src="' + esc(book.cover_url) + '" alt="cover" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
           html += '<div class="cover-placeholder" style="display:none">?</div>';
         } else {
           html += '<div class="cover-placeholder">?</div>';
@@ -276,7 +281,7 @@
       const fmt = data.format;
       const lang = data.lang;
       const dedup = data.dedup_on ? '1' : '0';
-      const base = '/search?q=' + q + '&sort=' + sort + '&order=' + order + '&limit=' + limit + '&format=' + fmt + '&lang=' + lang + '&dedup=' + dedup;
+      const base = '/search?q=' + q + '&sort=' + sort + '&order=' + order + '&limit=' + limit + '&format=' + fmt + '&lang=' + lang + '&dedup=' + dedup + '&mode=' + encodeURIComponent(MODE) + '&source=' + encodeURIComponent(BOOK_SOURCE);
 
       let html = '<ul class="pagination">';
 
@@ -516,7 +521,7 @@
         html += '<tr>';
         html += '<td class="text-center">';
         if (book.cover_url) {
-          html += '<img class="cover-thumb" src="' + esc(book.cover_url) + '" alt="cover" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
+          html += '<img class="cover-thumb" src="' + esc(book.cover_url) + '" alt="cover" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
           html += '<div class="cover-placeholder" style="display:none">?</div>';
         } else {
           html += '<div class="cover-placeholder">?</div>';

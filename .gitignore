@@ -6,3 +6,4 @@ tmp/
 *.log
 .env
 shelf_cache*.json
+api_cache.json

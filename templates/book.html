@@ -16,6 +16,9 @@
     .search-bar input::placeholder { color: rgba(255,255,255,.4); font-size: .78rem; }
     .search-bar button { background: #e50914; border: none; border-radius: 4px; white-space: nowrap; font-size: .78rem; padding: 4px 10px; }
     .search-bar button:hover { background: #f40612; }
+    .mode-toggle { display: flex; background: rgba(255,255,255,.08); border-radius: 20px; padding: 1px; }
+    .mode-btn { padding: 2px 10px; border-radius: 18px; font-size: .7rem; color: #aaa; text-decoration: none; white-space: nowrap; transition: all .15s; }
+    .mode-btn.active { background: #e50914; color: #fff; }
     .cat-tabs::-webkit-scrollbar { display: none; }
     .cat-tab { flex-shrink: 0; padding: 2px 10px; border-radius: 20px; font-size: .75rem; color: #aaa; text-decoration: none; transition: all .15s; white-space: nowrap; }
     .cat-tab:hover { background: rgba(255,255,255,.1); color: #fff; }
@@ -24,7 +27,8 @@
     @media (max-width: 768px) { .cat-tab { font-size: .65rem; padding: 2px 6px; } }
 
     .detail-wrap { max-width: 1100px; margin: 0 auto; padding: 2rem 1rem 1rem; }
-    .detail-cover { width: 240px; height: 360px; object-fit: cover; border-radius: 6px; background: #333; box-shadow: 0 4px 30px rgba(0,0,0,.5); }
+    .detail-cover { width: 240px; height: 360px; object-fit: cover; border-radius: 6px; background: #333; box-shadow: 0 4px 30px rgba(0,0,0,.5); opacity: 0; transition: opacity .25s ease; }
+    .detail-cover.loaded { opacity: 1; }
     .detail-cover-placeholder { width: 240px; height: 360px; background: #2a2a2a; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 4rem; color: #555; }
     .detail-title { font-size: 2rem; font-weight: 700; line-height: 1.2; }
     .detail-author { font-size: 1.05rem; color: #aaa; margin-top: 4px; }
@@ -44,7 +48,7 @@
 
     /* Download options section */
     .dl-section { max-width: 1100px; margin: 0 auto; padding: 0 1rem 2rem; }
-    .dl-section-title { font-size: 1.2rem; font-weight: 600; margin-bottom: .5rem; }
+    .dl-section-title { font-size: 1.25rem; font-weight: 650; margin-bottom: .65rem; letter-spacing:-.01em; }
 
     .lg-loading { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 180px; }
     .spinner-book { width: 44px; height: 44px; border: 3px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; }
@@ -56,13 +60,18 @@
     .dot-pulse span:nth-child(3) { animation-delay: .4s; }
     @keyframes pulse { 0%,80%,100% { opacity: .2; transform: scale(.8); } 40% { opacity: 1; transform: scale(1.1); } }
 
-    .filter-bar { background: rgba(255,255,255,.05); border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
-    .filter-bar select { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.15); color: #fff; font-size: .8rem; border-radius: 4px; }
-    .filter-bar select:focus { border-color: #e50914; box-shadow: none; color: #fff; }
+    .filter-bar { background: linear-gradient(135deg, rgba(255,255,255,.075), rgba(255,255,255,.035)); border: 1px solid rgba(255,255,255,.08); border-radius: 14px; padding: 10px; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; box-shadow: inset 0 1px 0 rgba(255,255,255,.04); }
+    .filter-field { display:flex; align-items:center; gap:7px; background:rgba(0,0,0,.18); border:1px solid rgba(255,255,255,.08); border-radius:999px; padding:5px 6px 5px 11px; }
+    .filter-bar select { background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.1); color: #fff; font-size: .78rem; border-radius: 999px; min-width:88px; height:28px; padding:2px 26px 2px 10px; }
+    .filter-bar select:focus { border-color: rgba(229,9,20,.8); box-shadow: 0 0 0 2px rgba(229,9,20,.15); color: #fff; }
     .filter-bar select option { background: #222; color: #fff; }
-    .filter-bar label { color: #aaa; font-size: .75rem; margin-bottom: 0; display: block; }
-    .dedup-switch { display: flex; align-items: center; gap: 6px; font-size: .8rem; color: #aaa; }
+    .filter-bar label { color: #aaa; font-size: .68rem; margin-bottom: 0; text-transform:uppercase; letter-spacing:.05em; }
+    .dedup-switch { display: flex; align-items: center; gap: 7px; font-size: .78rem; color: #ddd; background:rgba(0,0,0,.18); border:1px solid rgba(255,255,255,.08); border-radius:999px; padding:6px 12px; }
     .dedup-switch input:checked { background-color: #e50914; border-color: #e50914; }
+    .apply-btn { background:#e50914; color:#fff; border:none; border-radius:999px; font-size:.78rem; padding:7px 16px; font-weight:650; }
+    .apply-btn:hover { background:#f40612; }
+    .kindle-settings-btn { position: fixed; right: 16px; bottom: 16px; z-index: 20; background: rgba(25,25,25,.92); color:#ddd; border:1px solid rgba(255,255,255,.12); border-radius:999px; padding:8px 13px; font-size:.78rem; box-shadow:0 8px 26px rgba(0,0,0,.35); }
+    .kindle-settings-btn:hover { background:#252525; color:#fff; border-color:rgba(255,255,255,.22); }
 
     .result-info { font-size: .8rem; color: #888; margin: 4px 0; }
     .table-wrap { overflow-x: auto; }
@@ -105,14 +114,17 @@
     .shelf-row::-webkit-scrollbar { height: 6px; }
     .shelf-row::-webkit-scrollbar-track { background: transparent; }
     .shelf-row::-webkit-scrollbar-thumb { background: rgba(255,255,255,.2); border-radius: 3px; }
-    .book-card { flex: 0 0 auto; width: 130px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; }
+    .book-card { flex: 0 0 auto; width: 130px; cursor: pointer; transition: transform .2s; position: relative; border-radius: 4px; overflow: hidden; background:#242424; }
     .book-card:hover { transform: scale(1.08); z-index: 5; }
-    .book-card img { width: 130px; height: 195px; object-fit: cover; border-radius: 4px; display: block; background: #333; }
-    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 28px 6px 6px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .25s; }
+    .book-card img { width: 130px; height: 195px; object-fit: cover; border-radius: 4px; display: block; background: #333; opacity:0; transition: opacity .22s ease; position:relative; z-index:2; }
+    .book-card img.loaded { opacity: 1; }
+    .book-card .cover-skeleton { position:absolute; inset:0; background: linear-gradient(110deg,#232323 8%,#303030 18%,#232323 33%); background-size: 200% 100%; animation: coverShimmer 1.15s linear infinite; z-index:0; }
+    @keyframes coverShimmer { to { background-position-x: -200%; } }
+    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 28px 6px 6px; background: linear-gradient(transparent, rgba(0,0,0,.85)); opacity: 0; transition: opacity .25s; z-index:3; }
     .book-card:hover .info { opacity: 1; }
     .book-card .info .t { font-size: .75rem; font-weight: 600; line-height: 1.2; }
     .book-card .info .a { font-size: .65rem; color: #bbb; margin-top: 2px; }
-    .book-card .placeholder { width: 130px; height: 195px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; color: #555; border-radius: 4px; }
+    .book-card .placeholder { width: 130px; height: 195px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; color: #555; border-radius: 4px; position:relative; z-index:2; }
 
     @media (max-width: 768px) {
       .detail-cover, .detail-cover-placeholder { width: 140px; height: 210px; }
@@ -126,15 +138,14 @@
 </head>
 <body>
   {% set active_tab = '' %}
-  {% set mode = 'nonfiction' %}
   {% include "_navbar.html" %}
-  <button id="settingsBtn" class="btn btn-sm ms-auto" style="background:rgba(255,255,255,.08);color:#aaa;border:none;border-radius:4px;padding:4px 10px;font-size:.75rem;position:absolute;top:8px;right:12px;z-index:20" title="Send to Kindle settings">&#x2699; Kindle</button>
+  <button id="settingsBtn" class="kindle-settings-btn" title="Send to Kindle settings">&#x2699; Kindle</button>
 
   <div class="detail-wrap">
     <div class="row g-4">
       <div class="col-md-3 text-center">
         {% if cover_url %}
-        <img class="detail-cover" src="{{ cover_url | size_url('L') }}" alt="{{ title }}" referrerpolicy="no-referrer" onerror="this.src='{{ cover_url | size_url('M') }}'">
+        <img class="detail-cover" src="{{ cover_url | size_url('L') }}" alt="{{ title }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.src='{{ cover_url | size_url('M') }}'">
         {% else %}
         <div class="detail-cover-placeholder">?</div>
         {% endif %}
@@ -161,7 +172,7 @@
     <div class="dl-section-title">Download Options</div>
 
     <div class="filter-bar">
-      <div>
+      <div class="filter-field">
         <label>Format</label>
         <select id="fmtSel" class="form-select form-select-sm">
           <option value="epub" selected>EPUB</option>
@@ -170,7 +181,7 @@
           <option value="all">All</option>
         </select>
       </div>
-      <div>
+      <div class="filter-field">
         <label>Sort</label>
         <select id="sortSel" class="form-select form-select-sm">
           <option value="y">Year</option>
@@ -180,7 +191,7 @@
           <option value="extension">Format</option>
         </select>
       </div>
-      <div>
+      <div class="filter-field">
         <label>Limit</label>
         <select id="limitSel" class="form-select form-select-sm">
           <option value="25" selected>25</option>
@@ -192,7 +203,7 @@
         <input class="form-check-input" type="checkbox" id="dedupToggle" checked>
         <label class="form-check-label" for="dedupToggle" style="font-size:.8rem">Deduplicate</label>
       </div>
-      <button id="applyBtn" class="btn btn-sm" style="background:#e50914;color:#fff;border:none;font-size:.8rem">Apply</button>
+      <button id="applyBtn" class="apply-btn">Apply</button>
     </div>
 
     <div id="lgLoading" class="lg-loading">
@@ -281,6 +292,8 @@
     const bookTitle = {{ title | tojson }};
     const bookAuthor = {{ author | tojson }};
     const olKey = {{ ol_key | tojson }};
+    const MODE = {{ mode | default('nonfiction') | tojson }};
+    const BOOK_SOURCE = {{ book_source | tojson }};
     const searchQuery = (bookTitle + ' ' + (bookAuthor || '')).trim();
 
     function esc(s) {
@@ -296,7 +309,7 @@
 
     /* ---- Book details (description + subjects) ---- */
     if (olKey) {
-      fetch('/api/book?ol_key=' + encodeURIComponent(olKey))
+      fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&source=' + encodeURIComponent(BOOK_SOURCE))
         .then(r => r.json())
         .then(data => {
           document.getElementById('descSkeleton').style.display = 'none';
@@ -335,7 +348,7 @@
         document.getElementById('similarRow').innerHTML = '<div style="color:#666;font-style:italic;padding:1rem">No similar books found.</div>';
         return;
       }
-      fetch('/api/similar?subject=' + encodeURIComponent(subject) + '&ol_key=' + encodeURIComponent(olKey))
+      fetch('/api/similar?subject=' + encodeURIComponent(subject) + '&ol_key=' + encodeURIComponent(olKey) + '&source=' + encodeURIComponent(BOOK_SOURCE))
         .then(r => r.json())
         .then(data => {
           if (!data.success || !data.books.length) {
@@ -344,10 +357,10 @@
           }
           let html = '';
           for (const b of data.books) {
-            const href = '/preview?title=' + encodeURIComponent(b.title) + '&author=' + encodeURIComponent(b.author) + '&ol_key=' + encodeURIComponent(b.ol_key) + '&cover=' + encodeURIComponent(b.cover_url);
+            const href = '/preview?title=' + encodeURIComponent(b.title) + '&author=' + encodeURIComponent(b.author) + '&ol_key=' + encodeURIComponent(b.ol_key) + '&cover=' + encodeURIComponent(b.cover_url) + '&mode=' + encodeURIComponent(MODE) + '&source=' + encodeURIComponent(BOOK_SOURCE);
             html += '<a href="' + href + '" class="text-decoration-none"><div class="book-card">';
             if (b.cover_url) {
-              html += '<img src="' + b.cover_url + '" alt="' + esc(b.title) + '" referrerpolicy="no-referrer">';
+              html += '<div class="cover-skeleton"></div><img src="' + b.cover_url + '" alt="' + esc(b.title) + '" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="placeholder" style="display:none">?</div>';
             } else {
               html += '<div class="placeholder">?</div>';
             }
