@@ -1,4 +1,4 @@
-<a href="/preview?title={{ book.title | urlencode }}&author={{ book.author | urlencode }}&ol_key={{ book.ol_key | urlencode }}&cover={{ book.cover_url | urlencode }}&mode={{ mode | default('nonfiction') | urlencode }}&book_lang={{ book_lang | urlencode }}" class="text-decoration-none">
+<a href="{{ book_url(book, mode | default('nonfiction'), book_lang) }}" class="text-decoration-none">
   <div class="book-card" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}">
     {% if book.cover_url %}
     <div class="cover-skeleton"></div>

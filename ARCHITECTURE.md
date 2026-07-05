@@ -22,9 +22,10 @@ Browser requests /
   -> get_shelves(mode, lang)
        -> memory cache
        -> disk shelf cache
+       -> normalize shelf labels for current definitions
        -> shelf-order dedupe and refill
        -> Open Library search when cache is cold or a shelf needs refill
-  -> render index.html with cycleable hero + 12 shelves
+  -> render index.html with fixed-height cycleable hero + shelves
   -> user scrolls a shelf horizontally
   -> JS fetches /api/shelf/<topic>?page=N&mode=...&book_lang=...
   -> new book cards are inserted before the compact arrow button
@@ -33,6 +34,9 @@ Browser requests /
 Important behavior:
 
 - Shelves are language-aware.
+- The first shelf is labeled `Trending` in both fiction and non-fiction.
+- Cached shelf labels are normalized during render so old cache files using
+  labels such as `New & Popular` do not leak into the UI.
 - Each shelf initially renders up to 40 books.
 - Shelves are deduped in top-to-bottom priority order. A book that appears in
   an earlier shelf is excluded from later shelves.
@@ -40,6 +44,10 @@ Important behavior:
   are removed.
 - Horizontal scrollbars are hidden.
 - The compact More button is a fallback; normal loading is scroll-triggered.
+- The hero's carousel controls are fixed within the hero and do not shift when
+  titles, authors, descriptions, or covers change.
+- Hero side covers, dots, and arrow buttons can all change the active featured
+  book.
 
 ### Category Page (`GET /category/<topic>`)
 
@@ -68,22 +76,26 @@ Navbar search form submits to /discover
   -> Flask uses fetch_discovery_books(q, page, lang)
   -> Open Library search results render as book cards
   -> bottom scroll sentinel fetches /api/discover automatically
-  -> clicking a card opens /preview
+  -> clicking a card opens /book/<work_id>
 ```
 
 This route searches Open Library discovery data only. It does not search the
 download source directly.
 
-### Book Preview (`GET /preview`)
+### Book Preview (`GET /book/<work_id>`)
 
 ```text
-Browser requests /preview?title=...&author=...&ol_key=/works/...
-  -> Flask renders book.html immediately
+Browser requests /book/OL3431878W
+  -> Flask resolves /works/OL3431878W through Open Library
+  -> Flask renders book.html with title, author, cover, and work key
   -> JS fetches /api/book?ol_key=...&book_lang=...
   -> description and subject tags render asynchronously
   -> first subject triggers /api/similar
   -> JS fetches /api/search for download options
 ```
+
+Legacy `/preview?...&ol_key=/works/...` URLs redirect to the matching clean
+book route and drop title, author, cover, mode, and language query noise.
 
 Important behavior:
 
@@ -138,6 +150,7 @@ BOOK_LANG_CONFIG = {
 | `collect_unique_topic_books(topic, lang, seen_keys, target)` | Pull deeper Open Library pages until a shelf has unique books or pages are exhausted |
 | `prefetch_topic_pages(topics, lang, max_pages)` | Fetch bounded candidate pages for homepage shelves in parallel |
 | `select_unique_from_prefetched(topic, candidate_pages, seen_keys, target)` | Select unique shelf books from prefetched candidates without more network calls |
+| `normalize_shelf_labels(shelves, mode)` | Re-map cached shelf names to the current fiction/non-fiction shelf definitions |
 | `dedupe_and_refill_shelves(shelves, mode, lang)` | Apply homepage shelf priority and top up later shelves |
 | `seen_keys_before_shelf(topic, mode, lang)` | Build exclusion keys from all earlier homepage shelves |
 | `fetch_shelf_page_books(topic, page, mode, lang)` | Return logical horizontal shelf pages after cross-shelf dedupe |
@@ -292,8 +305,8 @@ the SMTP credentials supplied by the browser.
 | Template | Responsibility |
 |---|---|
 | `_navbar.html` | Shared nav, wide-screen category tabs, expandable discovery search, expandable mode/language settings |
-| `_book_card.html` | Shared card link, cover, placeholder, hover metadata |
-| `index.html` | Hero, homepage shelves, horizontal shelf infinite scroll |
+| `_book_card.html` | Shared card link, cover, placeholder, hover/focus metadata |
+| `index.html` | Fixed-height hero, cover-stack carousel, homepage shelves, horizontal shelf infinite scroll |
 | `category.html` | Category grid and vertical infinite scroll |
 | `discover.html` | Open Library discovery result cards and vertical infinite scroll |
 | `book.html` | Preview metadata, similar shelf, download results, Kindle modal |
@@ -301,6 +314,66 @@ the SMTP credentials supplied by the browser.
 | `results.html` | Older server-rendered download table fallback |
 
 ## Frontend Interaction Details
+
+### Shared App Chrome
+
+`_navbar.html` owns the wide-screen top bar, expandable search, expandable
+settings menu, shared route-transition overlay, and quick-peek book preview
+behavior.
+
+The collapsed search and settings controls are icon-only. Search expands on
+focus or click, then submits to `/discover`; settings expands to reveal the
+fiction/non-fiction and EN/CN choices.
+
+The navbar exposes:
+
+```js
+window.LibFlixLoading = { show: showTransition, hide: hideTransition };
+```
+
+Internal links and forms call `showTransition()` before navigation where the
+browser can do so safely. This keeps slow Open Library and libgen-backed pages
+feeling like an app transition rather than a blank page wait. Legacy result
+redirects also use the shared loader when available.
+
+### Homepage Hero
+
+The hero is intentionally fixed-height. Text updates, backdrop layers, and cover
+stack layers animate inside that stable frame so the first shelf below the hero
+does not jump while the active book changes.
+
+Hero title fitting is handled in the browser:
+
+- titles use normal word wrapping, never character wrapping
+- short titles prefer `white-space: nowrap`
+- long titles scale down only enough to fit their container
+- the carousel control bar stays pinned inside the hero regardless of text
+  height
+
+The cover stack is ordered around the active book. The primary cover is centered,
+side covers show neighboring books, and clicking a side cover jumps to that
+book. Arrow buttons and dots call the same render path.
+
+The background combines the active cover blur, a drifting cover strip, light
+sweep, grid/static overlays, and cover glints. `prefers-reduced-motion` disables
+the continuous animations while preserving the static composition.
+
+### Book Card Quick Peek
+
+Book cards are quiet by default. Title and author overlays appear on hover/focus,
+and `_navbar.html` attaches a delegated quick-peek overlay for cards that expose
+an Open Library work key.
+
+Quick peek behavior:
+
+- waits briefly before opening so normal cursor movement does not spam requests
+- shows title and author immediately from card data
+- fetches `/api/book?ol_key=...&book_lang=...` for description details
+- caches successful detail responses per work key
+- tracks the latest pointer position and repositions on `pointermove`
+- clamps itself to the viewport so it stays near the cursor and does not drift
+  off screen
+- omits subject/category tags to reserve space for the description
 
 ### Homepage Shelf Infinite Scroll
 

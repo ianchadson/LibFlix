@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-07-05 - Hero, quick peek, and app polish
+
+### Hardened the homepage hero
+
+- Renamed the first homepage shelf and first top-nav category from `New` /
+  `New & Popular` to `Trending` across fiction and non-fiction.
+- Added cache-time shelf label normalization so older disk or memory shelf cache
+  entries render with the current `Trending` label.
+- Kept the hero at a fixed height while changing books so description length and
+  cover dimensions do not move the shelf below it.
+- Reworked hero title fitting to avoid character-level wraps, keep short titles
+  on one line where possible, and scale long titles only enough to fit.
+- Made side covers in the hero stack clickable selectors.
+- Smoothed hero transitions across text, cover stack, and background layers.
+- Removed the circular containers around hero carousel arrows.
+- Added extra spacing above the first homepage shelf.
+
+### Improved quick peek previews
+
+- Added a hover/focus quick-peek overlay for book cards that fetches Open
+  Library details through `/api/book`.
+- Removed subject/category chips from the quick-peek overlay so the description
+  has more room.
+- Increased the quick-peek description allowance and viewport-bounded height.
+- Anchored the quick-peek overlay to the latest cursor position, including while
+  async Open Library details are loading, so it stays near the hovered card.
+
+### Tightened shared app chrome
+
+- Vertically centered the top navigation contents in the fixed-height desktop
+  navbar.
+- Kept collapsed search and settings controls as bare icons.
+- Removed the visible `Go` label from the search submit control.
+- Made the shared LibFlix loading overlay more consistent for internal links and
+  forms by exposing `window.LibFlixLoading.show()` / `hide()` from the navbar
+  partial and forcing the overlay visible before route changes.
+- Documented the project preference for headless Playwright UI validation.
+
 ## 2026-07-04 - Open Library-only discovery and browsing UX refresh
 
 ### Removed Google Books discovery
@@ -56,6 +94,9 @@
 - Added shared app-style page fade/loading transitions for internal navigation.
 - Added clean browsing routes for mode/language/category/discovery paths while
   keeping older query-string URLs as redirects.
+- Added clean book preview routes such as `/book/OL3431878W` and
+  `/fiction/cn/book/OL3431878W`; legacy `/preview?...` URLs now redirect when
+  an Open Library work key is present.
 - Added horizontal infinite scroll for homepage shelf rows.
 - Replaced the old full-height More tile with a compact round arrow button.
 - Hidden visible horizontal scrollbars on homepage shelves.

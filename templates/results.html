@@ -88,7 +88,14 @@
       const url = new URL(window.location);
       url.searchParams.set('dedup', cb.checked ? '1' : '0');
       url.searchParams.set('page', '1');
-      window.location = url.toString();
+      if (window.LibFlixLoading?.show) {
+        window.LibFlixLoading.show();
+        window.setTimeout(() => {
+          window.location = url.toString();
+        }, 180);
+      } else {
+        window.location = url.toString();
+      }
     }
     </script>
   </div>

@@ -43,17 +43,26 @@ No API key is required. Open Library is the only discovery backend.
 
 - **Cycleable hero** - the homepage builds a small featured set from active
   mode/language trending books, shows larger cover art, and lets users cycle
-  through the featured titles.
-- **Stable animated hero** - the hero keeps a fixed height while covers
-  crossfade, with a subtle low-cost animated background.
+  through the featured titles from arrows, dots, or the cover stack itself.
+- **Stable animated hero** - the hero keeps a fixed height while the text,
+  backdrop, and cover stack transition between books. Title fitting avoids
+  ugly character wrapping, keeps short titles on one line where possible, and
+  scales long titles only enough to stay readable.
+- **Immersive cover backdrop** - the hero uses low-cost cover blur, light sweep,
+  grid, static, and glint effects, with reduced-motion fallbacks.
 - **App-like top navigation** - category tabs stay at the top on wide screens,
   while search and browse settings expand from compact controls with lightweight
-  animation.
+  animation. The search and settings affordances are icon-only in the collapsed
+  state.
 - **App-style route transitions** - internal page navigation fades through a
-  lightweight loading overlay instead of exposing a blank wait.
+  lightweight LibFlix loading overlay instead of exposing a blank wait. Shared
+  navigation and form handling use `window.LibFlixLoading.show()` when present.
 - **Clean browsing URLs** - main home, mode, language, category, and discovery
   routes use paths like `/fiction`, `/cn/category/history`, and
   `/fiction/discover?q=dune` instead of exposing mode/language query args.
+- **Trending naming** - the first shelf and first top-nav category are labeled
+  `Trending` across fiction and non-fiction. Cached shelf labels are normalized
+  at render time so older `New & Popular` cache files do not leak into the UI.
 - **Fuller shelves by default** - shelf requests fetch larger Open Library
   batches and render up to 40 books per shelf initially.
 - **Shelf-order dedupe** - books shown in an earlier homepage shelf are removed
@@ -65,6 +74,10 @@ No API key is required. Open Library is the only discovery backend.
   at the end of each shelf instead of a full-height tile.
 - **Hidden horizontal scrollbars** - homepage shelf rows hide scrollbars while
   preserving horizontal scrolling.
+- **Hover quick peek** - book cards keep title/author overlays hidden until
+  hover/focus, then fetch Open Library details for a cursor-anchored quick peek
+  panel. The panel prioritizes title, author, and a longer description, and
+  stays within the viewport near the cursor.
 
 ### Category Pages
 
@@ -107,7 +120,8 @@ No API key is required. Open Library is the only discovery backend.
 | `/` | Homepage with hero and horizontal shelves |
 | `/category/<topic>` | Category grid with vertical infinite scroll |
 | `/discover?q=...` | Open Library discovery search results |
-| `/preview?title=...&author=...&ol_key=...` | Book detail, similar books, download search |
+| `/book/OL...W` | Book detail, similar books, download search |
+| `/fiction/cn/book/OL...W` | Book detail with clean mode/language context |
 | `/search?q=...` | Direct libgen download search page |
 | `/download/<md5>` | Proxied file download |
 | `/api/shelf/<topic>` | JSON endpoint for homepage shelf pagination |
@@ -164,7 +178,8 @@ python3 -m compileall app.py
 python3 app.py
 ```
 
-Then open:
+For UI validation, use headless Playwright unless an interactive visible browser
+is explicitly needed. Then open or test:
 
 ```text
 http://127.0.0.1:5800

@@ -75,6 +75,33 @@ def clean_category_url(topic, mode=None, lang=None):
 def clean_discover_url(mode=None, lang=None):
     return f"{clean_prefix(mode, lang)}/discover"
 
+def work_id_from_ol_key(ol_key):
+    ol_key = (ol_key or "").strip()
+    if ol_key.startswith("/works/"):
+        return ol_key.rsplit("/", 1)[-1]
+    if ol_key.startswith("works/"):
+        return ol_key.rsplit("/", 1)[-1]
+    if re.match(r"^OL\d+W$", ol_key):
+        return ol_key
+    return ""
+
+def ol_key_from_work_id(work_id):
+    work_id = (work_id or "").strip()
+    if not re.match(r"^OL\d+W$", work_id):
+        return ""
+    return f"/works/{work_id}"
+
+def clean_book_url(ol_key, mode=None, lang=None):
+    work_id = work_id_from_ol_key(ol_key)
+    if not work_id:
+        return "/preview"
+    return f"{clean_prefix(mode, lang)}/book/{quote(work_id)}"
+
+def book_url(book, mode=None, lang=None):
+    if not book:
+        return "/preview"
+    return clean_book_url(book.get("ol_key"), mode, lang)
+
 def preserve_query_redirect(path, drop=("mode", "book_lang")):
     args = request.args.to_dict(flat=True)
     for key in drop:
@@ -96,6 +123,10 @@ def lang_url(lang):
         args.pop("book_lang", None)
         query = urlencode(args)
         return path + (f"?{query}" if query else "")
+    if endpoint == "book_page":
+        work_id = (request.view_args or {}).get("work_id")
+        if work_id:
+            return clean_book_url(work_id, mode, lang)
     return clean_home_url(mode, lang)
 
 SESSION = requests.Session()
@@ -169,7 +200,7 @@ def ol_get_work(ol_key):
     return ol_get(ol_key + ".json")
 
 SHELVES_DEF = [
-    ("New & Popular", "trending"),
+    ("Trending", "trending"),
     ("Personal Development", "self_help"),
     ("Business & Finance", "business"),
     ("Science & Technology", "technology"),
@@ -184,7 +215,7 @@ SHELVES_DEF = [
 ]
 
 FICTION_SHELVES_DEF = [
-    ("New Releases", "trending_fiction"),
+    ("Trending", "trending_fiction"),
     ("Science Fiction", "science_fiction"),
     ("Fantasy", "fantasy"),
     ("Mystery & Thriller", "mystery"),
@@ -527,7 +558,62 @@ def extract_desc(work):
     desc = work.get("description", "")
     if isinstance(desc, dict):
         desc = desc.get("value", "")
-    return strip_html(desc)
+    desc = strip_html(desc)
+    desc = re.sub(r"\[source\]\[\d+\]", "", desc, flags=re.I)
+    desc = re.sub(r"\[\d+\]:\s*\S+", "", desc)
+    desc = re.sub(r"\s+", " ", desc).strip()
+    return desc
+
+def first_work_author(work):
+    authors = work.get("authors") or []
+    for item in authors:
+        author_ref = (item or {}).get("author") if isinstance(item, dict) else None
+        key = (author_ref or {}).get("key") if isinstance(author_ref, dict) else None
+        if not key:
+            continue
+        author = ol_get(key + ".json")
+        name = (author or {}).get("name", "").strip()
+        if name:
+            return name
+    return ""
+
+def book_metadata_from_work(work_id):
+    ol_key = ol_key_from_work_id(work_id)
+    if not ol_key:
+        return None
+    work = ol_get_work(ol_key)
+    if not work:
+        return None
+    covers = work.get("covers") or []
+    cover_id = covers[0] if covers else ""
+    return {
+        "title": work.get("title", ""),
+        "author": first_work_author(work),
+        "cover_url": f"/olcover/{cover_id}" if cover_id else "",
+        "ol_key": ol_key,
+    }
+
+def enrich_book_descriptions(books):
+    enriched = [dict(book) for book in books]
+
+    def load_description(index, ol_key):
+        if not ol_key or not ol_key.startswith("/works/"):
+            return index, ""
+        work = ol_get_work(ol_key)
+        return index, extract_desc(work or {})
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [
+            pool.submit(load_description, index, book.get("ol_key", ""))
+            for index, book in enumerate(enriched)
+        ]
+        for future in as_completed(futures):
+            try:
+                index, description = future.result()
+                enriched[index]["description"] = description
+            except:
+                pass
+    return enriched
 
 app = Flask(__name__)
 
@@ -549,6 +635,7 @@ def inject_book_context():
         "home_url": clean_home_url,
         "category_url": clean_category_url,
         "discover_url": clean_discover_url,
+        "book_url": book_url,
     }
 
 @app.template_filter("size_url")
@@ -591,19 +678,32 @@ def disk_save_shelves(shelves, mode="nonfiction", lang=None):
     except:
         pass
 
+def normalize_shelf_labels(shelves, mode="nonfiction"):
+    names_by_topic = {topic: name for name, topic in get_shelves_def(mode)}
+    normalized = []
+    for shelf in shelves or []:
+        shelf_copy = dict(shelf)
+        topic = shelf_copy.get("topic", "")
+        if topic in names_by_topic:
+            shelf_copy["name"] = names_by_topic[topic]
+        normalized.append(shelf_copy)
+    return normalized
+
 def get_shelves(mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     ckey = f"shelves_{lang}_{mode}"
     cached = cache_get(ckey, CACHE_TTL_OL)
     if cached:
-        return cached
+        return normalize_shelf_labels(cached, mode)
     disk = disk_load_shelves(mode, lang)
     if disk:
         shelves = dedupe_and_refill_shelves(disk, mode, lang)
+        shelves = normalize_shelf_labels(shelves, mode)
         cache_set(ckey, shelves)
         disk_save_shelves(shelves, mode, lang)
         return shelves
     shelves = fetch_shelves(mode, lang)
+    shelves = normalize_shelf_labels(shelves, mode)
     cache_set(ckey, shelves)
     disk_save_shelves(shelves, mode, lang)
     return shelves
@@ -665,7 +765,6 @@ def render_home(mode="nonfiction", lang=None, error=None):
         hero_books = trending[:7]
         if trending:
             hero = dict(random.choice(trending[:min(len(trending), 16)]))
-            hero["description"] = ""
             if hero:
                 hero_key = hero.get("ol_key") or f"{hero.get('title')}|{hero.get('author')}"
                 hero_books = [hero] + [
@@ -673,7 +772,8 @@ def render_home(mode="nonfiction", lang=None, error=None):
                     if (b.get("ol_key") or f"{b.get('title')}|{b.get('author')}") != hero_key
                 ]
                 hero_books = hero_books[:7]
-                hero_items = [dict(b, description=b.get("description", "")) for b in hero_books]
+                hero_items = enrich_book_descriptions(hero_books)
+                hero = hero_items[0]
     return render_template("index.html", shelves=shelves, hero=hero, hero_books=hero_books, hero_items=hero_items, mode=mode, error=error)
 
 @app.route("/", defaults={"clean_mode": None, "clean_lang": None})
@@ -813,9 +913,30 @@ def preview():
     ol_key = request.args.get("ol_key", "").strip()
     cover_url = request.args.get("cover", "").strip()
     mode = request.args.get("mode", "nonfiction")
+    lang = get_book_lang()
+    if ol_key:
+        return redirect(clean_book_url(ol_key, mode, lang), code=301)
     return render_template("book.html",
         title=title, author=author, cover_url=cover_url,
         ol_key=ol_key, mode=mode)
+
+@app.route("/book/<work_id>", defaults={"clean_mode": None, "clean_lang": None})
+@app.route("/fiction/book/<work_id>", defaults={"clean_mode": "fiction", "clean_lang": None})
+@app.route("/cn/book/<work_id>", defaults={"clean_mode": "nonfiction", "clean_lang": "cn"})
+@app.route("/fiction/cn/book/<work_id>", defaults={"clean_mode": "fiction", "clean_lang": "cn"})
+def book_page(work_id, clean_mode, clean_lang):
+    mode = clean_mode or request.args.get("mode", "nonfiction")
+    if mode not in ("fiction", "nonfiction"):
+        mode = "nonfiction"
+    lang = clean_lang or get_book_lang()
+    g.mode_override = mode
+    g.book_lang_override = lang
+    if clean_mode is None and ("mode" in request.args or "book_lang" in request.args):
+        return preserve_query_redirect(clean_book_url(work_id, mode, lang))
+    book = book_metadata_from_work(work_id)
+    if not book:
+        return render_template("book.html", title="Book not found", author="", cover_url="", ol_key="", mode=mode), 404
+    return render_template("book.html", mode=mode, **book)
 
 @app.route("/api/similar")
 def api_similar():

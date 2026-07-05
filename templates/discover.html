@@ -30,8 +30,8 @@
     .book-card img.loaded { opacity: 1; }
     .book-card .cover-skeleton { position:absolute; inset:0; background: linear-gradient(110deg,#232323 8%,#303030 18%,#232323 33%); background-size: 200% 100%; animation: coverShimmer 1.15s linear infinite; z-index: 0; }
     @keyframes coverShimmer { to { background-position-x: -200%; } }
-    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 58px 10px 10px; background: linear-gradient(180deg, transparent 0%, rgba(4,5,8,.45) 38%, rgba(4,5,8,.9) 74%, rgba(4,5,8,.98) 100%); opacity: .96; transition: opacity .22s ease; z-index: 3; text-shadow: 0 1px 3px rgba(0,0,0,.78); }
-    .book-card:hover .info { opacity: 1; }
+    .book-card .info { position: absolute; bottom: 0; left: 0; right: 0; padding: 58px 10px 10px; background: linear-gradient(180deg, transparent 0%, rgba(4,5,8,.45) 38%, rgba(4,5,8,.9) 74%, rgba(4,5,8,.98) 100%); opacity: 0; transform: translateY(10px); transition: opacity .18s ease, transform .18s ease; z-index: 3; text-shadow: 0 1px 3px rgba(0,0,0,.78); }
+    .book-card:hover .info, a:focus-visible .book-card .info { opacity: 1; transform: translateY(0); }
     .book-card .info .t { font-size: .82rem; font-weight: 700; line-height: 1.12; color: #fff; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .book-card .info .a { font-size: .7rem; font-weight: 500; color: rgba(255,255,255,.76); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 8px; position: relative; z-index: 2; }
@@ -95,7 +95,7 @@
     const infLoading = document.getElementById('infLoading');
 
     document.getElementById('loadingOverlay').style.display = 'none';
-    document.querySelectorAll('a[href^="/preview"]').forEach(a => {
+    document.querySelectorAll('a[href^="/preview"], a[href*="/book/"]').forEach(a => {
       a.addEventListener('click', function() {
         document.getElementById('loadingOverlay').style.display = 'flex';
       });
@@ -105,6 +105,13 @@
       const d = document.createElement('div');
       d.textContent = s || '';
       return d.innerHTML;
+    }
+
+    function bookUrl(book) {
+      const key = (book.ol_key || '').replace(/^\/?works\//, '');
+      if (!key) return '/preview';
+      const prefix = (MODE === 'fiction' ? '/fiction' : '') + (BOOK_LANG === 'cn' ? '/cn' : '');
+      return (prefix || '') + '/book/' + encodeURIComponent(key);
     }
 
     function setLoading(on) {
@@ -121,7 +128,7 @@
       const emptyState = document.getElementById('emptyState');
       if (emptyState) emptyState.style.display = 'none';
       for (const b of books) {
-        const href = '/preview?title=' + encodeURIComponent(b.title) + '&author=' + encodeURIComponent(b.author) + '&ol_key=' + encodeURIComponent(b.ol_key) + '&cover=' + encodeURIComponent(b.cover_url) + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG);
+        const href = bookUrl(b);
         const card = document.createElement('a');
         card.href = href;
         card.className = 'text-decoration-none';
