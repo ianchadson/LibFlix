@@ -38,16 +38,7 @@
   partial and forcing the overlay visible before route changes.
 - Documented the project preference for headless Playwright UI validation.
 
-## 2026-07-04 - Open Library-only discovery and browsing UX refresh
-
-### Removed Google Books discovery
-
-- Removed Google Books API functionality from the Flask backend.
-- Removed the Google/Open Library source toggle from the navbar.
-- Removed app-generated `source=` query parameters.
-- Removed Google cover fallback/proxy behavior.
-- Removed Google-specific cache and cover validation code paths.
-- Old URLs that still contain `source=google` are tolerated but ignored.
+## 2026-07-04 - Open Library discovery and browsing UX refresh
 
 ### Added EN/CN discovery language switching
 

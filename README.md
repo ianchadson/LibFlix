@@ -26,9 +26,8 @@ No API key is required. Open Library is the only discovery backend.
 
 ### Discovery
 
-- **Open Library-only discovery** - Google Books integration and all source
-  switching UI were removed. Old URLs containing `source=google` are ignored and
-  are not re-emitted by the app.
+- **Open Library discovery** - browsing, shelves, categories, metadata, covers,
+  similar books, and discovery search all use Open Library with no API key.
 - **Expandable browse settings** - Fiction / Non-Fiction and EN / CN controls
   live in the top-right Settings menu instead of always occupying the toolbar.
   Each mode has its own shelf set and category tabs, while EN/CN maps to English

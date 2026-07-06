@@ -9,8 +9,8 @@ LibFlix is a Flask app with two distinct data paths:
 2. **Download path:** the `downloaders/` package powers libgen search, download
    resolution, streaming, and Send to Kindle delivery.
 
-Google Books support was removed. The app no longer contains source switching,
-Google Books API calls, Google cover proxying, or `BOOK_SOURCE` configuration.
+Discovery has a single backend. Open Library is the source for browsing,
+metadata, covers, similar books, and discovery search.
 
 ## User-Facing Flow Map
 
@@ -435,17 +435,8 @@ and WebKit scrollbar hiding rules.
 
 Runtime cache files are ignored by git.
 
-## Removed Google Books Surface
+## Discovery Source
 
-The following older surfaces were removed or neutralized:
-
-- `BOOK_SOURCE`
-- `GOOGLE_BOOKS_API_KEY`
-- Google Books API callers
-- Google Books cover proxy route
-- `source` navbar toggle
-- `source=` propagation in app-generated URLs
-- Google placeholder-cover validation
-
-The language URL helper strips stale `source` parameters so old bookmarks do
-not reintroduce removed source state.
+Open Library is the only discovery source documented for the app. The language
+URL helper strips obsolete source parameters from older links so current routes
+stay focused on mode, language, category, and query state.
