@@ -40,8 +40,6 @@
     .book-card .info .a { font-size: .7rem; font-weight: 500; color: rgba(255,255,255,.76); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 8px; position: relative; z-index: 2; }
 
-    .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #141414; z-index: 9999; display: none; flex-direction: column; align-items: center; justify-content: center; }
-    .loading-overlay .spinner { width: 50px; height: 50px; border: 4px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     .inf-loading { text-align: center; padding: 1.5rem; color: #666; display: none; }
     .inf-loading .spinner-sm { width: 28px; height: 28px; border: 3px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto; }
@@ -78,10 +76,6 @@
     <div class="spinner-sm"></div>
   </div>
 
-  <div class="loading-overlay" id="loadingOverlay">
-    <div class="spinner"></div>
-  </div>
-
   <footer class="text-center text-muted py-4 small">
     Powered by Open Library &amp; libgen.li
   </footer>
@@ -96,13 +90,6 @@
     let finished = false;
     const scrollSentinel = document.getElementById('scrollSentinel');
     const infLoading = document.getElementById('infLoading');
-
-    document.getElementById('loadingOverlay').style.display = 'none';
-    document.querySelectorAll('a[href^="/search"], a[href^="/preview"], a[href*="/book/"]').forEach(a => {
-      a.addEventListener('click', function() {
-        document.getElementById('loadingOverlay').style.display = 'flex';
-      });
-    });
 
     function esc(s) {
       const d = document.createElement('div');

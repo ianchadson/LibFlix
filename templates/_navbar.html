@@ -323,6 +323,10 @@
       link.href = url.href;
       document.head.appendChild(link);
     };
+    const prefetchLink = link => {
+      if (!link || link.querySelector('.book-card')) return;
+      prefetchPage(link.href);
+    };
     const navigateWithTransition = href => {
       showTransition();
       window.setTimeout(() => {
@@ -350,15 +354,15 @@
     });
     document.addEventListener('pointerover', event => {
       const link = event.target.closest('a[href]');
-      if (link) prefetchPage(link.href);
+      prefetchLink(link);
     }, { passive: true });
     document.addEventListener('focusin', event => {
       const link = event.target.closest('a[href]');
-      if (link) prefetchPage(link.href);
+      prefetchLink(link);
     });
     document.addEventListener('touchstart', event => {
       const link = event.target.closest('a[href]');
-      if (link) prefetchPage(link.href);
+      prefetchLink(link);
     }, { passive: true });
     const warmLikelyPages = () => {
       document.querySelectorAll('.cat-tabs a[href], .hero-actions a[href]').forEach((link, index) => {
@@ -498,6 +502,8 @@
     let quickPeekPendingLink = null;
     let quickPeekPointer = null;
     let quickPeekScrollFrame = null;
+    let quickPeekAbortController = null;
+    let suppressFocusQuickPeek = false;
 
     const truncate = (value, length) => {
       const text = String(value || '').trim();
@@ -547,7 +553,10 @@
         positionQuickPeek(link, quickPeekPointer);
         return;
       }
-      fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang={{ book_lang }}')
+      if (quickPeekAbortController) quickPeekAbortController.abort();
+      quickPeekAbortController = new AbortController();
+      const activeController = quickPeekAbortController;
+      fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang={{ book_lang }}', { signal: activeController.signal })
         .then(response => response.json())
         .then(data => {
           if (quickPeekActiveLink !== link) return;
@@ -560,6 +569,9 @@
           if (quickPeekActiveLink !== link) return;
           renderQuickPeek(card, 'done', {});
           positionQuickPeek(link, quickPeekPointer);
+        })
+        .finally(() => {
+          if (quickPeekAbortController === activeController) quickPeekAbortController = null;
         });
     };
     const hideQuickPeek = () => {
@@ -568,8 +580,10 @@
       quickPeekPointer = null;
       if (quickPeekTimer) clearTimeout(quickPeekTimer);
       if (quickPeekScrollFrame) cancelAnimationFrame(quickPeekScrollFrame);
+      if (quickPeekAbortController) quickPeekAbortController.abort();
       quickPeekTimer = null;
       quickPeekScrollFrame = null;
+      quickPeekAbortController = null;
       quickPeek.classList.remove('visible');
     };
     const syncQuickPeekAfterScroll = () => {
@@ -622,8 +636,23 @@
       if (!link || link.contains(event.relatedTarget)) return;
       hideQuickPeek();
     });
+    document.addEventListener('pointerdown', event => {
+      if (!event.target.closest('a:has(.book-card)')) return;
+      suppressFocusQuickPeek = true;
+      hideQuickPeek();
+      window.setTimeout(() => {
+        suppressFocusQuickPeek = false;
+      }, 250);
+    }, true);
+    document.addEventListener('click', event => {
+      if (event.target.closest('a:has(.book-card)')) hideQuickPeek();
+    }, true);
     document.addEventListener('focusin', event => {
       const link = event.target.closest('a:has(.book-card)');
+      if (link && suppressFocusQuickPeek) {
+        suppressFocusQuickPeek = false;
+        return;
+      }
       if (link) showQuickPeek(link);
     });
     document.addEventListener('focusout', event => {
