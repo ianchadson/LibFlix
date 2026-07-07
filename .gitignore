@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
 .DS_Store
-screenshots/
+screenshots/*
+!screenshots/readme-home.png
+!screenshots/readme-controls.png
+!screenshots/readme-quick-peek.png
 tmp/
 *.log
 .env

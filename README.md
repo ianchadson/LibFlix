@@ -10,6 +10,13 @@ filters, Open Library search, book previews, similar-book shelves, inline
 download search, direct downloads, and Send to Kindle via the user's SMTP
 settings.
 
+## About
+
+LibFlix is a local-first book discovery interface for browsing public Open
+Library metadata with a polished streaming-app style UI. It focuses on fast
+category browsing, clean book previews, contextual download lookup, and a
+low-friction path from discovery to Send to Kindle.
+
 ## Quick Start
 
 ```bash
@@ -21,6 +28,20 @@ python3 app.py
 ```
 
 No API key is required. Open Library is the only discovery backend.
+
+## Screenshots
+
+### Homepage
+
+![LibFlix homepage with fixed hero and trending shelf](screenshots/readme-home.png)
+
+### Search and Settings
+
+![Expanded search and browse settings controls](screenshots/readme-controls.png)
+
+### Quick Peek
+
+![Hover quick peek over a book card](screenshots/readme-quick-peek.png)
 
 ## Current Feature Set
 
