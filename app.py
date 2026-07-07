@@ -418,20 +418,26 @@ def select_unique_from_prefetched(topic, candidate_pages, seen_keys, target=SHEL
                 return selected
     return selected
 
-def fetch_one_shelf(name, topic, lang=None):
+def fetch_one_shelf(name, topic, lang=None, mode="nonfiction"):
     lang = lang or DEFAULT_BOOK_LANG
     try:
-        candidates, _, _ = fetch_topic_page_books(topic, 1, lang)
-        books = select_unique_books(candidates, set(), SHELF_BOOK_TARGET)
+        books, _, _ = fetch_category_page_books(topic, 1, mode, lang)
         return {"name": name, "topic": topic, "books": books}
     except:
         return {"name": name, "topic": topic, "books": []}
 
-def fetch_category_books(topic, page=1, lang=None):
+def fetch_category_page_books(topic, page=1, mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    candidates, total, total_pages = fetch_topic_page_books(topic, page, lang)
-    books = select_unique_books(candidates, set(), SHELF_BOOK_TARGET)
-    return books, total, total_pages
+    page = max(1, page)
+    target = SHELF_BOOK_TARGET * page
+    seen_keys = seen_keys_before_shelf(topic, mode, lang)
+    max_pages = min(SHELF_MAX_OPEN_LIBRARY_PAGES, max(SHELF_REFILL_OPEN_LIBRARY_PAGES, page + 2))
+    books, total, total_pages = collect_unique_topic_books(topic, lang, seen_keys, target, max_pages)
+    start = SHELF_BOOK_TARGET * (page - 1)
+    return books[start:target], total, total_pages
+
+def fetch_category_books(topic, page=1, lang=None, mode="nonfiction"):
+    return fetch_category_page_books(topic, page, mode, lang)
 
 def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
@@ -807,7 +813,7 @@ def category_page(topic, clean_mode, clean_lang):
     if topic not in valid_topics:
         return render_template("category.html", shelf={"name": topic.capitalize(), "books": []}, topic=topic, mode=mode)
     name = {t: n for n, t in sd}.get(topic, topic.capitalize())
-    shelf = fetch_one_shelf(name, topic, lang)
+    shelf = fetch_one_shelf(name, topic, lang, mode)
     return render_template("category.html", shelf=shelf, topic=topic, mode=mode)
 
 @app.route("/api/category/<topic>")
@@ -820,7 +826,7 @@ def api_category(topic):
     if topic not in valid_topics:
         return jsonify({"success": False, "error": "Invalid topic"})
 
-    books, total, total_pages = fetch_category_books(topic, page, lang)
+    books, total, total_pages = fetch_category_books(topic, page, lang, mode)
     return jsonify({
         "success": True, "books": books,
         "page": page, "total_pages": total_pages, "total": total,

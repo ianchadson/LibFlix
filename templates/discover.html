@@ -133,7 +133,7 @@
         card.href = href;
         card.className = 'text-decoration-none';
         const imgFallback = 'this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';';
-        card.innerHTML = '<div class="book-card">' +
+        card.innerHTML = '<div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">' +
           (b.cover_url ? '<div class="cover-skeleton"></div><img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + imgFallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>' : '<div class="placeholder">?</div>') +
           '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' +
           (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') +

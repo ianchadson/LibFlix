@@ -29,7 +29,7 @@
   .search-bar button { height:34px; min-width:34px; border-radius:999px !important; padding:0 !important; margin-left:0 !important; font-size:0 !important; font-weight:700; display:inline-flex; align-items:center; justify-content:center; background:transparent !important; border:0 !important; color:#fff !important; }
   .search-bar.open button, .search-bar:focus-within button { min-width:34px; margin-left:4px !important; font-size:0 !important; }
   .settings-wrap { position:relative; }
-  .settings-panel { position:absolute; right:0; top:calc(100% + 10px); width:260px; padding:12px; border:1px solid rgba(255,255,255,.1); background:rgba(24,24,24,.94); backdrop-filter:blur(14px); border-radius:14px; box-shadow:0 22px 60px rgba(0,0,0,.38); opacity:0; transform:translateY(-6px) scale(.98); pointer-events:none; transition:opacity .18s ease, transform .18s ease; z-index:30; }
+  .settings-panel { position:absolute; right:0; top:calc(100% + 10px); width:260px; padding:12px; border:1px solid rgba(255,255,255,.1); background:rgba(24,24,24,.96); backdrop-filter:blur(6px); border-radius:14px; box-shadow:0 18px 42px rgba(0,0,0,.34); opacity:0; transform:translateY(-6px) scale(.98); pointer-events:none; transition:opacity .18s ease, transform .18s ease; z-index:30; }
   .settings-panel.open { opacity:1; transform:none; pointer-events:auto; }
   .settings-group + .settings-group { margin-top:10px; }
   .settings-label { color:rgba(255,255,255,.48); font-size:.68rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; margin:0 0 6px 2px; }
@@ -40,7 +40,7 @@
   .cat-tab { padding:5px 11px !important; border-radius:999px !important; font-size:.74rem !important; line-height:1; }
   body { animation: appPageIn .2s ease both; }
   body.is-leaving { cursor: progress; }
-  .app-transition { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; background:rgba(15,15,15,.82); backdrop-filter:blur(8px); opacity:0; pointer-events:none; transition:opacity .1s ease; }
+  .app-transition { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; background:rgba(15,15,15,.88); opacity:0; pointer-events:none; transition:opacity .1s ease; }
   body.is-leaving .app-transition { opacity:1; pointer-events:auto; }
   .app-transition-core { display:flex; flex-direction:column; align-items:center; gap:12px; color:#fff; transform:translateY(4px); transition:transform .18s ease; }
   body.is-leaving .app-transition-core { transform:translateY(0); }
@@ -82,7 +82,7 @@
   }
   a:has(.book-card) { display:inline-block; border-radius:10px; outline:none; position:relative; z-index:1; }
   a:has(.book-card):focus-visible { box-shadow:0 0 0 2px rgba(229,9,20,.85), 0 0 0 5px rgba(229,9,20,.18); }
-  .quick-peek { position:fixed; width:min(390px, calc(100vw - 28px)); max-height:min(430px, calc(100vh - 28px)); overflow:hidden; padding:16px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:rgba(18,18,18,.94); color:#fff; box-shadow:0 24px 70px rgba(0,0,0,.54); backdrop-filter:blur(14px); z-index:9000; opacity:0; transform:translateY(8px) scale(.98); pointer-events:none; transition:opacity .14s ease, transform .14s ease; }
+  .quick-peek { position:absolute; width:min(390px, calc(100vw - 28px)); max-height:min(430px, calc(100vh - 28px)); overflow:hidden; padding:16px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:rgba(18,18,18,.97); color:#fff; box-shadow:0 18px 46px rgba(0,0,0,.48); backdrop-filter:blur(6px); z-index:9000; opacity:0; transform:translateY(8px) scale(.98); pointer-events:none; transition:opacity .14s ease, transform .14s ease; }
   .quick-peek.visible { opacity:1; transform:none; }
   .quick-peek-title { font-size:.95rem; line-height:1.18; font-weight:750; margin:0; }
   .quick-peek-author { margin-top:4px; color:rgba(255,255,255,.66); font-size:.78rem; }
@@ -314,7 +314,9 @@
     const quickPeekCache = new Map();
     let quickPeekTimer = null;
     let quickPeekActiveLink = null;
+    let quickPeekPendingLink = null;
     let quickPeekPointer = null;
+    let quickPeekScrollFrame = null;
 
     const truncate = (value, length) => {
       const text = String(value || '').trim();
@@ -342,8 +344,8 @@
       let top = anchorY + 14;
       if (top + peekRect.height > window.innerHeight - 14) top = anchorY - peekRect.height - 14;
       top = Math.max(14, top);
-      quickPeek.style.left = left + 'px';
-      quickPeek.style.top = top + 'px';
+      quickPeek.style.left = (left + window.scrollX) + 'px';
+      quickPeek.style.top = (top + window.scrollY) + 'px';
     };
     const showQuickPeek = (link, pointer) => {
       const card = link.querySelector('.book-card');
@@ -381,17 +383,53 @@
     };
     const hideQuickPeek = () => {
       quickPeekActiveLink = null;
+      quickPeekPendingLink = null;
       quickPeekPointer = null;
       if (quickPeekTimer) clearTimeout(quickPeekTimer);
+      if (quickPeekScrollFrame) cancelAnimationFrame(quickPeekScrollFrame);
+      quickPeekTimer = null;
+      quickPeekScrollFrame = null;
       quickPeek.classList.remove('visible');
+    };
+    const syncQuickPeekAfterScroll = () => {
+      quickPeekScrollFrame = null;
+      if (!quickPeekActiveLink && quickPeekPendingLink && quickPeekPointer) {
+        const pendingElementAtPointer = document.elementFromPoint(quickPeekPointer.x, quickPeekPointer.y);
+        if (!pendingElementAtPointer || !quickPeekPendingLink.contains(pendingElementAtPointer)) {
+          hideQuickPeek();
+        }
+        return;
+      }
+      if (!quickPeekActiveLink || !quickPeekPointer) return;
+      const elementAtPointer = document.elementFromPoint(quickPeekPointer.x, quickPeekPointer.y);
+      if (!elementAtPointer || !quickPeekActiveLink.contains(elementAtPointer)) {
+        hideQuickPeek();
+        return;
+      }
+      positionQuickPeek(quickPeekActiveLink, quickPeekPointer);
+    };
+    const scheduleQuickPeekScrollSync = () => {
+      if (!quickPeekActiveLink) {
+        if (quickPeekTimer && quickPeekPendingLink && quickPeekPointer && !quickPeekScrollFrame) {
+          quickPeekScrollFrame = requestAnimationFrame(syncQuickPeekAfterScroll);
+        }
+        return;
+      }
+      if (quickPeekScrollFrame) return;
+      quickPeekScrollFrame = requestAnimationFrame(syncQuickPeekAfterScroll);
     };
     document.addEventListener('pointerover', event => {
       if (!window.matchMedia('(hover: hover)').matches) return;
       const link = event.target.closest('a:has(.book-card)');
       if (!link) return;
       quickPeekPointer = { x: event.clientX, y: event.clientY };
+      quickPeekPendingLink = link;
       if (quickPeekTimer) clearTimeout(quickPeekTimer);
-      quickPeekTimer = setTimeout(() => showQuickPeek(link, quickPeekPointer), 280);
+      quickPeekTimer = setTimeout(() => {
+        quickPeekPendingLink = null;
+        const elementAtPointer = quickPeekPointer ? document.elementFromPoint(quickPeekPointer.x, quickPeekPointer.y) : null;
+        if (elementAtPointer && link.contains(elementAtPointer)) showQuickPeek(link, quickPeekPointer);
+      }, 280);
     });
     document.addEventListener('pointermove', event => {
       if (!quickPeekActiveLink || !quickPeekActiveLink.contains(event.target)) return;
@@ -412,7 +450,7 @@
       if (!link || link.contains(event.relatedTarget)) return;
       hideQuickPeek();
     });
-    window.addEventListener('scroll', hideQuickPeek, { passive: true });
+    document.addEventListener('scroll', scheduleQuickPeekScrollSync, { passive: true, capture: true });
     window.addEventListener('resize', hideQuickPeek);
   })();
 </script>
