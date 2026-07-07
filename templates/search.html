@@ -238,7 +238,7 @@
         html += '<tr>';
         html += '<td class="text-center">';
         if (book.cover_url) {
-          html += '<img class="cover-thumb" src="' + esc(book.cover_url) + '" alt="cover" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
+          html += '<img class="cover-thumb" src="' + esc(book.cover_url) + '" alt="cover" loading="lazy" decoding="async" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
           html += '<div class="cover-placeholder" style="display:none">?</div>';
         } else {
           html += '<div class="cover-placeholder">?</div>';
@@ -508,7 +508,7 @@
         html += '<tr>';
         html += '<td class="text-center">';
         if (book.cover_url) {
-          html += '<img class="cover-thumb" src="' + esc(book.cover_url) + '" alt="cover" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
+          html += '<img class="cover-thumb" src="' + esc(book.cover_url) + '" alt="cover" loading="lazy" decoding="async" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
           html += '<div class="cover-placeholder" style="display:none">?</div>';
         } else {
           html += '<div class="cover-placeholder">?</div>';

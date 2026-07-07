@@ -2,7 +2,7 @@
   <div class="book-card" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}">
     {% if book.cover_url %}
     <div class="cover-skeleton"></div>
-    <img src="{{ book.cover_url }}" alt="{{ book.title }}" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';">
+    <img src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';">
     <div class="placeholder ph-fallback" style="display:none">?</div>
     {% else %}
     <div class="placeholder">?</div>

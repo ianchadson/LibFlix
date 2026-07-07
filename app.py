@@ -429,12 +429,18 @@ def fetch_one_shelf(name, topic, lang=None, mode="nonfiction"):
 def fetch_category_page_books(topic, page=1, mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     page = max(1, page)
+    ckey = f"category_page:{lang}:{mode}:{topic}:{page}"
+    cached = cache_get(ckey, 900)
+    if cached:
+        return cached
     target = SHELF_BOOK_TARGET * page
     seen_keys = seen_keys_before_shelf(topic, mode, lang)
     max_pages = min(SHELF_MAX_OPEN_LIBRARY_PAGES, max(SHELF_REFILL_OPEN_LIBRARY_PAGES, page + 2))
     books, total, total_pages = collect_unique_topic_books(topic, lang, seen_keys, target, max_pages)
     start = SHELF_BOOK_TARGET * (page - 1)
-    return books[start:target], total, total_pages
+    result = (books[start:target], total, total_pages)
+    cache_set(ckey, result)
+    return result
 
 def fetch_category_books(topic, page=1, lang=None, mode="nonfiction"):
     return fetch_category_page_books(topic, page, mode, lang)
@@ -442,15 +448,25 @@ def fetch_category_books(topic, page=1, lang=None, mode="nonfiction"):
 def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     page = max(1, page)
+    ckey = f"shelf_page:{lang}:{mode}:{topic}:{page}"
+    cached = cache_get(ckey, 900)
+    if cached:
+        return cached
     target = SHELF_BOOK_TARGET * page
     seen_keys = seen_keys_before_shelf(topic, mode, lang)
     max_pages = min(SHELF_MAX_OPEN_LIBRARY_PAGES, max(SHELF_REFILL_OPEN_LIBRARY_PAGES, page + 2))
     books, total, total_pages = collect_unique_topic_books(topic, lang, seen_keys, target, max_pages)
     start = SHELF_BOOK_TARGET * (page - 1)
-    return books[start:target], total, total_pages
+    result = (books[start:target], total, total_pages)
+    cache_set(ckey, result)
+    return result
 
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
+    ckey = f"discover:{lang}:{q}:{page}"
+    cached = cache_get(ckey, 900)
+    if cached:
+        return cached
     limit = 60
     lang_query = f"{q} language:{BOOK_LANG_CONFIG[lang]['ol_lang']}"
     data = ol_get("/search.json", {"q": lang_query, "limit": limit, "page": page, "fields": OL_BOOK_FIELDS})
@@ -463,7 +479,9 @@ def fetch_discovery_books(q, page=1, lang=None):
             if len(books) >= 30:
                 break
     total_pages = min(25, max(1, (total + limit - 1) // limit))
-    return books, total, total_pages
+    result = (books, total, total_pages)
+    cache_set(ckey, result)
+    return result
 
 def fetch_shelves(mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
@@ -584,6 +602,10 @@ def first_work_author(work):
     return ""
 
 def book_metadata_from_work(work_id):
+    ckey = f"book_meta:{work_id}"
+    cached = cache_get(ckey, API_DISK_CACHE_TTL)
+    if cached:
+        return cached
     ol_key = ol_key_from_work_id(work_id)
     if not ol_key:
         return None
@@ -592,12 +614,14 @@ def book_metadata_from_work(work_id):
         return None
     covers = work.get("covers") or []
     cover_id = covers[0] if covers else ""
-    return {
+    result = {
         "title": work.get("title", ""),
         "author": first_work_author(work),
         "cover_url": f"/olcover/{cover_id}" if cover_id else "",
         "ol_key": ol_key,
     }
+    cache_set(ckey, result)
+    return result
 
 def enrich_book_descriptions(books):
     enriched = [dict(book) for book in books]
@@ -624,12 +648,16 @@ def enrich_book_descriptions(books):
 app = Flask(__name__)
 
 @app.after_request
-def no_cache(resp):
-    if resp.mimetype == "text/html":
-        resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-        resp.headers["Pragma"] = "no-cache"
-        resp.headers["Expires"] = "0"
-    resp.set_cookie("book_lang", get_book_lang(), max_age=31536000, samesite="Lax")
+def cache_headers(resp):
+    if request.method in ("GET", "HEAD") and resp.status_code < 400:
+        if resp.mimetype == "text/html":
+            resp.headers["Cache-Control"] = "private, max-age=90, stale-while-revalidate=600"
+        elif request.path.startswith(("/api/book", "/api/category", "/api/shelf", "/api/discover")):
+            resp.headers["Cache-Control"] = "private, max-age=600, stale-while-revalidate=3600"
+        elif request.path.startswith("/api/search"):
+            resp.headers["Cache-Control"] = "private, max-age=120"
+    if resp.mimetype == "text/html" or request.path.startswith("/api/"):
+        resp.set_cookie("book_lang", get_book_lang(), max_age=31536000, samesite="Lax")
     return resp
 
 @app.context_processor
@@ -1066,7 +1094,7 @@ def cover(md5):
         r = SESSION.get(url, timeout=15, headers={"Referer": f"{MIRROR}/"})
         if r.status_code == 200 and len(r.content) > 100:
             resp = Response(r.content, mimetype=r.headers.get("content-type", "image/jpeg"))
-            resp.headers["Cache-Control"] = "public, max-age=86400"
+            resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
             return resp
     except:
         pass
@@ -1081,7 +1109,7 @@ def olcover(cover_id, size="M"):
         r = SESSION.get(url, timeout=10)
         if r.status_code == 200 and len(r.content) > 100:
             resp = Response(r.content, mimetype=r.headers.get("content-type", "image/jpeg"))
-            resp.headers["Cache-Control"] = "public, max-age=86400"
+            resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
             return resp
     except:
         pass

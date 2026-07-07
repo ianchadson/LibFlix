@@ -148,7 +148,7 @@
     <div class="row g-4">
       <div class="col-md-3 text-center">
         {% if cover_url %}
-        <img class="detail-cover" src="{{ cover_url | size_url('L') }}" alt="{{ title }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.src='{{ cover_url | size_url('M') }}'">
+        <img class="detail-cover" src="{{ cover_url | size_url('L') }}" alt="{{ title }}" decoding="async" fetchpriority="high" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.src='{{ cover_url | size_url('M') }}'">
         {% else %}
         <div class="detail-cover-placeholder">?</div>
         {% endif %}
@@ -361,7 +361,7 @@
             const href = bookUrl(b);
             html += '<a href="' + href + '" class="text-decoration-none"><div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">';
             if (b.cover_url) {
-              html += '<div class="cover-skeleton"></div><img src="' + b.cover_url + '" alt="' + esc(b.title) + '" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="placeholder" style="display:none">?</div>';
+              html += '<div class="cover-skeleton"></div><img src="' + b.cover_url + '" alt="' + esc(b.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="placeholder" style="display:none">?</div>';
             } else {
               html += '<div class="placeholder">?</div>';
             }

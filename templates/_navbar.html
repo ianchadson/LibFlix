@@ -279,7 +279,7 @@
 </div>
 <script>
   (() => {
-    const TRANSITION_NAV_DELAY = 180;
+    const TRANSITION_NAV_DELAY = 60;
     const showTransition = () => {
       const overlay = document.getElementById('appTransition');
       document.body.classList.add('is-leaving');
@@ -306,6 +306,23 @@
       if (url.pathname === window.location.pathname && url.search === window.location.search) return false;
       return true;
     };
+    const prefetchedPages = new Set();
+    const canPrefetchPages = () => {
+      const connection = navigator.connection || navigator.webkitConnection || navigator.mozConnection;
+      return !(connection?.saveData || /(^|-)2g$/.test(connection?.effectiveType || ''));
+    };
+    const prefetchPage = href => {
+      if (!canPrefetchPages() || !isInternalNavigation(href)) return;
+      const url = new URL(href, window.location.href);
+      const cacheKey = url.pathname + url.search;
+      if (prefetchedPages.has(cacheKey) || prefetchedPages.size > 36) return;
+      prefetchedPages.add(cacheKey);
+      const link = document.createElement('link');
+      link.rel = 'prefetch';
+      link.as = 'document';
+      link.href = url.href;
+      document.head.appendChild(link);
+    };
     const navigateWithTransition = href => {
       showTransition();
       window.setTimeout(() => {
@@ -331,6 +348,28 @@
       event.preventDefault();
       navigateWithTransition(link.href);
     });
+    document.addEventListener('pointerover', event => {
+      const link = event.target.closest('a[href]');
+      if (link) prefetchPage(link.href);
+    }, { passive: true });
+    document.addEventListener('focusin', event => {
+      const link = event.target.closest('a[href]');
+      if (link) prefetchPage(link.href);
+    });
+    document.addEventListener('touchstart', event => {
+      const link = event.target.closest('a[href]');
+      if (link) prefetchPage(link.href);
+    }, { passive: true });
+    const warmLikelyPages = () => {
+      document.querySelectorAll('.cat-tabs a[href], .hero-actions a[href]').forEach((link, index) => {
+        if (index < 10) prefetchPage(link.href);
+      });
+    };
+    if ('requestIdleCallback' in window) {
+      requestIdleCallback(warmLikelyPages, { timeout: 1800 });
+    } else {
+      window.setTimeout(warmLikelyPages, 900);
+    }
     document.addEventListener('submit', event => {
       const form = event.target;
       if (!form || event.defaultPrevented) return;

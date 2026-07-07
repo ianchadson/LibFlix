@@ -215,7 +215,7 @@
             <div class="hero-book {{ 'primary' if loop.index == 1 else 'side-' ~ (loop.index - 1) }}">
               {% if hero_book.cover_url %}
               <div class="cover-skeleton"></div>
-              <img src="{{ hero_book.cover_url | size_url('L') }}" alt="" loading="eager" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.previousElementSibling.style.display='none';this.style.display='none';this.parentNode.querySelector('.placeholder').style.display='flex';">
+              <img src="{{ hero_book.cover_url | size_url('L') }}" alt="" loading="eager" decoding="async" fetchpriority="{{ 'high' if loop.index == 1 else 'auto' }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.previousElementSibling.style.display='none';this.style.display='none';this.parentNode.querySelector('.placeholder').style.display='flex';">
               <div class="placeholder" style="display:none">?</div>
               {% else %}
               <div class="placeholder">?</div>
@@ -318,7 +318,7 @@
       if (!cover) return '<button type="button" class="hero-book ' + cls + '" data-hero-index="' + targetIndex + '" aria-label="' + label + '"><div class="placeholder">?</div></button>';
       return `<button type="button" class="hero-book ${cls}" data-hero-index="${targetIndex}" aria-label="${label}">
         <div class="cover-skeleton"></div>
-        <img src="${esc(cover)}" alt="" loading="${index === 0 ? 'eager' : 'lazy'}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.previousElementSibling.style.display='none';this.style.display='none';this.parentNode.querySelector('.placeholder').style.display='flex';">
+        <img src="${esc(cover)}" alt="" loading="${index === 0 ? 'eager' : 'lazy'}" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.previousElementSibling.style.display='none';this.style.display='none';this.parentNode.querySelector('.placeholder').style.display='flex';">
         <div class="placeholder" style="display:none">?</div>
       </button>`;
     }
@@ -602,7 +602,7 @@
       const href = bookUrl(b);
       const fallback = 'this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';';
       const cover = b.cover_url
-        ? '<div class="cover-skeleton"></div><img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>'
+        ? '<div class="cover-skeleton"></div><img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>'
         : '<div class="placeholder">?</div>';
       return '<a href="' + href + '" class="text-decoration-none"><div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">' + cover + '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' + (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') + '</div></div></a>';
     }
