@@ -77,9 +77,6 @@
     .dedup-switch input:checked { background-color: #e50914; border-color: #e50914; }
     .apply-btn { background:#e50914; color:#fff; border:none; border-radius:999px; font-size:.78rem; padding:7px 16px; font-weight:650; }
     .apply-btn:hover { background:#f40612; }
-    .kindle-settings-btn { position: fixed; right: 16px; bottom: 16px; z-index: 20; background: rgba(25,25,25,.92); color:#ddd; border:1px solid rgba(255,255,255,.12); border-radius:999px; padding:8px 13px; font-size:.78rem; box-shadow:0 8px 26px rgba(0,0,0,.35); }
-    .kindle-settings-btn:hover { background:#252525; color:#fff; border-color:rgba(255,255,255,.22); }
-
     .result-info { font-size: .8rem; color: #888; margin: 4px 0; }
     .table-wrap { overflow-x: auto; }
     .book-table { width: 100%; border-collapse: collapse; font-size: .82rem; }
@@ -146,7 +143,6 @@
 <body>
   {% set active_tab = '' %}
   {% include "_navbar.html" %}
-  <button id="settingsBtn" class="kindle-settings-btn" title="Send to Kindle settings">&#x2699; Kindle</button>
 
   <div class="detail-wrap">
     <div class="row g-4">
@@ -223,7 +219,7 @@
 
     <div id="lgLoading" class="lg-loading">
       <div class="spinner-book"></div>
-      <p>Searching libgen for "{{ title }}{% if author %} {{ author }}{% endif %}"<span class="dot-pulse"><span></span><span></span><span></span></span></p>
+      <p>Searching libgen for "{{ title }}{% if author %} {{ author }}{% endif %}"</p>
     </div>
 
     <div id="lgError" class="lg-error" style="display:none">
@@ -267,32 +263,6 @@
   <footer class="text-center text-muted py-4 small">
     Powered by Open Library &amp; libgen.li
   </footer>
-
-  <div id="kindleModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:9998;align-items:center;justify-content:center">
-    <div style="background:#1e1e1e;border-radius:8px;padding:24px;max-width:440px;width:90%;color:#fff;margin:40px auto">
-      <h5 style="margin:0 0 4px;font-weight:600">Send to Kindle</h5>
-      <p style="color:#888;font-size:.8rem;margin-bottom:16px">Set up once. Your settings are saved in this browser.</p>
-      <div class="mb-2"><label style="display:block;font-size:.8rem;color:#aaa;margin-bottom:2px">Your <strong>@kindle.com</strong> email</label>
-      <input id="ke_kindle" class="form-control form-control-sm" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff" placeholder="you@kindle.com"></div>
-      <hr style="border-color:rgba(255,255,255,.08);margin:14px 0">
-      <p style="color:#888;font-size:.75rem;margin-bottom:10px">Gmail works best. Use an <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:#e50914">App Password</a> (not your regular password). Add the sender to <a href="https://www.amazon.com/hz/mycd/digital-console/device-list" target="_blank" style="color:#e50914">Amazon's approved list</a>.</p>
-      <div class="mb-2"><label style="display:block;font-size:.8rem;color:#aaa;margin-bottom:2px">SMTP Host</label>
-      <input id="ke_host" class="form-control form-control-sm" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff" value="smtp.gmail.com"></div>
-      <div class="row g-2 mb-2">
-        <div class="col-4"><label style="display:block;font-size:.8rem;color:#aaa;margin-bottom:2px">Port</label>
-        <input id="ke_port" class="form-control form-control-sm" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff" value="587"></div>
-        <div class="col-8"><label style="display:block;font-size:.8rem;color:#aaa;margin-bottom:2px">Sender email</label>
-        <input id="ke_sender" class="form-control form-control-sm" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff" placeholder="you@gmail.com"></div>
-      </div>
-      <div class="mb-3"><label style="display:block;font-size:.8rem;color:#aaa;margin-bottom:2px">App password</label>
-      <input id="ke_pass" type="password" class="form-control form-control-sm" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff" placeholder="16-char Gmail app password"></div>
-      <div class="d-flex gap-2">
-        <button class="btn btn-sm flex-grow-1" style="background:#e50914;color:#fff;border:none" onclick="saveKindleSettings()">Save Settings</button>
-        <button class="btn btn-sm" style="background:rgba(255,255,255,.08);color:#aaa;border:none" onclick="closeKindleModal()">Cancel</button>
-      </div>
-      <p id="ke_status" style="margin-top:8px;font-size:.8rem;color:#888"></p>
-    </div>
-  </div>
 
   <div id="kindleSending" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:9997;align-items:center;justify-content:center">
     <div style="text-align:center;color:#fff">
@@ -389,7 +359,7 @@
           let html = '';
           for (const b of data.books) {
             const href = bookUrl(b);
-            html += '<a href="' + href + '" class="text-decoration-none"><div class="book-card">';
+            html += '<a href="' + href + '" class="text-decoration-none"><div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">';
             if (b.cover_url) {
               html += '<div class="cover-skeleton"></div><img src="' + b.cover_url + '" alt="' + esc(b.title) + '" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'"><div class="placeholder" style="display:none">?</div>';
             } else {
@@ -553,7 +523,9 @@
 
     function openKindleModal() {
       const s = getKindleSettings();
-      document.getElementById('kindleModal').style.display = 'flex';
+      const modal = document.getElementById('kindleModal');
+      modal.style.top = window.scrollY + 'px';
+      modal.style.display = 'flex';
       document.getElementById('ke_status').textContent = '';
       document.getElementById('ke_status').style.color = '#888';
       if (s) {
@@ -566,10 +538,12 @@
     }
 
     function closeKindleModal() {
-      document.getElementById('kindleModal').style.display = 'none';
+      const modal = document.getElementById('kindleModal');
+      modal.style.display = 'none';
+      modal.classList.remove('open');
     }
 
-    document.getElementById('settingsBtn').addEventListener('click', openKindleModal);
+    document.getElementById('settingsBtn')?.addEventListener('click', openKindleModal);
     document.getElementById('kindleModal').addEventListener('click', function(e) {
       if (e.target === this) closeKindleModal();
     });

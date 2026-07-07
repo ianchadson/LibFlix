@@ -35,6 +35,33 @@
   .settings-label { color:rgba(255,255,255,.48); font-size:.68rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; margin:0 0 6px 2px; }
   .settings-panel .mode-toggle, .settings-panel .lang-toggle { width:100%; }
   .settings-panel .mode-btn, .settings-panel .lang-btn { flex:1; text-align:center; padding:8px 10px; font-size:.76rem; }
+  .settings-action-btn { width:100%; min-height:38px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.065); color:#fff; border-radius:10px; padding:8px 10px; display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:.78rem; font-weight:650; transition:background .16s ease, border-color .16s ease, transform .16s ease; }
+  .settings-action-btn:hover { background:rgba(255,255,255,.11); border-color:rgba(255,255,255,.18); transform:translateY(-1px); }
+  .settings-action-icon { width:18px; height:18px; border-radius:5px; background:rgba(229,9,20,.16); color:#ff4b54; display:inline-flex; align-items:center; justify-content:center; font-size:.82rem; font-weight:800; flex:0 0 auto; }
+  .settings-action-text { display:flex; align-items:center; gap:8px; min-width:0; }
+  .settings-action-arrow { color:rgba(255,255,255,.42); font-size:1rem; line-height:1; }
+  .kindle-modal { position:absolute; left:0; right:0; top:0; min-height:100vh; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(4,4,5,.72); z-index:9998; }
+  .kindle-modal.open { display:flex; }
+  .kindle-card { width:min(520px, 100%); border:1px solid rgba(255,255,255,.12); border-radius:18px; background:linear-gradient(145deg, rgba(28,28,29,.98), rgba(16,16,17,.98)); color:#fff; box-shadow:0 30px 90px rgba(0,0,0,.58); overflow:hidden; }
+  .kindle-card-head { padding:18px 20px 14px; border-bottom:1px solid rgba(255,255,255,.08); display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+  .kindle-card-title { margin:0; font-size:1.05rem; font-weight:750; letter-spacing:-.01em; }
+  .kindle-card-sub { margin:5px 0 0; color:rgba(255,255,255,.56); font-size:.78rem; line-height:1.4; }
+  .kindle-close { width:30px; height:30px; border:0; border-radius:999px; background:rgba(255,255,255,.08); color:#fff; display:flex; align-items:center; justify-content:center; font-size:1rem; line-height:1; }
+  .kindle-close:hover { background:rgba(255,255,255,.14); }
+  .kindle-form { padding:18px 20px 20px; }
+  .kindle-grid { display:grid; grid-template-columns:1fr 104px; gap:12px; }
+  .kindle-field { margin-bottom:12px; }
+  .kindle-field label { display:block; font-size:.68rem; color:rgba(255,255,255,.48); text-transform:uppercase; letter-spacing:.055em; margin:0 0 6px; }
+  .kindle-field input { width:100%; height:38px; border-radius:10px; border:1px solid rgba(255,255,255,.11); background:rgba(255,255,255,.065); color:#fff; padding:0 11px; font-size:.84rem; outline:none; }
+  .kindle-field input:focus { border-color:rgba(229,9,20,.78); box-shadow:0 0 0 3px rgba(229,9,20,.14); background:rgba(255,255,255,.085); }
+  .kindle-hint { margin:2px 0 14px; padding:10px 12px; border-radius:12px; background:rgba(255,255,255,.045); color:rgba(255,255,255,.58); font-size:.76rem; line-height:1.42; }
+  .kindle-hint a { color:#ff4b54; text-decoration:none; }
+  .kindle-actions { display:flex; gap:10px; align-items:center; margin-top:4px; }
+  .kindle-primary { flex:1; height:40px; border:0; border-radius:999px; background:#e50914; color:#fff; font-weight:750; font-size:.86rem; }
+  .kindle-primary:hover { background:#f40612; }
+  .kindle-secondary { height:40px; border:1px solid rgba(255,255,255,.1); border-radius:999px; background:rgba(255,255,255,.06); color:rgba(255,255,255,.78); padding:0 16px; font-weight:650; font-size:.82rem; }
+  .kindle-secondary:hover { background:rgba(255,255,255,.1); color:#fff; }
+  .kindle-status { min-height:18px; margin:10px 2px 0; font-size:.78rem; color:rgba(255,255,255,.54); }
   .cat-tabs { width:100%; max-width:100% !important; justify-content:flex-start; gap:4px !important; padding:0 0 2px; mask-image:linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent); }
   .lib-nav-main > .cat-tabs { min-width:0; }
   .cat-tab { padding:5px 11px !important; border-radius:999px !important; font-size:.74rem !important; line-height:1; }
@@ -115,6 +142,11 @@
     .cat-tabs { grid-column:1 / -1; grid-row:2; }
     .search-bar.open, .search-bar:focus-within { position:absolute; right:0; top:0; width:calc(100vw - 24px); max-width:none; z-index:35; }
     .settings-panel { right:0; width:calc(100vw - 24px); }
+    .kindle-modal { padding:12px; align-items:flex-end; }
+    .kindle-card { border-radius:18px 18px 14px 14px; }
+    .kindle-grid { grid-template-columns:1fr; gap:0; }
+    .kindle-actions { flex-direction:column; align-items:stretch; }
+    .kindle-secondary, .kindle-primary { width:100%; }
     .mode-btn { padding:5px 10px; font-size:.68rem; }
     .lang-btn { padding:5px 8px; font-size:.68rem; }
   }
@@ -183,6 +215,13 @@
                 <a href="{{ lang_url('cn') }}" class="lang-btn {% if book_lang == 'cn' %}active{% endif %}" title="Chinese books">CN</a>
               </div>
             </div>
+            <div class="settings-group">
+              <div class="settings-label">Send</div>
+              <button class="settings-action-btn" id="navKindleSettings" type="button">
+                <span class="settings-action-text"><span class="settings-action-icon">K</span> Kindle settings</span>
+                <span class="settings-action-arrow" aria-hidden="true">›</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -193,6 +232,49 @@
   <div class="app-transition-core">
     <div class="app-transition-spinner"></div>
     <div class="app-transition-mark">LibFlix</div>
+  </div>
+</div>
+<div class="kindle-modal" id="kindleModal" role="dialog" aria-modal="true" aria-labelledby="kindleModalTitle">
+  <div class="kindle-card">
+    <div class="kindle-card-head">
+      <div>
+        <h2 class="kindle-card-title" id="kindleModalTitle">Send to Kindle</h2>
+        <p class="kindle-card-sub">Save your Kindle delivery and SMTP details in this browser.</p>
+      </div>
+      <button class="kindle-close" type="button" onclick="closeKindleModal()" aria-label="Close Kindle settings">×</button>
+    </div>
+    <div class="kindle-form">
+      <div class="kindle-field">
+        <label for="ke_kindle">Kindle email</label>
+        <input id="ke_kindle" autocomplete="email" placeholder="you@kindle.com">
+      </div>
+      <div class="kindle-grid">
+        <div class="kindle-field">
+          <label for="ke_host">SMTP host</label>
+          <input id="ke_host" value="smtp.gmail.com" autocomplete="off">
+        </div>
+        <div class="kindle-field">
+          <label for="ke_port">Port</label>
+          <input id="ke_port" value="587" inputmode="numeric" autocomplete="off">
+        </div>
+      </div>
+      <div class="kindle-field">
+        <label for="ke_sender">Sender email</label>
+        <input id="ke_sender" autocomplete="email" placeholder="you@gmail.com">
+      </div>
+      <div class="kindle-field">
+        <label for="ke_pass">App password</label>
+        <input id="ke_pass" type="password" autocomplete="new-password" placeholder="16-character app password">
+      </div>
+      <div class="kindle-hint">
+        Gmail works best with an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a>. Add the sender email to Amazon's approved personal document list.
+      </div>
+      <div class="kindle-actions">
+        <button class="kindle-primary" type="button" onclick="saveKindleSettings()">Save settings</button>
+        <button class="kindle-secondary" type="button" onclick="closeKindleModal()">Cancel</button>
+      </div>
+      <p class="kindle-status" id="ke_status"></p>
+    </div>
   </div>
 </div>
 <script>
@@ -297,13 +379,73 @@
       event.stopPropagation();
       setSettingsOpen(!settingsPanel?.classList.contains('open'));
     });
+    const kindleSettingsButton = document.getElementById('navKindleSettings');
+    const getKindleSettings = () => {
+      try {
+        const raw = localStorage.getItem('libflix_kindle');
+        return raw ? JSON.parse(raw) : null;
+      } catch {
+        return null;
+      }
+    };
+    const setKindleStatus = (message, color = 'rgba(255,255,255,.54)') => {
+      const status = document.getElementById('ke_status');
+      if (!status) return;
+      status.textContent = message || '';
+      status.style.color = color;
+    };
+    window.getKindleSettings = getKindleSettings;
+    window.openKindleModal = () => {
+      const modal = document.getElementById('kindleModal');
+      if (!modal) return;
+      const settings = getKindleSettings();
+      modal.style.top = window.scrollY + 'px';
+      modal.classList.add('open');
+      setKindleStatus('');
+      document.getElementById('ke_kindle').value = settings?.kindle || '';
+      document.getElementById('ke_host').value = settings?.host || 'smtp.gmail.com';
+      document.getElementById('ke_port').value = settings?.port || '587';
+      document.getElementById('ke_sender').value = settings?.sender || '';
+      document.getElementById('ke_pass').value = '';
+      window.setTimeout(() => document.getElementById('ke_kindle')?.focus({ preventScroll: true }), 80);
+    };
+    window.closeKindleModal = () => {
+      document.getElementById('kindleModal')?.classList.remove('open');
+    };
+    window.saveKindleSettings = () => {
+      const settings = {
+        kindle: document.getElementById('ke_kindle')?.value.trim() || '',
+        host: document.getElementById('ke_host')?.value.trim() || '',
+        port: document.getElementById('ke_port')?.value.trim() || '587',
+        sender: document.getElementById('ke_sender')?.value.trim() || '',
+        pass: document.getElementById('ke_pass')?.value || '',
+      };
+      if (!settings.kindle || !settings.host || !settings.sender || !settings.pass) {
+        setKindleStatus('All fields are required.', '#ff6b72');
+        return;
+      }
+      localStorage.setItem('libflix_kindle', JSON.stringify(settings));
+      setKindleStatus('Saved.', '#35d07f');
+      window.setTimeout(window.closeKindleModal, 650);
+    };
+    kindleSettingsButton?.addEventListener('click', event => {
+      event.stopPropagation();
+      setSettingsOpen(false);
+      window.openKindleModal();
+    });
+    document.getElementById('kindleModal')?.addEventListener('click', event => {
+      if (event.target === event.currentTarget) window.closeKindleModal();
+    });
     document.addEventListener('click', event => {
       const target = event.target;
       if (searchForm && !searchForm.contains(target) && !searchInput?.value.trim()) setSearchOpen(false);
       if (settingsPanel && settingsToggle && !settingsPanel.contains(target) && !settingsToggle.contains(target)) setSettingsOpen(false);
     });
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape') setSettingsOpen(false);
+      if (event.key === 'Escape') {
+        setSettingsOpen(false);
+        window.closeKindleModal();
+      }
     });
 
     const quickPeek = document.createElement('div');
