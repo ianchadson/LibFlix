@@ -10,3 +10,4 @@ tmp/
 .env
 shelf_cache*.json
 api_cache.json
+output/playwright/

@@ -583,6 +583,8 @@ def extract_desc(work):
     if isinstance(desc, dict):
         desc = desc.get("value", "")
     desc = strip_html(desc)
+    desc = re.sub(r"\[([^\]]+)\]\((?:https?://)?[^)]+\)", "", desc)
+    desc = re.sub(r"(?:\*\*|__|`)", "", desc)
     desc = re.sub(r"\[source\]\[\d+\]", "", desc, flags=re.I)
     desc = re.sub(r"\[\d+\]:\s*\S+", "", desc)
     desc = re.sub(r"\s+", " ", desc).strip()
@@ -656,6 +658,8 @@ def cache_headers(resp):
             resp.headers["Cache-Control"] = "private, max-age=600, stale-while-revalidate=3600"
         elif request.path.startswith("/api/search"):
             resp.headers["Cache-Control"] = "private, max-age=120"
+        elif request.path.startswith("/static/"):
+            resp.headers["Cache-Control"] = "public, max-age=3600"
     if resp.mimetype == "text/html" or request.path.startswith("/api/"):
         resp.set_cookie("book_lang", get_book_lang(), max_age=31536000, samesite="Lax")
     return resp
@@ -930,9 +934,11 @@ def search():
         return render_template("index.html", shelves=shelves, error="Enter a search query.", mode=mode)
     sort = request.args.get("sort", "y")
     order = request.args.get("order", "DESC").upper()
-    limit = int(request.args.get("limit", 25))
-    page = int(request.args.get("page", 1))
-    fmt = request.args.get("format", "epub")
+    limit = int(request.args.get("limit", 25)) if request.args.get("limit", "25").isdigit() else 25
+    limit = limit if limit in (25, 50, 100) else 25
+    page = int(request.args.get("page", 1)) if request.args.get("page", "1").isdigit() else 1
+    page = max(1, page)
+    fmt = request.args.get("format", "all")
     lang = request.args.get("lang", "English")
     dedup_on = request.args.get("dedup", "1") == "1"
     return render_template("search.html",
@@ -1021,17 +1027,37 @@ def api_search():
         return jsonify({"success": False, "error": "No query provided"})
     sort = request.args.get("sort", "y")
     order = request.args.get("order", "DESC").upper()
-    limit = int(request.args.get("limit", 25))
-    page = int(request.args.get("page", 1))
-    fmt = request.args.get("format", "epub")
+    limit = int(request.args.get("limit", 25)) if request.args.get("limit", "25").isdigit() else 25
+    limit = limit if limit in (25, 50, 100) else 25
+    page = int(request.args.get("page", 1)) if request.args.get("page", "1").isdigit() else 1
+    page = max(1, min(page, 500))
+    fmt = request.args.get("format", "all").lower()
+    if fmt not in ("all", "epub", "pdf", "mobi"):
+        fmt = "all"
     lang = request.args.get("lang", "English")
     dedup_on = request.args.get("dedup", "1") == "1"
 
     sort_field = "y" if sort == "year" else sort
     try:
         books, total = DOWNLOADER.search(q, sort=sort_field, order=order, page=page, limit=limit)
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    except requests.Timeout:
+        return jsonify({
+            "success": False,
+            "error": "The download source timed out.",
+            "code": "source_timeout",
+        }), 504
+    except requests.RequestException:
+        return jsonify({
+            "success": False,
+            "error": "The download source is temporarily unreachable.",
+            "code": "source_unavailable",
+        }), 503
+    except Exception:
+        return jsonify({
+            "success": False,
+            "error": "Downloads could not be checked right now.",
+            "code": "search_failed",
+        }), 502
 
     lang_filter = None if lang == "all" else lang
     fmt_filter = None if fmt == "all" else fmt
@@ -1072,6 +1098,10 @@ def api_search():
 def download(md5):
     url = DOWNLOADER.resolve_download(md5)
     filename = request.args.get("filename", f"{md5}.epub")
+    filename = re.sub(r'[\r\n\\/\"<>|:*?]+', ' ', filename)
+    filename = re.sub(r'\s+', ' ', filename).strip()[:140] or f"{md5}.epub"
+    ascii_filename = filename.encode("ascii", "ignore").decode().strip()
+    ascii_filename = re.sub(r'[^A-Za-z0-9._ -]+', '', ascii_filename) or f"{md5}.epub"
     def generate():
         try:
             r = SESSION.get(url, stream=True, timeout=120, allow_redirects=True)
@@ -1081,7 +1111,9 @@ def download(md5):
             yield b""
     resp = Response(stream_with_context(generate()),
                     mimetype="application/octet-stream")
-    resp.headers["Content-Disposition"] = f"attachment; filename=\"{filename}\""
+    resp.headers["Content-Disposition"] = (
+        f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{quote(filename)}'
+    )
     return resp
 
 @app.route("/cover/<md5>")

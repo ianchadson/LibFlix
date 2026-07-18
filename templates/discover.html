@@ -51,14 +51,15 @@
       .cat-tab { font-size: .65rem; padding: 2px 6px; }
     }
   </style>
+  <link href="{{ url_for('static', filename='libflix.css') }}" rel="stylesheet">
 </head>
-<body>
+<body class="page-discover">
   {% set active_tab = '' %}
   {% include "_navbar.html" %}
 
-  <main>
+  <main id="mainContent">
     <section class="discover-head">
-      <h1 class="discover-title">Search results for "{{ query }}"</h1>
+      <h1 class="discover-title">Results for “{{ query }}”</h1>
     </section>
 
     <div class="book-grid" id="bookGrid">

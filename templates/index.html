@@ -166,11 +166,13 @@
       .cat-tab { font-size: .65rem; padding: 2px 6px; }
     }
   </style>
+  <link href="{{ url_for('static', filename='libflix.css') }}" rel="stylesheet">
 </head>
-<body>
+<body class="page-home">
   {% set active_tab = 'home' if mode != 'fiction' else 'trending_fiction' %}
   {% include "_navbar.html" %}
 
+  <main id="mainContent">
   {% if hero %}
   <section class="hero">
     <div class="hero-backdrop" id="heroBackdrop" aria-hidden="true">
@@ -263,6 +265,7 @@
   <footer class="text-center text-muted py-4 small">
     Powered by Open Library &amp; libgen.li
   </footer>
+  </main>
 
   <script>
     const MODE = {{ mode | tojson }};

@@ -111,27 +111,55 @@ No API key is required. Open Library is the only discovery backend.
 
 ### Book Preview
 
-- **Async Open Library details** - description and subject tags load after the
-  preview shell renders.
-- **More Like This** - the first subject loads a horizontal similar-books shelf.
+- **Focused book spotlight** - cover, title, author, and description use a
+  responsive reading layout with a restrained cover-derived backdrop.
+- **Async Open Library details** - the description loads after the preview shell
+  renders, strips source markup, and collapses behind `Read more` on smaller
+  screens when needed.
+- **More Like This** - the first subject loads a single-row horizontal
+  similar-books shelf with the same hover quick peek used elsewhere.
 - **Hidden More Like This scrollbar** - the shelf scrolls horizontally without a
   visible scrollbar.
-- **Inline download options** - libgen download results load directly below the
-  metadata for the current title and author.
-- **Collapsible download filters** - format, sort, limit, and dedupe controls
-  stay behind a compact `Filters` button on preview pages.
-- **Send to Kindle** - users can save SMTP and Kindle email settings in
-  localStorage, then email a downloaded file to Kindle.
+- **Inline edition picker** - download candidates appear as responsive edition
+  rows with cover, title, author, publisher, format, year, size, pages, and
+  language instead of a dense table.
+- **Collapsible download filters** - format, sort, language, page size, and
+  dedupe controls share one compact `Filters` panel across preview and direct
+  download search pages.
+- **Clear actions** - every available edition has explicit format-aware Download
+  and Kindle actions; the strongest candidate is labeled `Best match`.
+- **Send to Kindle settings** - the global Settings menu opens a keyboard-safe
+  Kindle sheet with password visibility, local browser storage, and a forget
+  action.
 
 ### Download Search
 
 - **AJAX results** - download results update without a full page reload.
-- **Filters** - sort, format, limit, language, and dedupe controls update the
-  download search.
+- **Responsive edition display** - direct search uses the same scannable edition
+  rows and actions as the book preview, including two-line titles on mobile.
+- **Filters** - sort, format, page size, language, and dedupe controls update the
+  download search without exposing filter state in the URL.
 - **Deduplication** - results can be grouped by normalized title and author,
   keeping the highest-scored candidate.
 - **No visible result totals** - count summaries were removed from search and
-  preview download tables.
+  preview download lists.
+- **Compact pagination** - pagination appears only when there is more than one
+  result page.
+- **Resilient states** - timeouts and unreachable download sources produce
+  short recovery messages instead of raw backend exceptions.
+
+### Shared Interface
+
+- **Consistent dark UI system** - navigation, details, filters, edition rows,
+  settings, focus states, empty states, and notifications share one restrained
+  visual language in `static/libflix.css`.
+- **Single transition loader** - route changes use one shared LibFlix overlay;
+  local AJAX loaders remain scoped to the content they are updating.
+- **Progressive cover loading** - cover geometry stays stable while images load,
+  with lightweight placeholders and animation reserved for high-priority areas.
+- **Accessible interaction** - pages provide a skip link, named icon controls,
+  visible keyboard focus, modal focus return, scroll locking, reduced-motion
+  fallbacks, and non-selectable app chrome while content remains selectable.
 
 ## Main Routes
 
@@ -199,10 +227,12 @@ python3 app.py
 ```
 
 For UI validation, use headless Playwright unless an interactive visible browser
-is explicitly needed. Then open or test:
+is explicitly needed. Use isolated Chromium contexts and test:
 
 ```text
 http://127.0.0.1:5800
-http://127.0.0.1:5800/category/history?mode=nonfiction&book_lang=en
-http://127.0.0.1:5800/discover?q=三体&mode=fiction&book_lang=cn
+http://127.0.0.1:5800/category/history
+http://127.0.0.1:5800/fiction/cn/discover?q=三体
+http://127.0.0.1:5800/book/OL82563W
+http://127.0.0.1:5800/search?q=Harry%20Potter
 ```

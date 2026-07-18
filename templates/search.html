@@ -1,538 +1,188 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ 'zh' if book_lang == 'cn' else 'en' }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Search: {{ query }} - LibFlix</title>
+  <title>Downloads for {{ query }} - LibFlix</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <style>
-    body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
-    .navbar { background: linear-gradient(180deg, rgba(20,20,20,.9) 0, rgba(20,20,20,.5) 80%, transparent); z-index: 10; min-height: 48px; }
-    .navbar-brand { font-size: 1.3rem; font-weight: 700; color: #e50914 !important; letter-spacing: -1px; }
-    .search-bar { min-width: 0; }
-    .search-bar input { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 4px; font-size: .82rem; padding: 4px 8px; height: 30px; }
-    .search-bar input:focus { background: rgba(255,255,255,.15); border-color: #e50914; box-shadow: none; color: #fff; }
-    .search-bar input::placeholder { color: rgba(255,255,255,.4); font-size: .78rem; }
-    .search-bar button { background: #e50914; border: none; border-radius: 4px; white-space: nowrap; font-size: .78rem; padding: 4px 10px; }
-    .search-bar button:hover { background: #f40612; }
-    .cat-tabs::-webkit-scrollbar { display: none; }
-    .cat-tab { flex-shrink: 0; padding: 2px 10px; border-radius: 20px; font-size: .75rem; color: #aaa; text-decoration: none; transition: all .15s; white-space: nowrap; }
-    .cat-tab:hover { background: rgba(255,255,255,.1); color: #fff; }
-    .cat-tab.active { background: #e50914; color: #fff; }
-    @media (max-width: 992px) { .cat-tab { font-size: .7rem; padding: 2px 8px; } }
-    @media (max-width: 768px) { .cat-tab { font-size: .65rem; padding: 2px 6px; } }
-
-    #loading { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 50vh; }
-    .spinner-book { width: 60px; height: 60px; border: 4px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    #loading p { margin-top: 1rem; color: #888; font-size: .95rem; }
-    .dot-pulse { display: inline-flex; gap: 4px; }
-    .dot-pulse span { width: 6px; height: 6px; background: #e50914; border-radius: 50%; animation: pulse 1.4s ease-in-out infinite; }
-    .dot-pulse span:nth-child(2) { animation-delay: .2s; }
-    .dot-pulse span:nth-child(3) { animation-delay: .4s; }
-    @keyframes pulse { 0%,80%,100% { opacity: .2; transform: scale(.8); } 40% { opacity: 1; transform: scale(1.1); } }
-
-    #error { display: none; text-align: center; padding: 3rem 1rem; }
-    #error h4 { color: #e50914; }
-    #error p { color: #888; }
-
-    .filter-bar { background: rgba(255,255,255,.05); border-radius: 6px; padding: 10px 14px; margin-top: 10px; }
-    .filter-bar select, .filter-bar input { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.15); color: #fff; font-size: .85rem; }
-    .filter-bar select:focus, .filter-bar input:focus { border-color: #e50914; box-shadow: none; color: #fff; }
-    .filter-bar select option { background: #222; color: #fff; }
-    .filter-bar label { color: #aaa; font-size: .8rem; margin-bottom: 0; }
-    .filter-bar .btn-go { background: #e50914; border: none; font-size: .85rem; }
-    .filter-bar .btn-go:hover { background: #f40612; }
-
-    .dedup-switch { display: flex; align-items: center; gap: 8px; font-size: .85rem; color: #aaa; }
-    .dedup-switch input:checked { background-color: #e50914; border-color: #e50914; }
-
-    .result-info { font-size: .85rem; color: #888; margin: 6px 0; }
-
-    .table-wrap { overflow-x: auto; }
-    .book-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
-    .book-table th { background: rgba(255,255,255,.06); color: #aaa; font-weight: 500; padding: 8px 10px; text-align: left; white-space: nowrap; position: sticky; top: 0; }
-    .book-table td { padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,.06); vertical-align: middle; }
-    .book-table tr:hover { background: rgba(255,255,255,.03); }
-    .cover-thumb { width: 48px; height: 72px; object-fit: cover; border-radius: 3px; background: #333; opacity: 0; transition: opacity .2s ease; }
-    .cover-thumb.loaded { opacity: 1; }
-    .cover-placeholder { width: 48px; height: 72px; background: #2a2a2a; border-radius: 3px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; color: #555; }
-    .title-cell { max-width: 320px; }
-    .title-cell .t { font-weight: 600; color: #fff; }
-    .title-cell .a { font-size: .8rem; color: #888; }
-    .title-cell .p { font-size: .75rem; color: #666; }
-    .badge-epub { background: #27ae60; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: .75rem; font-weight: 600; }
-    .badge-pdf { background: #c0392b; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: .75rem; font-weight: 600; }
-    .badge-mobi { background: #8e44ad; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: .75rem; font-weight: 600; }
-    .badge-other { background: #555; color: #fff; padding: 2px 8px; border-radius: 3px; font-size: .75rem; font-weight: 600; }
-    .dl-btn { background: #27ae60; color: #fff; border: none; border-radius: 4px; padding: 4px 12px; font-size: .8rem; text-decoration: none; white-space: nowrap; }
-    .dl-btn:hover { background: #2ecc71; color: #fff; }
-
-    .pagination { gap: 2px; }
-    .pagination .page-link { background: rgba(255,255,255,.08); border: none; color: #aaa; border-radius: 3px !important; font-size: .85rem; padding: 4px 10px; }
-    .pagination .page-link:hover { background: rgba(255,255,255,.15); color: #fff; }
-    .pagination .active .page-link { background: #e50914; color: #fff; }
-    .pagination .disabled .page-link { opacity: .3; pointer-events: none; }
-    .page-ellipsis { color: #555; padding: 4px 6px; }
-
-    .no-results { text-align: center; padding: 3rem 1rem; }
-    .no-results h5 { color: #888; }
-
-    @keyframes spink { to { transform: rotate(360deg); } }
-    .kbtn { background: rgba(255,255,255,.08); border: none; color: #aaa; border-radius: 3px; padding: 4px 8px; font-size: .75rem; cursor: pointer; text-decoration: none; white-space: nowrap; }
-    .kbtn:hover { background: rgba(255,255,255,.15); color: #fff; }
-    .kbtn.ok { background: rgba(39,174,96,.2); color: #27ae60; }
-    .kbtn.sending { opacity: .5; pointer-events: none; }
-    @media (max-width: 768px) {
-      .filter-bar .row > div { margin-bottom: 4px; }
-      .title-cell { max-width: 180px; }
-    }
-  </style>
+  <link href="{{ url_for('static', filename='libflix.css') }}" rel="stylesheet">
 </head>
-<body>
+<body class="page-download-search">
   {% set active_tab = '' %}
   {% set mode = mode | default('nonfiction') %}
   {% set search_value = query %}
   {% include "_navbar.html" %}
-  <button id="settingsBtn" class="btn btn-sm" style="background:rgba(25,25,25,.92);color:#ddd;border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:8px 13px;font-size:.78rem;position:fixed;right:16px;bottom:16px;z-index:20;box-shadow:0 8px 26px rgba(0,0,0,.35)" title="Send to Kindle settings">&#x2699; Kindle</button>
 
-  <div class="px-3 px-md-4" style="max-width:1200px;margin:0 auto">
-
-    <div class="filter-bar">
-      <form id="filterForm" class="row g-2 align-items-end">
-        <input type="hidden" name="q" value="{{ query }}">
-        <div class="col-md-2 col-4">
-          <label>Sort</label>
-          <select class="form-select form-select-sm" name="sort">
-            {% for k, v in sort_options.items() %}
-            <option value="{{ k }}" {% if k == sort %}selected{% endif %}>{{ v }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="col-md-1 col-3">
-          <label>Order</label>
-          <select class="form-select form-select-sm" name="order">
-            <option value="DESC" {% if order == 'DESC' %}selected{% endif %}>DESC</option>
-            <option value="ASC" {% if order == 'ASC' %}selected{% endif %}>ASC</option>
-          </select>
-        </div>
-        <div class="col-md-1 col-3">
-          <label>Limit</label>
-          <select class="form-select form-select-sm" name="limit">
-            <option value="25" {% if limit == 25 %}selected{% endif %}>25</option>
-            <option value="50" {% if limit == 50 %}selected{% endif %}>50</option>
-            <option value="100" {% if limit == 100 %}selected{% endif %}>100</option>
-          </select>
-        </div>
-        <div class="col-md-1 col-3">
-          <label>Format</label>
-          <select class="form-select form-select-sm" name="format">
-            <option value="epub" {% if fmt == 'epub' %}selected{% endif %}>EPUB</option>
-            <option value="pdf" {% if fmt == 'pdf' %}selected{% endif %}>PDF</option>
-            <option value="mobi" {% if fmt == 'mobi' %}selected{% endif %}>MOBI</option>
-            <option value="all" {% if fmt == 'all' %}selected{% endif %}>All</option>
-          </select>
-        </div>
-        <div class="col-md-1 col-3">
-          <label>Language</label>
-          <select class="form-select form-select-sm" name="lang">
-            <option value="English" {% if lang == 'English' %}selected{% endif %}>English</option>
-            <option value="all" {% if lang == 'all' %}selected{% endif %}>All</option>
-          </select>
-        </div>
-        <div class="col-md-1 col-3 d-flex align-items-end">
-          <button type="submit" class="btn btn-go btn-sm text-white w-100">Go</button>
-        </div>
-        <div class="col-md-1 col-3 d-flex align-items-end">
-          <a href="{{ home_url(mode, book_lang) }}" class="btn btn-sm w-100" style="background:rgba(255,255,255,.1);color:#aaa">Reset</a>
-        </div>
-        <div class="col-md-3 col-6 d-flex align-items-end dedup-switch">
-          <input class="form-check-input" type="checkbox" id="dedupToggle" {% if dedup_on %}checked{% endif %}>
-          <label class="form-check-label" for="dedupToggle">Deduplicate</label>
-        </div>
-      </form>
-    </div>
-
-    <div id="loading">
-      <div class="spinner-book"></div>
-      <p>Searching libgen</p>
-    </div>
-
-    <div id="error">
-      <h4>Search Failed</h4>
-      <p id="errorMsg"></p>
-      <button class="btn btn-sm" style="background:#e50914;color:#fff;border:none" onclick="doSearch()">Retry</button>
-    </div>
-
-    <div id="results" style="display:none">
-      <div class="table-wrap">
-        <table class="book-table">
-          <thead>
-            <tr>
-              <th style="width:56px">Cover</th>
-              <th>#</th>
-              <th>Title / Author / Publisher</th>
-              <th class="text-center">Year</th>
-              <th class="text-center">Size</th>
-              <th class="text-center">Format</th>
-              <th class="text-center">Lang</th>
-              <th class="text-center" style="width:60px">DL</th>
-            </tr>
-          </thead>
-          <tbody id="resultsBody"></tbody>
-        </table>
+  <main class="download-search-page" id="mainContent">
+    <header class="download-search-head">
+      <div class="download-search-copy">
+        <h1 class="download-search-title">Downloads for “{{ query }}”</h1>
       </div>
-      <div id="pagination" class="d-flex justify-content-center mt-3"></div>
-    </div>
-  </div>
+      <button class="filter-toggle" id="filterToggle" type="button" aria-expanded="false" aria-controls="filterPanel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"></path><path d="M7 12h10"></path><path d="M10 18h4"></path></svg>
+        <span>Filters</span>
+      </button>
+    </header>
 
+    {% set filter_query = query %}
+    {% set filter_sort = sort %}
+    {% set filter_format = fmt %}
+    {% set filter_language = lang %}
+    {% set filter_limit = limit %}
+    {% set filter_dedup = dedup_on %}
+    {% include "_download_filters.html" %}
+
+    <div class="download-loader" id="downloadLoader" role="status" aria-live="polite" aria-label="Checking available editions">
+      <div class="edition-skeleton"><span class="edition-skeleton-cover"></span><span class="edition-skeleton-copy"></span></div>
+      <div class="edition-skeleton"><span class="edition-skeleton-cover"></span><span class="edition-skeleton-copy"></span></div>
+      <div class="edition-skeleton"><span class="edition-skeleton-cover"></span><span class="edition-skeleton-copy"></span></div>
+    </div>
+
+    <div class="download-error" id="downloadError" hidden role="alert">
+      <div class="download-state-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v6"></path><path d="M12 17h.01"></path></svg></div>
+      <h2 class="download-state-title">Downloads unavailable</h2>
+      <p class="download-state-copy" id="downloadErrorMessage"></p>
+      <button class="download-retry" id="downloadRetry" type="button">Try again</button>
+    </div>
+
+    <div class="download-empty" id="downloadEmpty" hidden>
+      <div class="download-state-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h9l3 3v15H6Z"></path><path d="M15 3v4h4"></path><path d="m9 16 6-6"></path><path d="m9 10 6 6"></path></svg></div>
+      <h2 class="download-state-title">No matching editions</h2>
+      <p class="download-state-copy">Change the format or language filter and check again.</p>
+    </div>
+
+    <div class="edition-list" id="resultsBody" hidden aria-live="polite"></div>
+    <nav class="download-pagination" id="downloadPagination" aria-label="Download result pages" hidden></nav>
+  </main>
+
+  <script src="{{ url_for('static', filename='download-ui.js') }}"></script>
   <script>
-    let currentState = null;
     const MODE = {{ mode | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
+    const QUERY = {{ query | tojson }};
+    const filterToggle = document.getElementById('filterToggle');
+    const filterPanel = document.getElementById('filterPanel');
+    const downloadLoader = document.getElementById('downloadLoader');
+    const downloadError = document.getElementById('downloadError');
+    const downloadEmpty = document.getElementById('downloadEmpty');
+    const resultsBody = document.getElementById('resultsBody');
+    const downloadPagination = document.getElementById('downloadPagination');
+    let currentPage = {{ page | int }};
+    let activeSearch = null;
 
-    function getParams() {
-      const f = document.getElementById('filterForm');
-      const fd = new FormData(f);
-      const dedup = document.getElementById('dedupToggle').checked ? '1' : '0';
+    function setFiltersOpen(open) {
+      filterPanel.hidden = !open;
+      filterToggle.setAttribute('aria-expanded', String(open));
+    }
+
+    filterToggle.addEventListener('click', () => setFiltersOpen(filterPanel.hidden));
+
+    function getParams(page) {
       return {
-        q: fd.get('q') || '{{ query }}',
-        sort: fd.get('sort') || '{{ sort }}',
-        order: fd.get('order') || '{{ order }}',
-        limit: fd.get('limit') || '{{ limit }}',
-        format: fd.get('format') || '{{ fmt }}',
-        lang: fd.get('lang') || '{{ lang }}',
-        dedup: dedup,
+        q: QUERY,
+        sort: document.getElementById('sortSel').value,
+        order: 'DESC',
+        limit: document.getElementById('limitSel').value,
+        format: document.getElementById('fmtSel').value,
+        lang: document.getElementById('langSel').value,
+        dedup: document.getElementById('dedupToggle').checked ? '1' : '0',
         mode: MODE,
         book_lang: BOOK_LANG,
-        page: '1'
+        page: String(page || 1),
       };
     }
 
-    function buildURL(p) {
-      return '/api/search?' + new URLSearchParams(p || getParams()).toString();
-    }
-
-    function esc(s) {
-      const d = document.createElement('div');
-      d.textContent = s || '';
-      return d.innerHTML;
-    }
-
-    function formatExt(ext) {
-      const cls = { 'epub': 'badge-epub', 'pdf': 'badge-pdf', 'mobi': 'badge-mobi' };
-      return '<span class="' + (cls[ext] || 'badge-other') + '">' + esc(ext) + '</span>';
-    }
-
-    function renderTable(data) {
-      const b = data.books;
-
-      let html = '';
-      for (const book of b) {
-        const titleShort = book.title.length > 100 ? esc(book.title.slice(0,100)) + '...' : esc(book.title);
-        const authorShort = book.author.length > 60 ? esc(book.author.slice(0,60)) + '...' : esc(book.author);
-        const pubShort = book.publisher && book.publisher.length > 50 ? esc(book.publisher.slice(0,50)) + '...' : esc(book.publisher);
-        const langShort = book.language.length > 8 ? esc(book.language.slice(0,8)) : esc(book.language);
-        const dlLink = book.md5 ? '<a href="/download/' + esc(book.md5) + '?filename=' + encodeURIComponent(book.title.replace(/[^a-zA-Z0-9 ]/g,'').slice(0,50)) + '.' + esc(book.ext) + '" class="dl-btn" title="Download ' + esc(book.ext) + '">\u2B07</a>' : '<span style="color:#555">N/A</span>';
-
-        html += '<tr>';
-        html += '<td class="text-center">';
-        if (book.cover_url) {
-          html += '<img class="cover-thumb" src="' + esc(book.cover_url) + '" alt="cover" loading="lazy" decoding="async" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
-          html += '<div class="cover-placeholder" style="display:none">?</div>';
-        } else {
-          html += '<div class="cover-placeholder">?</div>';
-        }
-        html += '</td>';
-        html += '<td class="text-muted text-center" style="color:#666">' + book.idx + '</td>';
-        html += '<td class="title-cell"><div class="t">' + titleShort + '</div>';
-        if (book.author) html += '<div class="a">' + authorShort + '</div>';
-        if (book.publisher) html += '<div class="p">' + pubShort + '</div>';
-        html += '</td>';
-        html += '<td class="text-center" style="color:#aaa">' + esc(book.year) + '</td>';
-        html += '<td class="text-center" style="color:#aaa">' + esc(book.size) + '</td>';
-        html += '<td class="text-center">' + formatExt(book.ext) + '</td>';
-        html += '<td class="text-center" style="color:#aaa">' + langShort + '</td>';
-        html += '<td class="text-center">' + dlLink + '</td>';
-        html += '</tr>';
-      }
-
-      if (b.length === 0) {
-        html = '<tr><td colspan="8" class="text-center" style="color:#888;padding:2rem">No matching results.</td></tr>';
-      }
-
-      document.getElementById('resultsBody').innerHTML = html;
-    }
-
-    function renderPagination(data) {
-      const q = encodeURIComponent(data.query);
-      const sort = data.sort;
-      const order = data.order;
-      const limit = data.limit;
-      const page = data.page;
-      const total_pages = data.total_pages;
-      const fmt = data.format;
-      const lang = data.lang;
-      const dedup = data.dedup_on ? '1' : '0';
-      if (total_pages <= 1) {
-        document.getElementById('pagination').innerHTML = '';
-        return;
-      }
-      const base = '/search?q=' + q + '&sort=' + sort + '&order=' + order + '&limit=' + limit + '&format=' + fmt + '&lang=' + lang + '&dedup=' + dedup + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG);
-
-      let html = '<ul class="pagination">';
-
-      html += '<li class="page-item' + (page <= 1 ? ' disabled' : '') + '">';
-      html += '<a class="page-link" href="' + base + '&page=' + (page - 1) + '" data-page="' + (page - 1) + '">Prev</a></li>';
-
-      for (let p = 1; p <= total_pages; p++) {
-        if (p === page) {
-          html += '<li class="page-item active"><span class="page-link">' + p + '</span></li>';
-        } else if (p <= 3 || p > total_pages - 3 || (p >= page - 2 && p <= page + 2)) {
-          html += '<li class="page-item"><a class="page-link" href="' + base + '&page=' + p + '" data-page="' + p + '">' + p + '</a></li>';
-        } else if (p === 4 || p === total_pages - 3) {
-          html += '<li class="page-item disabled"><span class="page-link" style="background:transparent;color:#555">...</span></li>';
-        }
-      }
-
-      html += '<li class="page-item' + (page >= total_pages ? ' disabled' : '') + '">';
-      html += '<a class="page-link" href="' + base + '&page=' + (page + 1) + '" data-page="' + (page + 1) + '">Next</a></li>';
-
-      html += '</ul>';
-      document.getElementById('pagination').innerHTML = html;
-
-      document.querySelectorAll('#pagination a[data-page]').forEach(a => {
-        a.addEventListener('click', function(e) {
-          e.preventDefault();
-          const p = this.dataset.page;
-          if (p && p !== String(page)) {
-            const params = getParams();
-            params.page = p;
-            fetchAndRender(params);
-          }
-        });
-      });
+    function showDownloadState(state, message) {
+      downloadLoader.hidden = state !== 'loading';
+      downloadError.hidden = state !== 'error';
+      downloadEmpty.hidden = state !== 'empty';
+      resultsBody.hidden = state !== 'results';
+      if (state !== 'results') downloadPagination.hidden = true;
+      if (state === 'error') document.getElementById('downloadErrorMessage').textContent = message;
     }
 
     function showResults(data) {
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('error').style.display = 'none';
-      document.getElementById('results').style.display = 'block';
-      renderTable(data);
-      renderPagination(data);
-    }
-
-    function showError(msg) {
-      document.getElementById('loading').style.display = 'none';
-      document.getElementById('error').style.display = 'block';
-      document.getElementById('errorMsg').textContent = msg;
-    }
-
-    function fetchAndRender(params) {
-      document.getElementById('loading').style.display = 'flex';
-      document.getElementById('error').style.display = 'none';
-      document.getElementById('results').style.display = 'none';
-
-      const url = '/api/search?' + new URLSearchParams(params).toString();
-      history.replaceState(null, '', '/search?' + new URLSearchParams(params).toString());
-
-      fetch(url)
-        .then(r => r.json())
-        .then(data => {
-          if (data.success) {
-            showResults(data);
-          } else {
-            showError(data.error || 'Unknown error');
-          }
-        })
-        .catch(err => {
-          showError(err.message || 'Network error');
-        });
-    }
-
-    function doSearch() {
-      fetchAndRender(getParams());
-    }
-
-    document.getElementById('filterForm').addEventListener('submit', function(e) {
-      e.preventDefault();
-      doSearch();
-    });
-
-    document.getElementById('dedupToggle').addEventListener('change', function() {
-      doSearch();
-    });
-
-    doSearch();
-  </script>
-
-  <div id="kindleModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:9998;align-items:center;justify-content:center">
-    <div style="background:#1e1e1e;border-radius:8px;padding:24px;max-width:440px;width:90%;color:#fff;margin:40px auto">
-      <h5 style="margin:0 0 4px;font-weight:600">Send to Kindle</h5>
-      <p style="color:#888;font-size:.8rem;margin-bottom:16px">Set up once. Your settings are saved in this browser.</p>
-      <div class="mb-2"><label style="display:block;font-size:.8rem;color:#aaa;margin-bottom:2px">Your <strong>@kindle.com</strong> email</label>
-      <input id="ke_kindle" class="form-control form-control-sm" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff" placeholder="you@kindle.com"></div>
-      <hr style="border-color:rgba(255,255,255,.08);margin:14px 0">
-      <p style="color:#888;font-size:.75rem;margin-bottom:10px">Gmail works best. Use an <a href="https://myaccount.google.com/apppasswords" target="_blank" style="color:#e50914">App Password</a> (not your regular password). Add the sender to <a href="https://www.amazon.com/hz/mycd/digital-console/device-list" target="_blank" style="color:#e50914">Amazon's approved list</a>.</p>
-      <div class="mb-2"><label style="display:block;font-size:.8rem;color:#aaa;margin-bottom:2px">SMTP Host</label>
-      <input id="ke_host" class="form-control form-control-sm" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff" value="smtp.gmail.com"></div>
-      <div class="row g-2 mb-2">
-        <div class="col-4"><label style="display:block;font-size:.8rem;color:#aaa;margin-bottom:2px">Port</label>
-        <input id="ke_port" class="form-control form-control-sm" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff" value="587"></div>
-        <div class="col-8"><label style="display:block;font-size:.8rem;color:#aaa;margin-bottom:2px">Sender email</label>
-        <input id="ke_sender" class="form-control form-control-sm" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff" placeholder="you@gmail.com"></div>
-      </div>
-      <div class="mb-3"><label style="display:block;font-size:.8rem;color:#aaa;margin-bottom:2px">App password</label>
-      <input id="ke_pass" type="password" class="form-control form-control-sm" style="background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);color:#fff" placeholder="16-char Gmail app password"></div>
-      <div class="d-flex gap-2">
-        <button class="btn btn-sm flex-grow-1" style="background:#e50914;color:#fff;border:none" onclick="saveKindleSettings()">Save Settings</button>
-        <button class="btn btn-sm" style="background:rgba(255,255,255,.08);color:#aaa;border:none" onclick="closeKindleModal()">Cancel</button>
-      </div>
-      <p id="ke_status" style="margin-top:8px;font-size:.8rem;color:#888"></p>
-    </div>
-  </div>
-
-  <div id="kindleSending" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.7);z-index:9997;align-items:center;justify-content:center">
-    <div style="text-align:center;color:#fff">
-      <div style="width:40px;height:40px;border:3px solid rgba(229,9,20,.2);border-top-color:#e50914;border-radius:50%;animation:spink .8s linear infinite;margin:0 auto 12px"></div>
-      <p style="font-size:.9rem;color:#aaa">Sending to Kindle...</p>
-    </div>
-  </div>
-
-  <script>
-    function getKindleSettings() {
-      try {
-        const raw = localStorage.getItem('libflix_kindle');
-        return raw ? JSON.parse(raw) : null;
-      } catch { return null; }
-    }
-
-    function saveKindleSettings() {
-      const settings = {
-        kindle: document.getElementById('ke_kindle').value.trim(),
-        host: document.getElementById('ke_host').value.trim(),
-        port: document.getElementById('ke_port').value.trim(),
-        sender: document.getElementById('ke_sender').value.trim(),
-        pass: document.getElementById('ke_pass').value,
-      };
-      if (!settings.kindle || !settings.host || !settings.sender || !settings.pass) {
-        document.getElementById('ke_status').textContent = 'All fields required.';
+      if (!data.books.length) {
+        showDownloadState('empty');
         return;
       }
-      localStorage.setItem('libflix_kindle', JSON.stringify(settings));
-      document.getElementById('ke_status').textContent = '\u2713 Saved!';
-      document.getElementById('ke_status').style.color = '#27ae60';
-      setTimeout(closeKindleModal, 800);
+      window.LibFlixDownloads.renderEditions(resultsBody, data.books);
+      showDownloadState('results');
+      window.LibFlixDownloads.renderPagination(downloadPagination, data.page, data.total_pages, page => {
+        fetchResults(page);
+        document.querySelector('.download-search-head').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
     }
 
-    function openKindleModal() {
-      const s = getKindleSettings();
-      document.getElementById('kindleModal').style.display = 'flex';
-      document.getElementById('ke_status').textContent = '';
-      document.getElementById('ke_status').style.color = '#888';
-      if (s) {
-        document.getElementById('ke_kindle').value = s.kindle || '';
-        document.getElementById('ke_host').value = s.host || 'smtp.gmail.com';
-        document.getElementById('ke_port').value = s.port || '587';
-        document.getElementById('ke_sender').value = s.sender || '';
-        document.getElementById('ke_pass').value = '';
-      }
+    function fetchResults(page) {
+      currentPage = page || 1;
+      if (activeSearch) activeSearch.abort();
+      activeSearch = new AbortController();
+      showDownloadState('loading');
+      const params = getParams(currentPage);
+      history.replaceState(null, '', '/search?q=' + encodeURIComponent(QUERY));
+      fetch('/api/search?' + new URLSearchParams(params), { signal: activeSearch.signal })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) showResults(data);
+          else showDownloadState('error', window.LibFlixDownloads.friendlyError(data.error));
+        })
+        .catch(error => {
+          if (error.name !== 'AbortError') showDownloadState('error', window.LibFlixDownloads.friendlyError(error.message));
+        })
+        .finally(() => { activeSearch = null; });
     }
 
-    function closeKindleModal() {
-      document.getElementById('kindleModal').style.display = 'none';
-    }
-
-    document.getElementById('settingsBtn').addEventListener('click', openKindleModal);
-    document.getElementById('kindleModal').addEventListener('click', function(e) {
-      if (e.target === this) closeKindleModal();
+    document.getElementById('filterForm').addEventListener('submit', event => {
+      event.preventDefault();
+      setFiltersOpen(false);
+      fetchResults(1);
     });
+    document.getElementById('downloadRetry').addEventListener('click', () => fetchResults(currentPage));
 
     let sendingMd5 = null;
-    function sendToKindle(md5, title, ext) {
-      const s = getKindleSettings();
-      if (!s) { openKindleModal(); return; }
+    window.sendToKindle = function (md5, title, extension, button) {
+      const settings = window.getKindleSettings?.();
+      if (!settings) {
+        window.openKindleModal?.();
+        window.LibFlixNotify?.('Add Kindle delivery settings first');
+        return;
+      }
       if (sendingMd5) return;
       sendingMd5 = md5;
-      document.getElementById('kindleSending').style.display = 'flex';
-
-      const btn = document.querySelector(`.kbtn[data-md5="${md5}"]`);
-      if (btn) btn.classList.add('sending');
-
+      button?.classList.add('sending');
+      button?.setAttribute('aria-busy', 'true');
       fetch('/api/sendtokindle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          md5, title, ext,
-          kindle_email: s.kindle,
-          smtp_host: s.host,
-          smtp_port: parseInt(s.port) || 587,
-          smtp_user: s.sender,
-          smtp_pass: s.pass,
-          sender_email: s.sender,
+          md5,
+          title,
+          ext: extension,
+          kindle_email: settings.kindle,
+          smtp_host: settings.host,
+          smtp_port: parseInt(settings.port, 10) || 587,
+          smtp_user: settings.sender,
+          smtp_pass: settings.pass,
+          sender_email: settings.sender,
+        }),
+      })
+        .then(response => response.json())
+        .then(data => {
+          if (!data.success) throw new Error(data.error || 'Send failed');
+          button?.classList.add('sent');
+          if (button) button.innerHTML = window.LibFlixDownloads.checkIcon + '<span>Sent</span>';
+          window.LibFlixNotify?.('Sent to Kindle', 'success');
         })
-      })
-      .then(r => r.json())
-      .then(data => {
-        document.getElementById('kindleSending').style.display = 'none';
-        sendingMd5 = null;
-        if (btn) btn.classList.remove('sending');
-        if (data.success) {
-          if (btn) { btn.textContent = '\u2713 Sent'; btn.classList.add('ok'); }
-        } else {
-          alert('Send failed: ' + (data.error || 'Unknown error'));
-        }
-      })
-      .catch(err => {
-        document.getElementById('kindleSending').style.display = 'none';
-        sendingMd5 = null;
-        if (btn) btn.classList.remove('sending');
-        alert('Send failed: ' + err.message);
-      });
-    }
-
-    // Override renderTable to add Kindle button
-    const origRenderTable = renderTable;
-    renderTable = function(data) {
-      const b = data.books;
-
-      let html = '';
-      for (const book of b) {
-        const titleShort = book.title.length > 100 ? esc(book.title.slice(0,100)) + '...' : esc(book.title);
-        const authorShort = book.author.length > 60 ? esc(book.author.slice(0,60)) + '...' : esc(book.author);
-        const pubShort = book.publisher && book.publisher.length > 50 ? esc(book.publisher.slice(0,50)) + '...' : esc(book.publisher);
-        const langShort = book.language.length > 8 ? esc(book.language.slice(0,8)) : esc(book.language);
-        const dlLink = book.md5 ? '<a href="/download/' + esc(book.md5) + '?filename=' + encodeURIComponent(book.title.replace(/[^a-zA-Z0-9 ]/g,'').slice(0,50)) + '.' + esc(book.ext) + '" class="dl-btn" title="Download ' + esc(book.ext) + '">\u2B07</a>' : '<span style="color:#555">N/A</span>';
-        const kLink = book.md5 ? '<button class="kbtn" data-md5="' + book.md5 + '" onclick="sendToKindle(\'' + book.md5 + '\',\'' + esc(book.title).replace(/'/g,"\\'") + '\',\'' + esc(book.ext) + '\')" title="Send to Kindle">\u{1F4DA}</button>' : '';
-
-        html += '<tr>';
-        html += '<td class="text-center">';
-        if (book.cover_url) {
-          html += '<img class="cover-thumb" src="' + esc(book.cover_url) + '" alt="cover" loading="lazy" decoding="async" onload="this.classList.add(\'loaded\')" onerror="this.style.display=\'none\';this.nextElementSibling.style.display=\'flex\'">';
-          html += '<div class="cover-placeholder" style="display:none">?</div>';
-        } else {
-          html += '<div class="cover-placeholder">?</div>';
-        }
-        html += '</td>';
-        html += '<td class="text-muted text-center" style="color:#666">' + book.idx + '</td>';
-        html += '<td class="title-cell"><div class="t">' + titleShort + '</div>';
-        if (book.author) html += '<div class="a">' + authorShort + '</div>';
-        if (book.publisher) html += '<div class="p">' + pubShort + '</div>';
-        html += '</td>';
-        html += '<td class="text-center" style="color:#aaa">' + esc(book.year) + '</td>';
-        html += '<td class="text-center" style="color:#aaa">' + esc(book.size) + '</td>';
-        html += '<td class="text-center">' + formatExt(book.ext) + '</td>';
-        html += '<td class="text-center" style="color:#aaa">' + langShort + '</td>';
-        html += '<td class="text-center" style="white-space:nowrap">' + dlLink + ' ' + kLink + '</td>';
-        html += '</tr>';
-      }
-
-      if (b.length === 0) {
-        html = '<tr><td colspan="8" class="text-center" style="color:#888;padding:2rem">No matching results.</td></tr>';
-      }
-
-      document.getElementById('resultsBody').innerHTML = html;
+        .catch(error => window.LibFlixNotify?.('Kindle delivery failed: ' + error.message, 'error'))
+        .finally(() => {
+          sendingMd5 = null;
+          button?.classList.remove('sending');
+          button?.removeAttribute('aria-busy');
+        });
     };
+
+    fetchResults(currentPage);
   </script>
 </body>
 </html>

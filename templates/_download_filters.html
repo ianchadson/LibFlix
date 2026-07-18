@@ -1,0 +1,44 @@
+<div class="download-filter-panel" id="filterPanel" hidden>
+  <form class="download-filter-grid" id="filterForm">
+    {% if filter_query is defined %}<input type="hidden" name="q" value="{{ filter_query }}">{% endif %}
+    <div class="download-filter-field">
+      <label for="sortSel">Sort</label>
+      <select id="sortSel" name="sort">
+        <option value="y" {% if filter_sort == 'y' %}selected{% endif %}>Newest year</option>
+        <option value="time_added" {% if filter_sort == 'time_added' %}selected{% endif %}>Recently added</option>
+        <option value="filesize" {% if filter_sort == 'filesize' %}selected{% endif %}>File size</option>
+        <option value="title" {% if filter_sort == 'title' %}selected{% endif %}>Title</option>
+        <option value="author" {% if filter_sort == 'author' %}selected{% endif %}>Author</option>
+      </select>
+    </div>
+    <div class="download-filter-field">
+      <label for="fmtSel">Format</label>
+      <select id="fmtSel" name="format">
+        <option value="all" {% if filter_format == 'all' %}selected{% endif %}>All formats</option>
+        <option value="epub" {% if filter_format == 'epub' %}selected{% endif %}>EPUB</option>
+        <option value="pdf" {% if filter_format == 'pdf' %}selected{% endif %}>PDF</option>
+        <option value="mobi" {% if filter_format == 'mobi' %}selected{% endif %}>MOBI</option>
+      </select>
+    </div>
+    <div class="download-filter-field">
+      <label for="langSel">Language</label>
+      <select id="langSel" name="lang">
+        <option value="English" {% if filter_language == 'English' %}selected{% endif %}>English</option>
+        <option value="all" {% if filter_language == 'all' %}selected{% endif %}>All languages</option>
+      </select>
+    </div>
+    <div class="download-filter-field">
+      <label for="limitSel">Per page</label>
+      <select id="limitSel" name="limit">
+        <option value="25" {% if filter_limit == 25 %}selected{% endif %}>25</option>
+        <option value="50" {% if filter_limit == 50 %}selected{% endif %}>50</option>
+        <option value="100" {% if filter_limit == 100 %}selected{% endif %}>100</option>
+      </select>
+    </div>
+    <label class="download-filter-check" for="dedupToggle">
+      <input type="checkbox" id="dedupToggle" name="dedup" {% if filter_dedup %}checked{% endif %}>
+      <span>Remove duplicates</span>
+    </label>
+    <button class="filter-apply" id="applyBtn" type="submit">Apply</button>
+  </form>
+</div>

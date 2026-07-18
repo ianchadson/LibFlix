@@ -117,7 +117,7 @@
   .quick-peek-loading { margin-top:10px; display:flex; align-items:center; gap:8px; color:rgba(255,255,255,.56); font-size:.74rem; }
   .quick-peek-spinner { width:15px; height:15px; border-radius:999px; border:2px solid rgba(229,9,20,.2); border-top-color:#e50914; animation:appSpin .72s linear infinite; }
   @keyframes appSpin { to { transform:rotate(360deg); } }
-  @keyframes appPageIn { from { opacity:.55; transform:translateY(3px); } to { opacity:1; transform:none; } }
+  @keyframes appPageIn { from { opacity:.55; } to { opacity:1; } }
   @media (prefers-reduced-motion: reduce) {
     body { animation:none; }
     .app-transition, .app-transition-core { transition:none; }
@@ -152,6 +152,7 @@
   }
 </style>
 {% set nav_mode = mode | default('nonfiction') %}
+<a class="skip-link" href="#mainContent">Skip to content</a>
 <nav class="navbar navbar-dark lib-nav">
   <div class="lib-nav-shell">
     <div class="lib-nav-main">
@@ -239,7 +240,7 @@
     <div class="kindle-card-head">
       <div>
         <h2 class="kindle-card-title" id="kindleModalTitle">Send to Kindle</h2>
-        <p class="kindle-card-sub">Save your Kindle delivery and SMTP details in this browser.</p>
+        <p class="kindle-card-sub">Your delivery details stay in this browser.</p>
       </div>
       <button class="kindle-close" type="button" onclick="closeKindleModal()" aria-label="Close Kindle settings">×</button>
     </div>
@@ -264,7 +265,12 @@
       </div>
       <div class="kindle-field">
         <label for="ke_pass">App password</label>
-        <input id="ke_pass" type="password" autocomplete="new-password" placeholder="16-character app password">
+        <div class="kindle-password-wrap">
+          <input id="ke_pass" type="password" autocomplete="new-password" placeholder="16-character app password">
+          <button class="kindle-password-toggle" id="kindlePasswordToggle" type="button" aria-label="Show app password" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+          </button>
+        </div>
       </div>
       <div class="kindle-hint">
         Gmail works best with an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a>. Add the sender email to Amazon's approved personal document list.
@@ -272,11 +278,13 @@
       <div class="kindle-actions">
         <button class="kindle-primary" type="button" onclick="saveKindleSettings()">Save settings</button>
         <button class="kindle-secondary" type="button" onclick="closeKindleModal()">Cancel</button>
+        <button class="kindle-forget" id="kindleForget" type="button">Forget</button>
       </div>
       <p class="kindle-status" id="ke_status"></p>
     </div>
   </div>
 </div>
+<div class="app-toast" id="appToast" role="status" aria-live="polite" aria-atomic="true"></div>
 <script>
   (() => {
     const TRANSITION_NAV_DELAY = 60;
@@ -423,6 +431,10 @@
       setSettingsOpen(!settingsPanel?.classList.contains('open'));
     });
     const kindleSettingsButton = document.getElementById('navKindleSettings');
+    const kindleModal = document.getElementById('kindleModal');
+    const kindlePasswordToggle = document.getElementById('kindlePasswordToggle');
+    const kindleForget = document.getElementById('kindleForget');
+    let modalReturnFocus = null;
     const getKindleSettings = () => {
       try {
         const raw = localStorage.getItem('libflix_kindle');
@@ -439,21 +451,28 @@
     };
     window.getKindleSettings = getKindleSettings;
     window.openKindleModal = () => {
-      const modal = document.getElementById('kindleModal');
-      if (!modal) return;
+      if (!kindleModal) return;
       const settings = getKindleSettings();
-      modal.style.top = window.scrollY + 'px';
-      modal.classList.add('open');
+      modalReturnFocus = document.activeElement;
+      kindleModal.classList.add('open');
+      document.body.classList.add('modal-open');
+      kindleForget?.classList.toggle('visible', Boolean(settings));
       setKindleStatus('');
       document.getElementById('ke_kindle').value = settings?.kindle || '';
       document.getElementById('ke_host').value = settings?.host || 'smtp.gmail.com';
       document.getElementById('ke_port').value = settings?.port || '587';
       document.getElementById('ke_sender').value = settings?.sender || '';
       document.getElementById('ke_pass').value = '';
-      window.setTimeout(() => document.getElementById('ke_kindle')?.focus({ preventScroll: true }), 80);
+      document.getElementById('ke_pass').type = 'password';
+      kindlePasswordToggle?.setAttribute('aria-pressed', 'false');
+      kindlePasswordToggle?.setAttribute('aria-label', 'Show app password');
+      document.getElementById('ke_kindle')?.focus({ preventScroll: true });
     };
     window.closeKindleModal = () => {
-      document.getElementById('kindleModal')?.classList.remove('open');
+      kindleModal?.classList.remove('open');
+      document.body.classList.remove('modal-open');
+      if (modalReturnFocus instanceof HTMLElement) modalReturnFocus.focus({ preventScroll: true });
+      modalReturnFocus = null;
     };
     window.saveKindleSettings = () => {
       const settings = {
@@ -469,16 +488,46 @@
       }
       localStorage.setItem('libflix_kindle', JSON.stringify(settings));
       setKindleStatus('Saved.', '#35d07f');
+      kindleForget?.classList.add('visible');
       window.setTimeout(window.closeKindleModal, 650);
     };
+    window.clearKindleSettings = () => {
+      localStorage.removeItem('libflix_kindle');
+      document.getElementById('ke_kindle').value = '';
+      document.getElementById('ke_host').value = 'smtp.gmail.com';
+      document.getElementById('ke_port').value = '587';
+      document.getElementById('ke_sender').value = '';
+      document.getElementById('ke_pass').value = '';
+      kindleForget?.classList.remove('visible');
+      setKindleStatus('Settings removed.', '#d4aa55');
+    };
+    kindlePasswordToggle?.addEventListener('click', () => {
+      const input = document.getElementById('ke_pass');
+      const show = input?.type === 'password';
+      if (input) input.type = show ? 'text' : 'password';
+      kindlePasswordToggle.setAttribute('aria-pressed', String(show));
+      kindlePasswordToggle.setAttribute('aria-label', show ? 'Hide app password' : 'Show app password');
+    });
+    kindleForget?.addEventListener('click', window.clearKindleSettings);
     kindleSettingsButton?.addEventListener('click', event => {
       event.stopPropagation();
       setSettingsOpen(false);
       window.openKindleModal();
     });
-    document.getElementById('kindleModal')?.addEventListener('click', event => {
+    kindleModal?.addEventListener('click', event => {
       if (event.target === event.currentTarget) window.closeKindleModal();
     });
+    const appToast = document.getElementById('appToast');
+    let toastTimer = null;
+    window.LibFlixNotify = (message, type = '') => {
+      if (!appToast) return;
+      if (toastTimer) window.clearTimeout(toastTimer);
+      appToast.textContent = message || '';
+      appToast.className = 'app-toast visible' + (type ? ' ' + type : '');
+      toastTimer = window.setTimeout(() => {
+        appToast.classList.remove('visible');
+      }, 3200);
+    };
     document.addEventListener('click', event => {
       const target = event.target;
       if (searchForm && !searchForm.contains(target) && !searchInput?.value.trim()) setSearchOpen(false);
@@ -517,8 +566,8 @@
         '<div class="quick-peek-title">' + truncate(title, 92) + '</div>' +
         (author ? '<div class="quick-peek-author">' + truncate(author, 70) + '</div>' : '') +
         (state === 'loading'
-          ? '<div class="quick-peek-loading"><span class="quick-peek-spinner" aria-hidden="true"></span><span>Loading Open Library details</span></div>'
-          : '<div class="quick-peek-desc">' + (desc ? truncate(desc, 760) : 'No Open Library description available yet.') + '</div>');
+          ? '<div class="quick-peek-loading"><span class="quick-peek-spinner" aria-hidden="true"></span><span>Loading details</span></div>'
+          : '<div class="quick-peek-desc">' + (desc ? truncate(desc, 760) : 'No description available yet.') + '</div>');
     };
     const positionQuickPeek = (link, pointer = quickPeekPointer) => {
       const rect = link.getBoundingClientRect();
@@ -531,8 +580,8 @@
       let top = anchorY + 14;
       if (top + peekRect.height > window.innerHeight - 14) top = anchorY - peekRect.height - 14;
       top = Math.max(14, top);
-      quickPeek.style.left = (left + window.scrollX) + 'px';
-      quickPeek.style.top = (top + window.scrollY) + 'px';
+      quickPeek.style.left = left + 'px';
+      quickPeek.style.top = top + 'px';
     };
     const showQuickPeek = (link, pointer) => {
       const card = link.querySelector('.book-card');

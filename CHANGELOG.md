@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-07-17 - Interface and download experience overhaul
+
+### Reworked book and download surfaces
+
+- Rebuilt book previews around a responsive cover-and-metadata spotlight with a
+  cover-derived backdrop, readable long titles, async description cleanup, and
+  mobile `Read more` clamping.
+- Replaced the dense download tables on book previews and direct search with a
+  shared responsive edition list.
+- Added cover, title, author, publisher, format, year, size, page, and language
+  hierarchy to each edition while keeping the primary actions easy to scan.
+- Added format-aware Download labels, a dedicated Kindle action, a `Best match`
+  marker, stable cover placeholders, and two-line mobile edition titles.
+- Hid download pagination when only one page exists and replaced raw download
+  source failures with short timeout/network recovery states.
+- Consolidated preview and direct-search filters into one collapsible partial
+  and kept direct-search URLs limited to the actual query.
+
+### Improved shared application UI
+
+- Added a shared visual system for navigation, cards, details, filters, edition
+  rows, settings, focus states, empty states, and toast feedback.
+- Moved Kindle configuration into the global Settings menu and redesigned it as
+  a responsive sheet with password visibility, local persistence, focus return,
+  body scroll locking, and a forget action.
+- Restored More Like This as a single horizontal shelf with hidden scrollbars,
+  hover-only card metadata, and the shared cursor-anchored quick peek.
+- Matched the category heading-to-grid gap to homepage shelves while preserving
+  the centered category grid.
+- Removed provider-specific quick-peek loading copy and removed dangling source
+  link labels from book descriptions.
+- Removed body transforms from the page-entry fade so fixed modals, quick peek,
+  and transition overlays stay attached to the viewport after scrolling.
+
+### Reduced rendering work
+
+- Replaced hundreds of offscreen shelf shimmer animations with static cover
+  placeholders while retaining focused loading feedback for active surfaces.
+- Kept stable card, cover, hero, toolbar, and edition dimensions to avoid layout
+  shift during async image and result loading.
+- Added shared reduced-motion handling and maintained one route-transition
+  loader instead of stacking page-level loading overlays.
+
+### Verification
+
+- Added isolated headless Chromium coverage for desktop and mobile layouts,
+  overflow, duplicate IDs, control names, image alternatives, quick-peek bounds,
+  category alignment, edition actions, filter state, Kindle focus, description
+  clamping, clean URLs, and console/request failures.
+
 ## 2026-07-05 - Hero, quick peek, and app polish
 
 ### Hardened the homepage hero

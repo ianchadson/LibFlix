@@ -55,11 +55,13 @@
       .cat-tab { font-size: .7rem; padding: 2px 8px; }
     }
   </style>
+  <link href="{{ url_for('static', filename='libflix.css') }}" rel="stylesheet">
 </head>
-<body>
+<body class="page-category">
   {% set active_tab = topic %}
   {% include "_navbar.html" %}
 
+  <main id="mainContent">
   <div class="page-title">{{ shelf.name }}</div>
 
   <div class="book-grid" id="bookGrid">
@@ -68,7 +70,7 @@
     {% endfor %}
   </div>
   {% if not shelf.books %}
-  <div style="text-align:center;padding:1rem 3rem 2rem;color:#666;font-style:italic" id="emptyState">No books loaded yet.</div>
+  <div class="empty-state" id="emptyState">No books are available here yet.</div>
   {% endif %}
 
   <div id="scrollSentinel" class="scroll-sentinel" aria-hidden="true"></div>
@@ -79,6 +81,7 @@
   <footer class="text-center text-muted py-4 small">
     Powered by Open Library &amp; libgen.li
   </footer>
+  </main>
 
   <script>
     const TOPIC = {{ topic | tojson }};

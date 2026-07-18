@@ -89,9 +89,10 @@ Browser requests /book/OL3431878W
   -> Flask resolves /works/OL3431878W through Open Library
   -> Flask renders book.html with title, author, cover, and work key
   -> JS fetches /api/book?ol_key=...&book_lang=...
-  -> description and subject tags render asynchronously
+  -> cleaned description renders asynchronously
   -> first subject triggers /api/similar
   -> JS fetches /api/search for download options
+  -> shared download-ui.js renders responsive edition rows
 ```
 
 Legacy `/preview?...&ol_key=/works/...` URLs redirect to the matching clean
@@ -100,9 +101,13 @@ book route and drop title, author, cover, mode, and language query noise.
 Important behavior:
 
 - `/api/book` accepts Open Library work keys only.
-- Similar books are Open Library subject searches.
+- Similar books are Open Library subject searches; subjects remain internal and
+  are not rendered as chips in the preview UI.
 - The More Like This shelf hides horizontal scrollbars.
+- More Like This uses the shared card and quick-peek behavior.
+- Long descriptions clamp on compact screens and can be expanded in place.
 - Download result count summaries are hidden.
+- A single result page has no pagination controls.
 
 ### Download Search (`GET /search`)
 
@@ -110,13 +115,18 @@ Important behavior:
 Browser requests /search?q=...
   -> Flask renders search.html shell
   -> JS calls /api/search with filters
-  -> libgen results render in a table
+  -> shared download-ui.js renders responsive edition rows
   -> user can download or send to Kindle
 ```
 
 This is intentionally separate from `/discover`. The global navbar search is
 for discovery; download search is available from previews and direct `/search`
 URLs.
+
+The preview and direct-search pages share `_download_filters.html`,
+`static/download-ui.js`, and the edition styles in `static/libflix.css`. Filter
+state is sent to `/api/search` but direct-search history keeps only `q`, avoiding
+URLs full of implementation parameters.
 
 ## Backend Components
 
@@ -304,14 +314,22 @@ the SMTP credentials supplied by the browser.
 
 | Template | Responsibility |
 |---|---|
-| `_navbar.html` | Shared nav, wide-screen category tabs, expandable discovery search, expandable mode/language settings |
+| `_navbar.html` | Shared nav, category tabs, expandable discovery search/settings, Kindle sheet, transition overlay, toast, quick peek |
 | `_book_card.html` | Shared card link, cover, placeholder, hover/focus metadata |
+| `_download_filters.html` | Shared collapsible download filter form |
 | `index.html` | Fixed-height hero, cover-stack carousel, homepage shelves, horizontal shelf infinite scroll |
 | `category.html` | Category grid and vertical infinite scroll |
 | `discover.html` | Open Library discovery result cards and vertical infinite scroll |
-| `book.html` | Preview metadata, similar shelf, download results, Kindle modal |
-| `search.html` | Direct download search page and Kindle modal |
+| `book.html` | Preview spotlight, async description, similar shelf, inline edition results |
+| `search.html` | Direct download edition search page |
 | `results.html` | Older server-rendered download table fallback |
+
+Shared frontend assets:
+
+| Asset | Responsibility |
+|---|---|
+| `static/libflix.css` | App tokens, responsive layout, navigation, cards, preview, filters, editions, modal, focus and reduced-motion states |
+| `static/download-ui.js` | Edition rendering, format-aware actions, pagination, notifications, and friendly error mapping |
 
 ## Frontend Interaction Details
 
@@ -323,7 +341,7 @@ behavior.
 
 The collapsed search and settings controls are icon-only. Search expands on
 focus or click, then submits to `/discover`; settings expands to reveal the
-fiction/non-fiction and EN/CN choices.
+fiction/non-fiction and EN/CN choices plus Kindle delivery settings.
 
 The navbar exposes:
 
@@ -335,6 +353,15 @@ Internal links and forms call `showTransition()` before navigation where the
 browser can do so safely. This keeps slow Open Library and libgen-backed pages
 feeling like an app transition rather than a blank page wait. Legacy result
 redirects also use the shared loader when available.
+
+The page-entry animation fades opacity only. It deliberately does not transform
+`body`, because a transformed page changes the containing block for fixed
+overlays and causes modals or quick peek to drift after scrolling.
+
+The Kindle sheet owns focus while open, locks body scrolling, focuses the first
+field, supports password visibility, closes on Escape/backdrop click, and
+returns focus to the invoking control. Settings are stored in localStorage and
+sent to the backend only for an explicit Send to Kindle request.
 
 ### Homepage Hero
 
@@ -374,6 +401,33 @@ Quick peek behavior:
 - clamps itself to the viewport so it stays near the cursor and does not drift
   off screen
 - omits subject/category tags to reserve space for the description
+
+The quick-peek element is `position: fixed`; pointer coordinates and viewport
+clamping therefore remain in the same coordinate system even after scrolling.
+
+### Download Edition UI
+
+`download-ui.js` turns normalized `/api/search` results into one shared edition
+component. Each row has stable cover geometry, a two-line title allowance,
+author/publisher context, compact format metadata, and explicit Download and
+Kindle actions. The first result is marked `Best match`.
+
+The renderer also:
+
+- uses Unicode-safe filenames and format-aware action labels
+- shows a short preparing state without adding another full-page loader
+- hides pagination when `total_pages <= 1`
+- keeps edition actions inside the viewport on compact screens
+- maps timeouts and network errors to user-facing recovery messages
+- leaves raw counts out of the visible interface
+
+### Rendering Performance
+
+Shelf card skeletons are static to avoid running an animation for every
+offscreen cover. High-priority hero, download, and local loading surfaces keep
+bounded animation, while `content-visibility` skips work for distant homepage
+shelves. Fixed dimensions prevent async covers and result content from shifting
+the surrounding layout.
 
 ### Homepage Shelf Infinite Scroll
 
