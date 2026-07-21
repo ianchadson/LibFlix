@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-07-21 - Send to Kindle progress
+
+- Added streamed Send to Kindle progress events without introducing a
+  background job or storing SMTP credentials server-side.
+- Added real byte-based download progress when content length is available and
+  an indeterminate transfer state when it is not.
+- Added responsive in-row delivery UI covering preparation, book download,
+  attachment creation, email authentication, sending, completion, and failure.
+- Kept the original JSON endpoint behavior for compatibility while the app uses
+  newline-delimited progress streaming through `?stream=1`.
+- Added accessible progress semantics, live stage announcements, mobile-safe
+  layout, reduced-motion behavior, and retryable error presentation.
+- Fixed translated Open Library works so book pages retain the selected EN or
+  CN edition title and cover instead of reverting to a canonical title in a
+  different language and searching downloads with it.
+
 ## 2026-07-17 - Interface and download experience overhaul
 
 ### Reworked book and download surfaces

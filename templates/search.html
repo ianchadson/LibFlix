@@ -150,12 +150,9 @@
       }
       if (sendingMd5) return;
       sendingMd5 = md5;
-      button?.classList.add('sending');
-      button?.setAttribute('aria-busy', 'true');
-      fetch('/api/sendtokindle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      window.LibFlixDownloads.deliverToKindle({
+        button,
+        payload: {
           md5,
           title,
           ext: extension,
@@ -165,21 +162,11 @@
           smtp_user: settings.sender,
           smtp_pass: settings.pass,
           sender_email: settings.sender,
-        }),
+        },
       })
-        .then(response => response.json())
-        .then(data => {
-          if (!data.success) throw new Error(data.error || 'Send failed');
-          button?.classList.add('sent');
-          if (button) button.innerHTML = window.LibFlixDownloads.checkIcon + '<span>Sent</span>';
-          window.LibFlixNotify?.('Sent to Kindle', 'success');
-        })
+        .then(() => window.LibFlixNotify?.('Sent to Kindle', 'success'))
         .catch(error => window.LibFlixNotify?.('Kindle delivery failed: ' + error.message, 'error'))
-        .finally(() => {
-          sendingMd5 = null;
-          button?.classList.remove('sending');
-          button?.removeAttribute('aria-busy');
-        });
+        .finally(() => { sendingMd5 = null; });
     };
 
     fetchResults(currentPage);

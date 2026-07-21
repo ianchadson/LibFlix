@@ -310,6 +310,12 @@ through Flask.
 Downloads the selected file, builds an email attachment, and sends it through
 the SMTP credentials supplied by the browser.
 
+Appending `?stream=1` returns newline-delimited JSON (`application/x-ndjson`)
+instead of waiting for one final JSON response. Events contain `type`, `stage`,
+and `progress`; download events also include transferred-size `detail` when
+available. The final event is either `complete` at 100 or `error`. The original
+non-streaming JSON behavior remains available for compatibility.
+
 ## Template Responsibilities
 
 | Template | Responsibility |
@@ -416,6 +422,11 @@ The renderer also:
 
 - uses Unicode-safe filenames and format-aware action labels
 - shows a short preparing state without adding another full-page loader
+- streams Send to Kindle stages into a progress panel inside the selected
+  edition row, using real byte progress for the file download and named states
+  for attachment, authentication, and SMTP delivery
+- switches to an indeterminate bar only when the source omits content length
+- preserves an explicit success or retryable error state at the end of delivery
 - hides pagination when `total_pages <= 1`
 - keeps edition actions inside the viewport on compact screens
 - maps timeouts and network errors to user-facing recovery messages

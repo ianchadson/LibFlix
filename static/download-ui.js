@@ -55,7 +55,7 @@
     ].join('');
     const actions = book.md5
       ? '<div class="edition-actions">' +
-          '<a class="edition-action edition-download" href="' + downloadHref + '" data-format="' + escapeHtml(format) + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>Download ' + escapeHtml(format.toUpperCase()) + '</span></a>' +
+          '<a class="edition-action edition-download" href="' + downloadHref + '" data-format="' + escapeHtml(format) + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>' + escapeHtml(format.toUpperCase()) + '</span></a>' +
           '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>' +
         '</div>'
       : '<div class="edition-actions"><span class="edition-action edition-kindle" aria-disabled="true">Unavailable</span></div>';
@@ -103,6 +103,149 @@
       if (!kindle || typeof window.sendToKindle !== 'function') return;
       window.sendToKindle(kindle.dataset.md5, kindle.dataset.title, kindle.dataset.format, kindle);
     });
+  }
+
+  function createKindleProgress(button) {
+    const row = button?.closest('.edition-row');
+    if (!row) return null;
+    let panel = row.querySelector('.kindle-progress');
+    if (!panel) {
+      panel = document.createElement('div');
+      panel.className = 'kindle-progress';
+      panel.setAttribute('role', 'status');
+      panel.setAttribute('aria-live', 'polite');
+      panel.innerHTML =
+        '<div class="kindle-progress-head">' +
+          '<span class="kindle-progress-stage">Preparing delivery</span>' +
+          '<span class="kindle-progress-value">0%</span>' +
+        '</div>' +
+        '<div class="kindle-progress-track" role="progressbar" aria-label="Send to Kindle progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
+          '<span class="kindle-progress-fill"></span>' +
+        '</div>' +
+        '<div class="kindle-progress-detail" hidden></div>';
+      row.appendChild(panel);
+    }
+    panel.className = 'kindle-progress visible';
+    panel.setAttribute('role', 'status');
+    return panel;
+  }
+
+  function updateKindleProgress(panel, event) {
+    if (!panel || !event) return;
+    const stage = panel.querySelector('.kindle-progress-stage');
+    const value = panel.querySelector('.kindle-progress-value');
+    const track = panel.querySelector('.kindle-progress-track');
+    const fill = panel.querySelector('.kindle-progress-fill');
+    const detail = panel.querySelector('.kindle-progress-detail');
+    const progress = Number(event.progress);
+    const hasProgress = event.progress !== null && event.progress !== undefined && Number.isFinite(progress);
+
+    stage.textContent = event.stage || 'Sending to Kindle';
+    detail.textContent = event.detail || '';
+    detail.hidden = !event.detail;
+    panel.classList.toggle('indeterminate', !hasProgress && event.type === 'progress');
+    panel.classList.toggle('complete', event.type === 'complete');
+    panel.classList.toggle('error', event.type === 'error');
+
+    if (hasProgress) {
+      const bounded = Math.max(0, Math.min(100, Math.round(progress)));
+      fill.style.width = bounded + '%';
+      value.textContent = bounded + '%';
+      track.setAttribute('aria-valuenow', String(bounded));
+      track.removeAttribute('aria-valuetext');
+    } else {
+      fill.style.width = '';
+      value.textContent = event.type === 'error' ? 'Failed' : 'Working';
+      track.removeAttribute('aria-valuenow');
+      track.setAttribute('aria-valuetext', event.stage || 'Working');
+    }
+  }
+
+  async function readKindleProgress(response, onEvent) {
+    const contentType = response.headers.get('content-type') || '';
+    if (!response.ok || contentType.includes('application/json')) {
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.success === false) {
+        throw new Error(payload.error || 'Kindle delivery failed');
+      }
+      const event = { type: 'complete', success: true, stage: 'Sent to Kindle', progress: 100 };
+      onEvent(event);
+      return event;
+    }
+    if (!response.body) throw new Error('Live delivery progress is unavailable');
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let completed = null;
+    const consumeLine = line => {
+      if (!line.trim()) return;
+      const event = JSON.parse(line);
+      onEvent(event);
+      if (event.type === 'error' || event.success === false) {
+        const error = new Error(event.error || 'Kindle delivery failed');
+        error.kindleEvent = event;
+        throw error;
+      }
+      if (event.type === 'complete') completed = event;
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      let newline = buffer.indexOf('\n');
+      while (newline !== -1) {
+        consumeLine(buffer.slice(0, newline));
+        buffer = buffer.slice(newline + 1);
+        newline = buffer.indexOf('\n');
+      }
+      if (done) break;
+    }
+    if (buffer.trim()) consumeLine(buffer);
+    if (!completed) throw new Error('Kindle delivery ended before confirmation');
+    return completed;
+  }
+
+  async function deliverToKindle({ button, payload }) {
+    if (!button) throw new Error('Kindle action is unavailable');
+    if (!button.dataset.originalHtml) button.dataset.originalHtml = button.innerHTML;
+    if (!button.dataset.originalAriaLabel) button.dataset.originalAriaLabel = button.getAttribute('aria-label') || 'Send to Kindle';
+
+    const panel = createKindleProgress(button);
+    updateKindleProgress(panel, { type: 'progress', stage: 'Preparing delivery', progress: 0 });
+    button.classList.remove('sent');
+    button.classList.add('sending');
+    button.setAttribute('aria-busy', 'true');
+    button.setAttribute('aria-label', 'Sending book to Kindle');
+    button.innerHTML = icons.send + '<span>Sending</span>';
+
+    try {
+      const response = await fetch('/api/sendtokindle?stream=1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const completed = await readKindleProgress(response, event => updateKindleProgress(panel, event));
+      button.classList.add('sent');
+      button.innerHTML = icons.check + '<span>Sent</span>';
+      button.setAttribute('aria-label', 'Sent to Kindle');
+      return completed;
+    } catch (error) {
+      const failure = error.kindleEvent || {};
+      updateKindleProgress(panel, {
+        type: 'error',
+        stage: failure.stage || 'Delivery failed',
+        progress: null,
+        detail: error.message,
+      });
+      panel?.setAttribute('role', 'alert');
+      button.innerHTML = button.dataset.originalHtml;
+      button.setAttribute('aria-label', button.dataset.originalAriaLabel);
+      throw error;
+    } finally {
+      button.classList.remove('sending');
+      button.removeAttribute('aria-busy');
+    }
   }
 
   function visiblePages(page, total) {
@@ -155,6 +298,7 @@
   window.LibFlixDownloads = {
     checkIcon: icons.check,
     cleanFilename,
+    deliverToKindle,
     escapeHtml,
     friendlyError,
     renderEditions,

@@ -288,8 +288,11 @@ def first_matching_edition(w, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     editions = (w.get("editions") or {}).get("docs", [])
     for ed in editions:
+        if record_has_lang(ed, lang):
+            return ed
+    for ed in editions:
         title = ed.get("title", "")
-        if title_matches_lang(title, lang) or (lang == "cn" and record_has_lang(ed, lang)):
+        if title_matches_lang(title, lang):
             return ed
     return None
 
@@ -603,8 +606,9 @@ def first_work_author(work):
             return name
     return ""
 
-def book_metadata_from_work(work_id):
-    ckey = f"book_meta:{work_id}"
+def book_metadata_from_work(work_id, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    ckey = f"book_meta:{lang}:{work_id}"
     cached = cache_get(ckey, API_DISK_CACHE_TTL)
     if cached:
         return cached
@@ -614,11 +618,20 @@ def book_metadata_from_work(work_id):
     work = ol_get_work(ol_key)
     if not work:
         return None
+
+    search_data = ol_get("/search.json", {
+        "q": f"key:{ol_key} language:{BOOK_LANG_CONFIG[lang]['ol_lang']}",
+        "limit": 1,
+        "fields": OL_BOOK_FIELDS,
+    })
+    search_record = ((search_data or {}).get("docs") or [{}])[0]
+    edition = first_matching_edition(search_record, lang)
     covers = work.get("covers") or []
-    cover_id = covers[0] if covers else ""
+    cover_id = edition_cover_id(edition or {}) or search_record.get("cover_i") or (covers[0] if covers else "")
+    authors = search_record.get("author_name") or []
     result = {
-        "title": work.get("title", ""),
-        "author": first_work_author(work),
+        "title": (edition or {}).get("title") or search_record.get("title") or work.get("title", ""),
+        "author": (authors[0] if authors else "") or first_work_author(work),
         "cover_url": f"/olcover/{cover_id}" if cover_id else "",
         "ol_key": ol_key,
     }
@@ -973,7 +986,7 @@ def book_page(work_id, clean_mode, clean_lang):
     g.book_lang_override = lang
     if clean_mode is None and ("mode" in request.args or "book_lang" in request.args):
         return preserve_query_redirect(clean_book_url(work_id, mode, lang))
-    book = book_metadata_from_work(work_id)
+    book = book_metadata_from_work(work_id, lang)
     if not book:
         return render_template("book.html", title="Book not found", author="", cover_url="", ol_key="", mode=mode), 404
     return render_template("book.html", mode=mode, **book)
@@ -1147,41 +1160,82 @@ def olcover(cover_id, size="M"):
         pass
     return "", 404
 
-@app.route("/api/sendtokindle", methods=["POST"])
-def api_sendtokindle():
+def _kindle_progress(stage, progress=None, detail=""):
+    event = {"type": "progress", "stage": stage, "progress": progress}
+    if detail:
+        event["detail"] = detail
+    return event
+
+
+def _format_transfer_size(value):
+    value = max(0, int(value or 0))
+    units = ("B", "KB", "MB", "GB")
+    size = float(value)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} {unit}"
+        size /= 1024
+
+
+def _send_to_kindle_events(data):
     import smtplib, tempfile
     from email.mime.multipart import MIMEMultipart
     from email.mime.base import MIMEBase
     from email.mime.text import MIMEText
     from email import encoders
 
-    data = request.get_json(silent=True) or {}
     md5 = data.get("md5", "")
-    title = data.get("title", "book")
-    ext = data.get("ext", "epub")
+    title = re.sub(r"[\r\n]+", " ", data.get("title", "book")).strip() or "book"
+    ext = re.sub(r"[^a-z0-9]", "", data.get("ext", "epub").lower()) or "epub"
     kindle_email = data.get("kindle_email", "").strip()
     smtp_host = data.get("smtp_host", "").strip()
-    smtp_port = int(data.get("smtp_port", 587))
+    smtp_port = data.get("smtp_port", 587)
     smtp_user = data.get("smtp_user", "").strip()
     smtp_pass = data.get("smtp_pass", "")
     sender_email = data.get("sender_email", smtp_user)
+    tmp_path = None
+    progress = 3
 
-    if not all([md5, kindle_email, smtp_host, smtp_user, smtp_pass]):
-        return jsonify({"success": False, "error": "Missing required fields"}), 400
-
-    dl_url = DOWNLOADER.resolve_download(md5)
     try:
+        yield _kindle_progress("Preparing delivery", progress)
+        dl_url = DOWNLOADER.resolve_download(md5)
+        if not dl_url:
+            raise RuntimeError("The download source did not return a file link.")
+
+        progress = 10
+        yield _kindle_progress("Connecting to book source", progress)
         r = SESSION.get(dl_url, stream=True, timeout=120, allow_redirects=True)
         r.raise_for_status()
-    except Exception as e:
-        return jsonify({"success": False, "error": f"Download failed: {e}"})
+        try:
+            total_bytes = int(r.headers.get("content-length", "") or 0)
+        except (TypeError, ValueError):
+            total_bytes = 0
 
-    with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
-        for chunk in r.iter_content(chunk_size=65536):
-            tmp.write(chunk)
-        tmp_path = tmp.name
+        downloaded = 0
+        last_reported_progress = progress
+        last_reported_bytes = 0
+        yield _kindle_progress("Downloading book", progress, "Starting transfer")
+        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
+            tmp_path = tmp.name
+            for chunk in r.iter_content(chunk_size=65536):
+                if not chunk:
+                    continue
+                tmp.write(chunk)
+                downloaded += len(chunk)
+                if total_bytes:
+                    current = 10 + int(min(downloaded / total_bytes, 1) * 55)
+                    if current >= last_reported_progress + 2:
+                        last_reported_progress = current
+                        progress = current
+                        detail = f"{_format_transfer_size(downloaded)} of {_format_transfer_size(total_bytes)}"
+                        yield _kindle_progress("Downloading book", progress, detail)
+                elif downloaded - last_reported_bytes >= 1024 * 1024:
+                    last_reported_bytes = downloaded
+                    yield _kindle_progress("Downloading book", None, f"{_format_transfer_size(downloaded)} downloaded")
 
-    try:
+        progress = 68
+        yield _kindle_progress("Building Kindle document", progress, _format_transfer_size(downloaded))
+
         msg = MIMEMultipart()
         msg["From"] = sender_email
         msg["To"] = kindle_email
@@ -1197,19 +1251,68 @@ def api_sendtokindle():
             attachment.add_header("Content-Disposition", f"attachment; filename=\"{title[:80]}.{ext}\"")
             msg.attach(attachment)
 
+        progress = 78
+        yield _kindle_progress("Connecting to email", progress)
         with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
             server.starttls()
+            progress = 84
+            yield _kindle_progress("Signing in securely", progress)
             server.login(smtp_user, smtp_pass)
+            progress = 92
+            yield _kindle_progress("Sending to Kindle", progress)
             server.send_message(msg)
 
-        os.unlink(tmp_path)
-        return jsonify({"success": True})
+        progress = 100
+        yield {"type": "complete", "success": True, "stage": "Sent to Kindle", "progress": progress}
     except smtplib.SMTPAuthenticationError:
-        os.unlink(tmp_path)
-        return jsonify({"success": False, "error": "SMTP auth failed. For Gmail, use an App Password."})
+        yield {
+            "type": "error",
+            "success": False,
+            "stage": "Sign-in failed",
+            "progress": progress,
+            "error": "SMTP auth failed. For Gmail, use an App Password.",
+        }
     except Exception as e:
-        os.unlink(tmp_path)
-        return jsonify({"success": False, "error": str(e)})
+        yield {
+            "type": "error",
+            "success": False,
+            "stage": "Delivery failed",
+            "progress": progress,
+            "error": str(e),
+        }
+    finally:
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+
+@app.route("/api/sendtokindle", methods=["POST"])
+def api_sendtokindle():
+    data = request.get_json(silent=True) or {}
+    required = ("md5", "kindle_email", "smtp_host", "smtp_user", "smtp_pass")
+    if not all(data.get(field) for field in required):
+        return jsonify({"success": False, "error": "Missing required fields"}), 400
+    try:
+        data["smtp_port"] = int(data.get("smtp_port", 587))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "SMTP port must be a number"}), 400
+
+    if request.args.get("stream") == "1":
+        def stream_events():
+            for event in _send_to_kindle_events(data):
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+
+        response = Response(stream_with_context(stream_events()), mimetype="application/x-ndjson")
+        response.headers["Cache-Control"] = "no-cache, no-store"
+        response.headers["X-Accel-Buffering"] = "no"
+        return response
+
+    events = list(_send_to_kindle_events(data))
+    final = events[-1] if events else {"success": False, "error": "Delivery did not complete"}
+    status = 200 if final.get("success") else 502
+    return jsonify(final), status
 
 def warm_cache():
     lang = DEFAULT_BOOK_LANG

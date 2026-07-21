@@ -131,6 +131,9 @@ No API key is required. Open Library is the only discovery backend.
 - **Send to Kindle settings** - the global Settings menu opens a keyboard-safe
   Kindle sheet with password visibility, local browser storage, and a forget
   action.
+- **Live Kindle delivery progress** - the selected edition expands to show a
+  responsive progress bar, current delivery stage, transferred file size, and
+  clear completion or failure state while LibFlix downloads and emails the file.
 
 ### Download Search
 

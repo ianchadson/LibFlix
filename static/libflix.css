@@ -168,8 +168,8 @@ select:focus-visible {
 .search-bar.open,
 .search-bar:focus-within {
   background: #1b1d21 !important;
-  border-color: var(--app-line-strong) !important;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, .34) !important;
+  border-color: rgba(255, 255, 255, .28) !important;
+  box-shadow: 0 0 0 3px rgba(242, 13, 27, .07), 0 12px 32px rgba(0, 0, 0, .34) !important;
 }
 
 .search-bar input {
@@ -1130,21 +1130,22 @@ footer {
 }
 
 .edition-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(104px, 1fr));
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .edition-action {
-  min-height: 40px;
+  min-height: 38px;
   border-radius: var(--app-radius);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  padding: 0 13px;
-  font-size: .8rem;
-  font-weight: 740;
+  gap: 7px;
+  padding: 0 12px;
+  font-size: .78rem;
+  font-weight: 700;
   text-decoration: none;
   white-space: nowrap;
 }
@@ -1160,13 +1161,15 @@ footer {
 }
 
 .edition-download {
-  border: 1px solid transparent;
-  background: var(--app-red);
-  color: #fff;
+  border: 1px solid rgba(255, 255, 255, .14);
+  background: #1a1c20;
+  color: #e1e2e5;
+  box-shadow: none;
 }
 
 .edition-download:hover {
-  background: var(--app-red-hover);
+  border-color: rgba(255, 255, 255, .28);
+  background: #22252a;
   color: #fff;
 }
 
@@ -1176,25 +1179,130 @@ footer {
 }
 
 .edition-kindle {
-  border: 1px solid var(--app-line-strong);
-  background: transparent;
-  color: #d9dade;
+  border: 1px solid transparent;
+  background: var(--app-red);
+  color: #fff;
+  box-shadow: 0 5px 14px rgba(242, 13, 27, .16);
 }
 
 .edition-kindle:hover {
-  border-color: rgba(255, 255, 255, .27);
-  background: rgba(255, 255, 255, .07);
+  border-color: transparent;
+  background: var(--app-red-hover);
   color: #fff;
 }
 
 .edition-kindle.sending {
-  opacity: .55;
+  opacity: .82;
   pointer-events: none;
 }
 
 .edition-kindle.sent {
+  background: rgba(53, 185, 121, .12);
   border-color: rgba(53, 185, 121, .4);
   color: #76d9a7;
+}
+
+.kindle-progress {
+  grid-column: 1 / -1;
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+  padding: 12px 2px 1px;
+  border-top: 1px solid rgba(255, 255, 255, .065);
+  animation: kindleProgressIn .18s ease both;
+}
+
+.kindle-progress-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: #dfe0e3;
+  font-size: .76rem;
+  font-weight: 680;
+}
+
+.kindle-progress-stage {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kindle-progress-value {
+  margin-left: auto;
+  color: #9b9ea5;
+  font-variant-numeric: tabular-nums;
+  font-weight: 720;
+}
+
+.kindle-progress-track {
+  position: relative;
+  width: 100%;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .09);
+}
+
+.kindle-progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  border-radius: inherit;
+  background: var(--app-red);
+  box-shadow: 0 0 14px rgba(242, 13, 27, .28);
+  transition: width .24s ease, background .18s ease;
+}
+
+.kindle-progress-detail {
+  overflow: hidden;
+  color: #777a82;
+  font-size: .7rem;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kindle-progress.indeterminate .kindle-progress-fill {
+  width: 38% !important;
+  animation: kindleProgressIndeterminate 1.1s ease-in-out infinite;
+}
+
+.kindle-progress.complete .kindle-progress-stage,
+.kindle-progress.complete .kindle-progress-value {
+  color: #76d9a7;
+}
+
+.kindle-progress.complete .kindle-progress-fill {
+  background: var(--app-green);
+  box-shadow: 0 0 14px rgba(53, 185, 121, .24);
+}
+
+.kindle-progress.error .kindle-progress-stage,
+.kindle-progress.error .kindle-progress-value,
+.kindle-progress.error .kindle-progress-detail {
+  color: #ff777f;
+}
+
+.kindle-progress.error .kindle-progress-track {
+  background: rgba(242, 13, 27, .14);
+}
+
+.kindle-progress.error .kindle-progress-fill {
+  width: 100% !important;
+  background: rgba(242, 13, 27, .48);
+  box-shadow: none;
+}
+
+@keyframes kindleProgressIn {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes kindleProgressIndeterminate {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(290%); }
 }
 
 .download-empty,
@@ -1570,11 +1678,11 @@ footer {
 
   .edition-actions {
     grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     margin-top: 1px;
   }
 
   .edition-action {
-    flex: 1;
     min-width: 0;
   }
 
