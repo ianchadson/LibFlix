@@ -35,16 +35,9 @@ jobs:
       - name: Package release
         run: |
           printf 'GITHUB_SHA=%s\n' "$GITHUB_SHA" > .deploy-meta
-          tar \
-            --exclude .git \
-            --exclude __pycache__ \
-            --exclude '*.pyc' \
-            --exclude api_cache.json \
-            --exclude api_cache.sqlite3 \
-            --exclude 'api_cache.sqlite3-*' \
-            --exclude 'shelf_cache*.json' \
-            --exclude release.tar.gz \
-            -czf release.tar.gz .
+          git archive --format=tar --output=release.tar HEAD
+          tar --append --file=release.tar .deploy-meta
+          gzip -c release.tar > release.tar.gz
 
       - name: Install SSH key
         run: |
