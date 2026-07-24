@@ -39,6 +39,7 @@
     const publisher = shorten(book.publisher || '', 90);
     const extension = String(book.ext || '').toLowerCase();
     const format = extension || 'file';
+    const recommended = book.best_match === true;
     const filename = cleanFilename(book.title, format);
     const downloadHref = book.md5
       ? '/download/' + encodeURIComponent(book.md5) + '?filename=' + encodeURIComponent(filename)
@@ -60,10 +61,10 @@
         '</div>'
       : '<div class="edition-actions"><span class="edition-action edition-kindle" aria-disabled="true">Unavailable</span></div>';
 
-    return '<article class="edition-row' + (index === 0 ? ' recommended' : '') + '">' +
+    return '<article class="edition-row' + (recommended ? ' recommended' : '') + '">' +
       '<div>' + cover + '</div>' +
       '<div class="edition-copy">' +
-        '<div class="edition-title-line"><h3 class="edition-title" title="' + escapeHtml(book.title || '') + '">' + escapeHtml(title) + '</h3>' + (index === 0 ? '<span class="edition-recommended">Best match</span>' : '') + '</div>' +
+        '<div class="edition-title-line"><h3 class="edition-title" title="' + escapeHtml(book.title || '') + '">' + escapeHtml(title) + '</h3>' + (recommended ? '<span class="edition-recommended">Best match</span>' : '') + '</div>' +
         (author ? '<div class="edition-byline">' + escapeHtml(author) + '</div>' : '') +
         (publisher ? '<div class="edition-publisher">' + escapeHtml(publisher) + '</div>' : '') +
         '<div class="edition-meta">' + metadata + '</div>' +

@@ -464,6 +464,11 @@ select:focus-visible {
   font-size: 2rem;
 }
 
+.book-card .placeholder[hidden],
+.edition-cover-placeholder[hidden] {
+  display: none !important;
+}
+
 .book-card .cover-skeleton {
   position: absolute;
   inset: 0;

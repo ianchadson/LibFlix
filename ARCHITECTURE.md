@@ -189,6 +189,7 @@ can be verified.
 | `chinese_download_queries(ol_key, metadata)` | Build ordered download aliases from Chinese edition titles, cleaned suffixes, and Traditional-to-Simplified conversion |
 | `resolve_english_title(ol_key)` | Resolve and cache a stable English display title for CN browsing |
 | `english_description_for_work(ol_key, work)` | Prefer an English work or edition description and reject incompatible catalog text |
+| `similar_subject_candidates(subjects)` | Exclude broad Open Library labels and select specific recommendation subjects |
 | `fetch_one_shelf(name, topic, lang)` | Server-rendered first shelf/category batch |
 | `fetch_category_books(topic, page, lang)` | Paginated category/home shelf JSON source |
 | `collect_unique_topic_books(topic, lang, seen_keys, target)` | Pull deeper Open Library pages until a shelf has unique books or pages are exhausted |
@@ -450,7 +451,20 @@ clamping therefore remain in the same coordinate system even after scrolling.
 `download-ui.js` turns normalized `/api/search` results into one shared edition
 component. Each row has stable cover geometry, a two-line title allowance,
 author/publisher context, compact format metadata, and explicit Download and
-Kindle actions. The first result is marked `Best match`.
+Kindle actions. The API globally ranks the filtered result set before explicitly
+flagging one row as `best_match`; the renderer does not infer that the source's
+first row is best.
+
+Ranking is dominated by normalized title similarity, including exact,
+containment, token-overlap, and sequence checks. Author agreement is the next
+strongest signal. Language agreement, EPUB/MOBI/AZW3 suitability, plausible file
+size, publisher/pages/cover completeness, and a bounded recency tie-breaker
+follow. The publication year can no longer outweigh a poor title match.
+Deduplication uses the same scorer to choose the strongest edition inside each
+normalized title/author group before the remaining candidates are globally
+sorted when the explicit `Best match` mode is active. Other sort modes retain
+the source's requested ordering, but the highest-scoring row remains explicitly
+flagged wherever it appears.
 
 The renderer also:
 
@@ -571,6 +585,12 @@ retains the successful alias for pagination and retries. This covers edition
 suffixes, mixed English/Chinese titles, alternate Open Library edition names,
 Traditional/Simplified indexing differences, and a small explicit override map
 for known catalog-title mismatches without displaying non-Chinese files.
+
+More Like This uses up to two specific subjects instead of trusting the first
+Open Library label. Broad labels such as Fiction, Biography, Fantasy, and
+generic demographic tags are ignored. Candidate works found under both selected
+subjects rank first, while normalized-title deduplication removes translated or
+edition-level duplicates before the 12-card response is returned.
 
 ## Discovery Source
 

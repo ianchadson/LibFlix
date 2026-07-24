@@ -48,7 +48,7 @@
         </button>
       </div>
 
-      {% set filter_sort = 'y' %}
+      {% set filter_sort = 'best_match' %}
       {% set filter_format = 'all' %}
       {% set filter_language = 'Chinese' if book_lang == 'cn' else 'English' %}
       {% set filter_limit = 25 %}
@@ -108,7 +108,7 @@
     const filterPanel = document.getElementById('filterPanel');
     let currentPage = 1;
     let activeSearch = null;
-    let similarSubject = '';
+    let similarSubjects = [];
     let similarVisible = false;
     let similarRequested = false;
     let downloadRequested = false;
@@ -231,8 +231,8 @@
           } else {
             document.getElementById('descNone').style.display = 'block';
           }
-          if (data.success && data.subjects && data.subjects.length) {
-            similarSubject = data.subjects[0];
+          if (data.success && data.similar_subjects && data.similar_subjects.length) {
+            similarSubjects = data.similar_subjects;
             requestSimilarIfReady();
           } else {
             renderSimilarEmpty('No similar books are available.');
@@ -248,9 +248,11 @@
       document.getElementById('similarRow').innerHTML = '<div class="similar-empty">' + escapeHtml(message) + '</div>';
     }
 
-    function fetchSimilar(subject) {
+    function fetchSimilar(subjects) {
       similarRequested = true;
-      fetch('/api/similar?subject=' + encodeURIComponent(subject) + '&ol_key=' + encodeURIComponent(olKey) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
+      const params = new URLSearchParams({ ol_key: olKey, book_lang: BOOK_LANG });
+      subjects.forEach(subject => params.append('subject', subject));
+      fetch('/api/similar?' + params)
         .then(response => response.json())
         .then(data => {
           if (!data.success || !data.books.length) {
@@ -272,7 +274,7 @@
     }
 
     function requestSimilarIfReady() {
-      if (!similarRequested && similarVisible && similarSubject) fetchSimilar(similarSubject);
+      if (!similarRequested && similarVisible && similarSubjects.length) fetchSimilar(similarSubjects);
     }
 
     function getSearchParams(page, queryIndex) {
@@ -284,6 +286,8 @@
         format: document.getElementById('fmtSel').value,
         lang: document.getElementById('langSel').value,
         dedup: document.getElementById('dedupToggle').checked ? '1' : '0',
+        target_title: BOOK_LANG === 'cn' ? buildSearchQuery(queryIndex) : bookTitle,
+        target_author: bookAuthor,
         mode: MODE,
         book_lang: BOOK_LANG,
         page: String(page || 1),

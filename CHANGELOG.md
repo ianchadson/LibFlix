@@ -24,6 +24,16 @@
   Chinese Open Library edition aliases, Traditional-to-Simplified conversion,
   known catalog-title overrides, and a final English-title attempt while
   retaining the Chinese file filter.
+- Replaced the source-order `Best match` label with global candidate ranking.
+  Title and author similarity now dominate, EPUB-family formats are preferred
+  for reading/Kindle workflows, malformed file sizes are penalized, and year is
+  limited to a small tie-breaker.
+- Fixed successful More Like This covers rendering a second full-height fallback
+  panel because component `display:flex` styles overrode the HTML `hidden`
+  attribute.
+- Improved More Like This by skipping broad catalog subjects, combining up to
+  two specific subjects, prioritizing works shared by both, and collapsing
+  duplicate translated/edition titles.
 - Batched visible CN display-title resolution into one endpoint with bounded
   server concurrency.
 - Removed the blocking Bootstrap CDN dependency and versioned local CSS/JS for

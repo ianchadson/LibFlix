@@ -1,4 +1,5 @@
-import re, os, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3
+import re, os, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3, unicodedata
+from difflib import SequenceMatcher
 from urllib.parse import urljoin, quote, urlencode
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -44,6 +45,14 @@ BOOK_LANG_CONFIG = {
 }
 CHINESE_DOWNLOAD_TITLE_ALIASES = {
     "the big short": ["大空头"],
+}
+GENERIC_SIMILAR_SUBJECTS = {
+    "action/adventure", "biography", "business", "competition", "contests",
+    "fantasy", "fiction", "games", "history", "independence",
+    "interdependence", "interpersonal relations", "juvenile fiction",
+    "juvenile works", "open library staff picks", "personal narratives",
+    "poverty", "psychology", "science", "self-help", "sisters", "survival",
+    "teen fiction", "television programs",
 }
 
 def normalize_book_lang(lang):
@@ -445,6 +454,35 @@ def chinese_download_queries(ol_key, metadata=None):
     add(metadata.get("title", ""))
     return queries[:10]
 
+def similar_subject_candidates(subjects):
+    subjects = [
+        re.sub(r"\s+", " ", str(subject or "")).strip()
+        for subject in subjects or []
+    ]
+    series = [
+        subject for subject in subjects
+        if subject.casefold().startswith("series:") and len(subject) > 7
+    ]
+    if series:
+        return series[:1]
+    candidates = []
+    seen = set()
+    for subject in subjects:
+        normalized = subject.casefold()
+        if (
+            not subject
+            or normalized in GENERIC_SIMILAR_SUBJECTS
+            or ":" in subject
+            or len(subject) < 5
+            or normalized in seen
+        ):
+            continue
+        seen.add(normalized)
+        candidates.append(subject)
+        if len(candidates) == 2:
+            break
+    return candidates or subjects[:1]
+
 def resolve_chinese_title(ol_key):
     if not re.fullmatch(r"/works/OL\d+W", ol_key or ""):
         return ""
@@ -830,45 +868,107 @@ def parse_size_bytes(size_str):
     if unit == "GB": return val * 1024 * 1024 * 1024
     return val
 
-def book_score(book):
-    score = 0
-    fmt_scores = {"epub": 50, "pdf": 20, "mobi": 20, "azw3": 20, "djvu": 10, "chm": 5, "txt": 3}
+def normalize_match_text(value):
+    value = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    value = re.sub(r"[\(\[\{（【].*?[\)\]\}）】]", " ", value)
+    value = re.sub(r"[^\w\u3400-\u9fff]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+def title_match_score(candidate, target):
+    candidate = normalize_match_text(candidate)
+    target = normalize_match_text(target)
+    if not candidate or not target:
+        return 0
+    if candidate == target:
+        return 1000
+    shorter, longer = sorted((candidate, target), key=len)
+    if shorter in longer:
+        return 900 + round(80 * len(shorter) / max(len(longer), 1))
+    candidate_tokens = set(candidate.split())
+    target_tokens = set(target.split())
+    overlap = len(candidate_tokens & target_tokens)
+    token_score = 0
+    if overlap:
+        containment = overlap / max(min(len(candidate_tokens), len(target_tokens)), 1)
+        union = len(candidate_tokens | target_tokens)
+        token_score = round(500 * containment + 250 * overlap / max(union, 1))
+    sequence_score = round(700 * SequenceMatcher(None, candidate, target).ratio())
+    return max(token_score, sequence_score)
+
+def author_match_score(candidate, target):
+    candidate = normalize_match_text(candidate)
+    target = normalize_match_text(target)
+    if not target:
+        return 0
+    if not candidate:
+        return -40
+    if candidate == target:
+        return 240
+    candidate_tokens = set(candidate.split())
+    target_tokens = set(target.split())
+    if target_tokens and target_tokens <= candidate_tokens:
+        return 220
+    overlap = len(candidate_tokens & target_tokens)
+    token_score = round(180 * overlap / max(len(target_tokens), 1))
+    sequence_score = round(140 * SequenceMatcher(None, candidate, target).ratio())
+    return max(token_score, sequence_score)
+
+def book_score(book, target_title="", target_author="", preferred_language=""):
+    score = title_match_score(book.title, target_title)
+    score += author_match_score(book.author, target_author)
+    fmt_scores = {"epub": 120, "mobi": 85, "azw3": 85, "pdf": 60, "djvu": 25, "chm": 10, "txt": 8}
     score += fmt_scores.get(book.ext.lower(), 0)
-    score += 20 if book.language.lower() == "english" else 0
+    if preferred_language:
+        score += 80 if book_matches_language(book, preferred_language) else -200
     try:
         y = int(book.year)
         if 1900 <= y <= 2030:
-            score += y - 1900
-    except:
+            score += max(0, min(20, round((y - 1980) * 0.4)))
+    except (TypeError, ValueError):
         pass
     bytes_val = parse_size_bytes(book.size)
     if book.ext.lower() == "epub" and (bytes_val < 50000 or bytes_val > 200 * 1024 * 1024):
-        score -= 10
+        score -= 100
     elif book.ext.lower() == "pdf" and (bytes_val < 100000 or bytes_val > 500 * 1024 * 1024):
-        score -= 10
-    else:
-        score += 5
+        score -= 100
+    elif bytes_val:
+        score += 20
     if book.publisher.strip():
-        score += 5
+        score += 12
     try:
         if int(book.pages) > 0:
-            score += 5
-    except:
+            score += 12
+    except (TypeError, ValueError):
         pass
     if getattr(book, "cover_dir", ""):
-        score += 3
+        score += 6
     return score
 
-def dedup(books):
+def dedup(books, scorer=None):
+    scorer = scorer or book_score
     groups = {}
     for b in books:
         key = (normalize_title(b.title), normalize_author(b.author))
         groups.setdefault(key, []).append(b)
     best = []
-    for key, group in groups.items():
-        group.sort(key=book_score, reverse=True)
-        best.append(group[0])
+    for group in groups.values():
+        best.append(max(group, key=scorer))
     return best
+
+def rank_download_books(books, target_title="", target_author="", preferred_language=""):
+    scorer = lambda book: book_score(
+        book,
+        target_title=target_title,
+        target_author=target_author,
+        preferred_language=preferred_language,
+    )
+    return [
+        book for _, book in sorted(
+            enumerate(books),
+            key=lambda item: (scorer(item[1]), -item[0]),
+            reverse=True,
+        )
+    ], scorer
 
 def book_matches_language(book, language):
     if not language or language == "all":
@@ -1328,7 +1428,7 @@ def search():
     if not q:
         shelves = get_shelves(mode, get_book_lang())
         return render_template("index.html", shelves=shelves, error="Enter a search query.", mode=mode)
-    sort = request.args.get("sort", "y")
+    sort = request.args.get("sort", "best_match")
     order = request.args.get("order", "DESC").upper()
     limit = int(request.args.get("limit", 25)) if request.args.get("limit", "25").isdigit() else 25
     limit = limit if limit in (25, 50, 100) else 25
@@ -1394,24 +1494,66 @@ def book_page(work_id, clean_mode, clean_lang):
 
 @app.route("/api/similar")
 def api_similar():
-    subject = request.args.get("subject", "").strip()
+    subjects = [
+        subject.strip()
+        for subject in request.args.getlist("subject")[:2]
+        if subject.strip()
+    ]
     ol_key = request.args.get("ol_key", "").strip()
     lang = get_book_lang()
-    if not subject:
+    if not subjects:
         return jsonify({"success": False, "error": "No subject"})
 
-    data = ol_get("/search.json", {
-        "q": f"subject:{subject} language:{BOOK_LANG_CONFIG[lang]['ol_lang']}",
-        "sort": "rating",
-        "limit": 12,
-        "fields": OL_BOOK_FIELDS,
-    })
-    docs = (data or {}).get("docs", [])
+    def fetch_subject(subject):
+        data = ol_get("/search.json", {
+            "q": f"subject:{subject} language:{BOOK_LANG_CONFIG[lang]['ol_lang']}",
+            "sort": "rating",
+            "limit": 30,
+            "fields": OL_BOOK_FIELDS,
+        })
+        return (data or {}).get("docs", [])
+
+    subject_docs = []
+    with ThreadPoolExecutor(max_workers=len(subjects)) as pool:
+        futures = [pool.submit(fetch_subject, subject) for subject in subjects]
+        for future in futures:
+            try:
+                subject_docs.append(future.result())
+            except Exception:
+                subject_docs.append([])
+
+    candidates = {}
+    sequence = 0
+    for docs in subject_docs:
+        seen_in_subject = set()
+        for record in docs:
+            book = extract_book(record, lang)
+            if not book or book["ol_key"] == ol_key:
+                continue
+            key = book["ol_key"]
+            entry = candidates.setdefault(key, {"book": book, "matches": 0, "order": sequence})
+            if key not in seen_in_subject:
+                entry["matches"] += 1
+                seen_in_subject.add(key)
+            sequence += 1
+
+    current_work = ol_get_work(ol_key) or {}
+    current_title = normalize_title(current_work.get("title", ""))
+    seen_titles = {current_title} if current_title else set()
     books = []
-    for w in docs:
-        b = extract_book(w, lang)
-        if b and b["ol_key"] != ol_key:
-            books.append(b)
+    ranked = sorted(
+        candidates.values(),
+        key=lambda entry: (-entry["matches"], entry["order"]),
+    )
+    for entry in ranked:
+        book = entry["book"]
+        title_key = normalize_title(book.get("title", ""))
+        if not title_key or title_key in seen_titles:
+            continue
+        seen_titles.add(title_key)
+        books.append(book)
+        if len(books) == 12:
+            break
     return jsonify({"success": True, "books": books})
 
 @app.route("/api/book")
@@ -1430,6 +1572,7 @@ def api_book():
         return jsonify({"success": True, "description": description})
     metadata = book_metadata_from_work(work_id_from_ol_key(ol_key), get_book_lang()) or {}
     subjects = work.get("subjects", [])[:20]
+    similar_subjects = similar_subject_candidates(subjects)
     download_queries = (
         chinese_download_queries(ol_key, metadata)
         if get_book_lang() == "cn"
@@ -1445,6 +1588,7 @@ def api_book():
         "download_queries": download_queries,
         "description": description,
         "subjects": subjects,
+        "similar_subjects": similar_subjects,
     })
 
 @app.route("/api/cn-display-title")
@@ -1483,7 +1627,7 @@ def api_search():
     q = request.args.get("q", "").strip()
     if not q:
         return jsonify({"success": False, "error": "No query provided"})
-    sort = request.args.get("sort", "y")
+    sort = request.args.get("sort", "best_match")
     order = request.args.get("order", "DESC").upper()
     limit = int(request.args.get("limit", 25)) if request.args.get("limit", "25").isdigit() else 25
     limit = limit if limit in (25, 50, 100) else 25
@@ -1497,9 +1641,11 @@ def api_search():
     if lang not in ("English", "Chinese", "all"):
         lang = default_download_lang
     dedup_on = request.args.get("dedup", "1") == "1"
+    target_title = request.args.get("target_title", "").strip() or q
+    target_author = request.args.get("target_author", "").strip()
     result_cache_key = (
-        f"download_search:v1:{q}:{sort}:{order}:{limit}:{page}:"
-        f"{fmt}:{lang}:{int(dedup_on)}"
+        f"download_search:v2:{q}:{sort}:{order}:{limit}:{page}:"
+        f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}"
     )
     cached_result = cache_get(result_cache_key, 900)
     if cached_result is None:
@@ -1509,7 +1655,7 @@ def api_search():
     if cached_result is not None:
         return jsonify(cached_result)
 
-    sort_field = "y" if sort == "year" else sort
+    sort_field = "y" if sort in ("year", "best_match") else sort
     try:
         books, total = DOWNLOADER.search(q, sort=sort_field, order=order, page=page, limit=limit)
     except requests.Timeout:
@@ -1541,8 +1687,22 @@ def api_search():
             continue
         filtered.append(b)
     books = filtered
+    scorer = lambda book: book_score(
+        book,
+        target_title=target_title,
+        target_author=target_author,
+        preferred_language=lang_filter or "",
+    )
     if dedup_on:
-        books = dedup(books)
+        books = dedup(books, scorer)
+    best_book = max(books, key=scorer) if books else None
+    if sort == "best_match":
+        books, scorer = rank_download_books(
+            books,
+            target_title=target_title,
+            target_author=target_author,
+            preferred_language=lang_filter or "",
+        )
 
     total_pages = (total + limit - 1) // limit if total else 1
     result_books = []
@@ -1550,6 +1710,7 @@ def api_search():
         d = b.to_dict(i + 1 + (page - 1) * limit)
         cover_dir = getattr(b, "cover_dir", "")
         d["cover_url"] = f"/cover/{d['md5']}?dir={cover_dir}" if cover_dir and d['md5'] else ""
+        d["best_match"] = b is best_book
         result_books.append(d)
     result = {
         "success": True,

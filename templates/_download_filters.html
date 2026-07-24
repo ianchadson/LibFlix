@@ -4,6 +4,7 @@
     <div class="download-filter-field">
       <label for="sortSel">Sort</label>
       <select id="sortSel" name="sort">
+        <option value="best_match" {% if filter_sort == 'best_match' %}selected{% endif %}>Best match</option>
         <option value="y" {% if filter_sort == 'y' %}selected{% endif %}>Newest year</option>
         <option value="time_added" {% if filter_sort == 'time_added' %}selected{% endif %}>Recently added</option>
         <option value="filesize" {% if filter_sort == 'filesize' %}selected{% endif %}>File size</option>

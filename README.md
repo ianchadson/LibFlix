@@ -143,9 +143,12 @@ No API key is required. Open Library is the only discovery backend.
   language instead of a dense table.
 - **Collapsible download filters** - format, sort, language, page size, and
   dedupe controls share one compact `Filters` panel across preview and direct
-  download search pages.
+  download search pages. `Best match` is the explicit default; selecting year,
+  recently added, file size, title, or author preserves that requested order.
 - **Clear actions** - every available edition has explicit format-aware Download
-  and Kindle actions; the strongest candidate is labeled `Best match`.
+  and Kindle actions. `Best match` is assigned only after globally ranking all
+  filtered candidates by title and author similarity, language, reading format,
+  file sanity, and metadata quality.
 - **Send to Kindle settings** - the global Settings menu opens a keyboard-safe
   Kindle sheet with password visibility, local browser storage, a forget
   action, and a visible configured / configure-connection state.
