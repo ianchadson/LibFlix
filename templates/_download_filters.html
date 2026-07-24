@@ -24,6 +24,7 @@
       <label for="langSel">Language</label>
       <select id="langSel" name="lang">
         <option value="English" {% if filter_language == 'English' %}selected{% endif %}>English</option>
+        <option value="Chinese" {% if filter_language == 'Chinese' %}selected{% endif %}>Chinese</option>
         <option value="all" {% if filter_language == 'all' %}selected{% endif %}>All languages</option>
       </select>
     </div>

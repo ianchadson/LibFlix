@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-07-24 - Loading and rendering performance
+
+- Replaced whole-file `api_cache.json` reads and 15 MB rewrites with a
+  WAL-enabled SQLite key/value cache, including one-time migration and expiry
+  pruning.
+- Changed startup to hydrate all language/mode shelf caches immediately and
+  refresh stale shelf sets later without blocking the first page.
+- Reduced initial homepage HTML by rendering stable shelf skeletons and
+  hydrating complete 40-book rows only as they approach the viewport.
+- Deferred hero descriptions until their book is active and added a lightweight
+  description-only API response path.
+- Deferred More Like This metadata and covers until that section approaches the
+  viewport.
+- Removed idle category-page prefetching in favor of pointer, focus, and touch
+  intent.
+- Removed synchronous Open Library work from book-page HTML responses by
+  rendering card-backed book hints first and hydrating full details after
+  paint. Book metadata and normalized download searches now persist in SQLite.
+- Removed the artificial route-transition pause and enabled one-book document
+  prefetch after deliberate card hover, focus, or touch.
+- Added automatic CN download fallbacks using cleaned edition names, all
+  Chinese Open Library edition aliases, Traditional-to-Simplified conversion,
+  known catalog-title overrides, and a final English-title attempt while
+  retaining the Chinese file filter.
+- Batched visible CN display-title resolution into one endpoint with bounded
+  server concurrency.
+- Removed the blocking Bootstrap CDN dependency and versioned local CSS/JS for
+  immutable caching.
+- Sent Open Library covers directly to its CDN, preconnected the cover host, and
+  limited large hero artwork to the active cover.
+- Served first shelf/category API pages directly from the already deduplicated
+  in-memory shelf cache.
+
 ## 2026-07-21 - Send to Kindle progress
 
 - Added streamed Send to Kindle progress events without introducing a
@@ -15,6 +48,21 @@
 - Fixed translated Open Library works so book pages retain the selected EN or
   CN edition title and cover instead of reverting to a canonical title in a
   different language and searching downloads with it.
+- Fixed CN download options defaulting to English, added an explicit Chinese
+  filter, accepted bilingual source records, and preferred Han-character
+  edition titles over pinyin when Open Library supplies both. CN book pages now
+  search localized titles without forcing an English author token that Chinese
+  source records do not contain.
+- Standardized CN browsing on stable English edition titles where Open Library
+  provides them, while book pages show a verified Chinese title beneath the
+  primary heading and download searches retain localized edition titles.
+- Added cached ISBN-based Han-title resolution for Chinese works that Open
+  Library exposes only as pinyin, plus bounded lazy English-title enhancement
+  for visible CN shelf cards and hero items.
+- Clarified the Settings menu with a Kindle section and a status-aware Settings
+  row, and preserved an existing app password when editing configured details.
+- Fixed translated works displaying Dutch or other incompatible work-level
+  descriptions by falling back to a matching English edition description.
 
 ## 2026-07-17 - Interface and download experience overhaul
 

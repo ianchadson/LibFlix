@@ -107,16 +107,26 @@ select:focus-visible {
 }
 
 .navbar-brand {
+  display: inline-flex;
+  align-items: center;
   color: var(--app-red) !important;
+  text-decoration: none;
   font-size: 1.3rem !important;
   font-weight: 800 !important;
   letter-spacing: 0 !important;
 }
 
 .cat-tabs {
+  display: flex;
+  overflow-x: auto;
+  scrollbar-width: none;
   gap: 2px !important;
   padding: 6px 18px !important;
   mask-image: linear-gradient(90deg, transparent, #000 14px, #000 calc(100% - 14px), transparent) !important;
+}
+
+.cat-tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .cat-tab {
@@ -172,6 +182,11 @@ select:focus-visible {
   box-shadow: 0 0 0 3px rgba(242, 13, 27, .07), 0 12px 32px rgba(0, 0, 0, .34) !important;
 }
 
+.search-bar {
+  display: flex;
+  align-items: center;
+}
+
 .search-bar input {
   color: #fff !important;
 }
@@ -209,6 +224,23 @@ select:focus-visible {
 
 .settings-action-btn {
   border-radius: var(--app-radius) !important;
+}
+
+.book-card-link {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+}
+
+.home-shelves {
+  padding: 30px 24px 0;
+}
+
+.app-footer {
+  padding: 24px;
+  color: var(--app-faint);
+  text-align: center;
+  font-size: .78rem;
 }
 
 .kindle-modal {
@@ -687,8 +719,17 @@ footer {
   letter-spacing: 0 !important;
 }
 
+.detail-localized-title {
+  max-width: 780px;
+  margin-top: 9px;
+  color: #e1e2e5;
+  font-size: 1.24rem;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
 .detail-author {
-  margin-top: 10px !important;
+  margin-top: 8px !important;
   color: #c2c3c7 !important;
   font-size: 1.08rem !important;
 }
@@ -1583,6 +1624,11 @@ footer {
 
   .detail-author {
     font-size: 1rem !important;
+  }
+
+  .detail-localized-title {
+    margin-top: 7px;
+    font-size: 1.05rem;
   }
 
   .detail-description-wrap {

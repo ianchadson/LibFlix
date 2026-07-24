@@ -26,6 +26,9 @@ Browser requests /
        -> shelf-order dedupe and refill
        -> Open Library search when cache is cold or a shelf needs refill
   -> render index.html with fixed-height cycleable hero + shelves
+       -> shelf wrappers render as stable skeletons
+       -> active hero description hydrates through /api/book?description_only=1
+  -> IntersectionObserver hydrates each complete shelf near the viewport
   -> user scrolls a shelf horizontally
   -> JS fetches /api/shelf/<topic>?page=N&mode=...&book_lang=...
   -> new book cards are inserted before the compact arrow button
@@ -37,7 +40,9 @@ Important behavior:
 - The first shelf is labeled `Trending` in both fiction and non-fiction.
 - Cached shelf labels are normalized during render so old cache files using
   labels such as `New & Popular` do not leak into the UI.
-- Each shelf initially renders up to 40 books.
+- The initial HTML contains shelf skeletons rather than hundreds of cards.
+- A shelf hydrates a complete 40-book first page near the viewport, so
+  progressive rendering never exposes an artificially short row.
 - Shelves are deduped in top-to-bottom priority order. A book that appears in
   an earlier shelf is excluded from later shelves.
 - Later shelves try to refill from deeper Open Library pages after duplicates
@@ -48,6 +53,8 @@ Important behavior:
   titles, authors, descriptions, or covers change.
 - Hero side covers, dots, and arrow buttons can all change the active featured
   book.
+- Only the active hero description is fetched. Side-book descriptions remain
+  dormant until selection.
 
 ### Category Page (`GET /category/<topic>`)
 
@@ -145,6 +152,29 @@ BOOK_LANG_CONFIG = {
   `source` parameters from old links.
 - `shelf_query(topic, lang)` adds an Open Library language filter to each query.
 
+### CN Title Presentation
+
+Chinese catalogs often mix Han titles, pinyin, and translated English titles.
+LibFlix uses a deliberately split presentation model:
+
+1. Shelf, category, search, and hero cards keep native Han titles, but replace
+   pinyin-only labels with an English edition title from Open Library when one
+   exists.
+2. Book pages use the English edition title as the primary heading and show a
+   verified Han title beneath it.
+3. Download searches use the localized Chinese title, and result rows retain the
+   exact edition title returned by the download source.
+
+Browse-title lookups use an `IntersectionObserver` and a three-request browser
+queue, so only nearby cards are enhanced and initial rendering is never blocked.
+Both successful and empty lookups are cached for 30 days.
+
+For the secondary book-page title, LibFlix first checks Chinese Open Library
+editions. If they only contain pinyin, it collects their ISBNs and attempts a
+bounded Douban mobile-metadata lookup. These server-side calls are limited to
+four concurrent requests. Pinyin remains the final fallback when no Han title
+can be verified.
+
 ### Open Library Helpers
 
 | Function | Responsibility |
@@ -155,6 +185,10 @@ BOOK_LANG_CONFIG = {
 | `extract_book(record, lang)` | Normalize Open Library search record to app book card |
 | `first_matching_edition(record, lang)` | Prefer an edition matching the active language |
 | `edition_cover_id(edition)` | Pick a usable Open Library cover id |
+| `resolve_chinese_title(ol_key)` | Resolve and cache a Han title from Chinese-edition ISBN metadata |
+| `chinese_download_queries(ol_key, metadata)` | Build ordered download aliases from Chinese edition titles, cleaned suffixes, and Traditional-to-Simplified conversion |
+| `resolve_english_title(ol_key)` | Resolve and cache a stable English display title for CN browsing |
+| `english_description_for_work(ol_key, work)` | Prefer an English work or edition description and reject incompatible catalog text |
 | `fetch_one_shelf(name, topic, lang)` | Server-rendered first shelf/category batch |
 | `fetch_category_books(topic, page, lang)` | Paginated category/home shelf JSON source |
 | `collect_unique_topic_books(topic, lang, seen_keys, target)` | Pull deeper Open Library pages until a shelf has unique books or pages are exhausted |
@@ -219,7 +253,7 @@ Returns:
     {
       "title": "A Brief History of Time",
       "author": "Stephen Hawking",
-      "cover_url": "/olcover/240726",
+      "cover_url": "https://covers.openlibrary.org/b/id/240726-M.jpg",
       "ol_key": "/works/OL82563W"
     }
   ],
@@ -434,22 +468,34 @@ The renderer also:
 
 ### Rendering Performance
 
-Shelf card skeletons are static to avoid running an animation for every
-offscreen cover. High-priority hero, download, and local loading surfaces keep
-bounded animation, while `content-visibility` skips work for distant homepage
-shelves. Fixed dimensions prevent async covers and result content from shifting
-the surrounding layout.
+Shelf wrappers and their fixed-size loading rows are server-rendered, while card
+markup and images hydrate within a `120px` observer margin. High-priority hero,
+download, and local loading surfaces keep bounded animation, while
+`content-visibility` skips work for distant homepage shelves. Fixed dimensions
+prevent async covers and result content from shifting the surrounding layout.
+
+The navbar performs document prefetch only after 100ms of pointer intent or an
+explicit keyboard/touch interaction. There is no idle sweep of category pages.
+Book-card intent may prefetch that one clean book URL. Book cards also populate
+an in-process hint index, so their detail route can render title, author, and
+cover without making an Open Library request. Full descriptions, localized
+titles, and similar-book subjects hydrate after the initial shell is visible.
+Static CSS/JS assets carry an mtime version and receive immutable one-year cache
+headers. Open Library covers load directly from its CDN after a preconnect;
+only the active hero cover uses the large rendition.
 
 ### Homepage Shelf Infinite Scroll
 
 Each shelf stores state on the shelf element:
 
 ```html
-<div class="shelf" data-topic="history" data-page="1" data-total-pages="25" data-loading="0">
+<div class="shelf" data-topic="history" data-page="0" data-total-pages="25"
+     data-loading="0" data-deferred="1">
 ```
 
-When the row scroll position approaches the right edge, `loadShelfMore()` calls
-`/api/shelf/<topic>` and inserts cards before the compact arrow button.
+The first observer intersection calls page 1 and removes the skeleton. When the
+row later approaches the right edge, `loadShelfMore()` requests subsequent pages
+and inserts cards before the compact arrow button.
 
 Homepage book cards carry Open Library key, title, and author data attributes.
 The browser runs a shelf-priority sweep on initial render and after horizontal
@@ -493,15 +539,44 @@ and WebKit scrollbar hiding rules.
 | Data | Store | Key Pattern | TTL / Lifetime |
 |---|---|---|---|
 | Open Library JSON | memory | `ol:{path}:{params}` | 1 hour |
-| Open Library JSON | disk `api_cache.json` | SHA-256 of request key | 6 hours |
+| Open Library JSON | SQLite `api_cache.sqlite3` | SHA-256 of request key | 6 hours |
+| Chinese title resolution | memory + SQLite | `chinese_title:v1:<ol_key>` | 30 days |
+| CN English display title | memory + SQLite | `english_title:v1:<ol_key>` | 30 days |
+| Book metadata | memory + SQLite | `book_meta:<lang>:<work>` | 6 hours |
+| Download search results | memory + SQLite | `download_search:v1:...` | 15 minutes |
 | Homepage shelves | memory | `shelves_{lang}_{mode}` | 1 hour |
-| Homepage shelves | disk | `shelf_cache_{lang}_{mode}.json` | reused on restart |
-| Cover images | HTTP response | `/olcover/<cover_id>/<size>` | 24 hours |
+| Homepage shelves | disk | `shelf_cache_{lang}_{mode}.json` | immediate restart hydration; stale after 6 hours |
+| Cover images | Open Library CDN | `covers.openlibrary.org/b/id/...` | provider/browser cache |
+| Versioned static assets | browser HTTP cache | `/static/...?...v=<mtime>` | 1 year immutable |
 
 Runtime cache files are ignored by git.
 
+SQLite runs in WAL mode with `synchronous=NORMAL`. Each cache update touches one
+row instead of reading and rewriting the former multi-megabyte JSON object.
+Rows older than the longest supported metadata TTL are pruned at initialization.
+Legacy `api_cache.json` is migrated once when the database does not yet exist.
+
+All four language/mode shelf files are loaded before Flask begins serving.
+Network refresh is not part of startup: a stale requested shelf set schedules a
+single delayed background refresh guarded by `(language, mode)`.
+
+Shelf-cache startup also builds the lightweight book-hint index. Category,
+discovery, shelf, and similar-book API extraction extends that index during the
+process lifetime. A valid direct book URL with no hint still returns a stable
+shell immediately and lets `/api/book` hydrate its identity and description.
+
+CN book hydration also returns an ordered `download_queries` list. The client
+tries the next alias only when the current Chinese-filtered search is empty and
+retains the successful alias for pagination and retries. This covers edition
+suffixes, mixed English/Chinese titles, alternate Open Library edition names,
+Traditional/Simplified indexing differences, and a small explicit override map
+for known catalog-title mismatches without displaying non-Chinese files.
+
 ## Discovery Source
 
-Open Library is the only discovery source documented for the app. The language
-URL helper strips obsolete source parameters from older links so current routes
-stay focused on mode, language, category, and query state.
+Open Library remains the only source used to discover, rank, or label browse
+cards. Douban is used only as an optional ISBN metadata fallback for the
+secondary Chinese title on a book page when a Chinese Open Library edition lacks
+Han characters. The language URL helper strips obsolete source parameters from
+older links so current routes stay focused on mode, language, category, and
+query state.

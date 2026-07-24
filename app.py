@@ -1,4 +1,4 @@
-import re, os, json, html as htmlmod, warnings, time, random, threading, hashlib
+import re, os, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3
 from urllib.parse import urljoin, quote, urlencode
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -7,6 +7,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, Response, stream_with_context, jsonify, g, redirect
+from opencc import OpenCC
 
 # Modular download source — see ``downloaders/`` package.
 from downloaders import DOWNLOADER
@@ -19,8 +20,11 @@ OL = "https://openlibrary.org"
 CACHE = {}
 CACHE_TTL_OL = 3600
 API_DISK_CACHE_TTL = 21600
+CHINESE_TITLE_CACHE_TTL = 2592000
 SHELF_DISK_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "shelf_cache.json")
 API_DISK_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_cache.json")
+API_SQLITE_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_cache.sqlite3")
+SHELF_REFRESH_TTL = 21600
 OL_BOOK_FIELDS = "key,title,author_name,cover_i,cover_id,language,editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id"
 SHELF_BOOK_TARGET = 40
 SHELF_SEARCH_LIMIT = 100
@@ -37,6 +41,9 @@ BOOK_LANG_CONFIG = {
         "label": "CN",
         "ol_lang": "chi",
     },
+}
+CHINESE_DOWNLOAD_TITLE_ALIASES = {
+    "the big short": ["大空头"],
 }
 
 def normalize_book_lang(lang):
@@ -134,38 +141,93 @@ SESSION.mount("https://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
 SESSION.mount("http://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
 SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
 DISK_CACHE_LOCK = threading.Lock()
+CHINESE_TITLE_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(4)
+SHELF_REFRESH_LOCK = threading.Lock()
+SHELF_REFRESHING = set()
+SQLITE_CACHE_READY = False
+BOOK_HINTS = {}
+BOOK_HINTS_LOCK = threading.Lock()
+OPENCC_T2S = OpenCC("t2s")
 
 def disk_cache_key(key):
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
+def initialize_disk_cache():
+    global SQLITE_CACHE_READY
+    if SQLITE_CACHE_READY:
+        return
+    with DISK_CACHE_LOCK:
+        if SQLITE_CACHE_READY:
+            return
+        database_exists = os.path.exists(API_SQLITE_CACHE)
+        migrated_legacy_cache = False
+        with sqlite3.connect(API_SQLITE_CACHE, timeout=10) as connection:
+            connection.execute("PRAGMA journal_mode=WAL")
+            connection.execute("PRAGMA synchronous=NORMAL")
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS api_cache ("
+                "cache_key TEXT PRIMARY KEY, created_at REAL NOT NULL, payload TEXT NOT NULL)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS api_cache_created_at ON api_cache(created_at)"
+            )
+            if not database_exists and os.path.exists(API_DISK_CACHE):
+                try:
+                    with open(API_DISK_CACHE, "r") as legacy_file:
+                        legacy = json.load(legacy_file)
+                    rows = [
+                        (cache_key, item.get("t", 0), json.dumps(item.get("d")))
+                        for cache_key, item in legacy.items()
+                        if isinstance(item, dict) and "d" in item
+                    ]
+                    connection.executemany(
+                        "INSERT OR REPLACE INTO api_cache(cache_key, created_at, payload) VALUES (?, ?, ?)",
+                        rows,
+                    )
+                    migrated_legacy_cache = bool(rows)
+                except (OSError, ValueError, sqlite3.Error):
+                    pass
+            connection.execute(
+                "DELETE FROM api_cache WHERE created_at < ?",
+                (time.time() - CHINESE_TITLE_CACHE_TTL,),
+            )
+        if migrated_legacy_cache:
+            try:
+                os.unlink(API_DISK_CACHE)
+            except OSError:
+                pass
+        SQLITE_CACHE_READY = True
+
 def disk_cache_get(key, ttl=API_DISK_CACHE_TTL):
     cache_key = disk_cache_key(key)
+    initialize_disk_cache()
     try:
-        with DISK_CACHE_LOCK:
-            with open(API_DISK_CACHE, "r") as f:
-                data = json.load(f)
-        item = data.get(cache_key)
-        if item and time.time() - item.get("t", 0) < ttl:
-            return item.get("d")
-    except:
+        with sqlite3.connect(API_SQLITE_CACHE, timeout=5) as connection:
+            row = connection.execute(
+                "SELECT created_at, payload FROM api_cache WHERE cache_key = ?",
+                (cache_key,),
+            ).fetchone()
+            if not row:
+                return None
+            if time.time() - row[0] >= ttl:
+                connection.execute("DELETE FROM api_cache WHERE cache_key = ?", (cache_key,))
+                return None
+            return json.loads(row[1])
+    except (sqlite3.Error, ValueError):
         pass
     return None
 
 def disk_cache_set(key, data):
     cache_key = disk_cache_key(key)
+    initialize_disk_cache()
     try:
-        with DISK_CACHE_LOCK:
-            try:
-                with open(API_DISK_CACHE, "r") as f:
-                    cache = json.load(f)
-            except:
-                cache = {}
-            cache[cache_key] = {"t": time.time(), "d": data}
-            tmp = API_DISK_CACHE + ".tmp"
-            with open(tmp, "w") as f:
-                json.dump(cache, f)
-            os.replace(tmp, API_DISK_CACHE)
-    except:
+        payload = json.dumps(data, separators=(",", ":"))
+        with sqlite3.connect(API_SQLITE_CACHE, timeout=5) as connection:
+            connection.execute(
+                "INSERT OR REPLACE INTO api_cache(cache_key, created_at, payload) VALUES (?, ?, ?)",
+                (cache_key, time.time(), payload),
+            )
+    except (sqlite3.Error, TypeError, ValueError):
         pass
 
 def cache_get(key, ttl=CACHE_TTL_OL):
@@ -180,10 +242,10 @@ def cache_set(key, data):
 def ol_get(path, params=None):
     key = f"ol:{path}:{str(params)}"
     cached = cache_get(key, CACHE_TTL_OL)
-    if cached:
+    if cached is not None:
         return cached
     cached = disk_cache_get(key)
-    if cached:
+    if cached is not None:
         cache_set(key, cached)
         return cached
     try:
@@ -265,12 +327,12 @@ _ENGLISH_WORDS = frozenset(
     "story book author memoir life world history man woman people time year".split()
 )
 
-def is_english_text(text, threshold=4):
+def is_english_text(text, threshold=4, min_ratio=0.18):
     words = re.findall(r"[a-zA-Z']+", text.lower())
     if len(words) < 4:
         return False
     hits = sum(1 for w in words if w in _ENGLISH_WORDS)
-    return hits >= threshold
+    return hits >= threshold and hits / len(words) >= min_ratio
 
 def text_matches_lang(text, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
@@ -287,6 +349,13 @@ def record_has_lang(record, lang=None):
 def first_matching_edition(w, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     editions = (w.get("editions") or {}).get("docs", [])
+    if lang == "cn":
+        for ed in editions:
+            if record_has_lang(ed, lang) and is_chinese_title(ed.get("title", "")):
+                return ed
+        for ed in editions:
+            if is_chinese_title(ed.get("title", "")):
+                return ed
     for ed in editions:
         if record_has_lang(ed, lang):
             return ed
@@ -301,6 +370,163 @@ def edition_cover_id(ed):
     if isinstance(covers, list) and covers:
         return covers[0]
     return ed.get("cover_i") or ed.get("cover_id")
+
+def open_library_cover_url(cover_id, size="M"):
+    if not cover_id:
+        return ""
+    size = size if size in ("S", "M", "L") else "M"
+    return f"https://covers.openlibrary.org/b/id/{cover_id}-{size}.jpg"
+
+def edition_language_codes(edition):
+    codes = set()
+    for language in edition.get("languages") or []:
+        if isinstance(language, dict):
+            key = language.get("key", "")
+            if key:
+                codes.add(key.rsplit("/", 1)[-1].lower())
+        elif language:
+            codes.add(str(language).lower())
+    return codes
+
+def chinese_download_queries(ol_key, metadata=None):
+    ckey = f"chinese_download_queries:v1:{ol_key}"
+    cached = cache_get(ckey, CHINESE_TITLE_CACHE_TTL)
+    if cached is None:
+        cached = disk_cache_get(ckey, CHINESE_TITLE_CACHE_TTL)
+        if cached is not None:
+            cache_set(ckey, cached)
+    edition_titles = list((cached or {}).get("titles", []))
+    if cached is None:
+        editions_data = ol_get(f"{ol_key}/editions.json", {"limit": 100}) or {}
+        for edition in editions_data.get("entries", []):
+            title = str(edition.get("title") or "").strip()
+            if title and (is_chinese_title(title) or "chi" in edition_language_codes(edition)):
+                edition_titles.append(title)
+        edition_titles = list(dict.fromkeys(edition_titles))
+        payload = {"titles": edition_titles}
+        cache_set(ckey, payload)
+        disk_cache_set(ckey, payload)
+
+    metadata = metadata or {}
+    explicit_aliases = CHINESE_DOWNLOAD_TITLE_ALIASES.get(
+        str(metadata.get("title") or "").strip().casefold(),
+        [],
+    )
+    source_titles = [
+        *explicit_aliases,
+        metadata.get("download_title", ""),
+        metadata.get("localized_title", ""),
+        *edition_titles,
+    ]
+    queries = []
+
+    def add(value):
+        value = re.sub(r"\s+", " ", str(value or "")).strip(" /|｜-–—")
+        if value and value not in queries:
+            queries.append(value)
+
+    for title in source_titles:
+        title = str(title or "").strip()
+        cleaned = re.sub(r"\s*[\(\（\[【].*?[\)\）\]】]\s*", " ", title)
+        chinese_parts = [
+            part.strip()
+            for part in re.split(r"[/|｜]", cleaned)
+            if is_chinese_title(part)
+        ]
+        preferred = chinese_parts or [cleaned]
+        for candidate in preferred:
+            add(candidate)
+            if is_chinese_title(candidate):
+                add(OPENCC_T2S.convert(candidate))
+        add(title)
+        if is_chinese_title(title):
+            add(OPENCC_T2S.convert(title))
+
+    add(metadata.get("title", ""))
+    return queries[:10]
+
+def resolve_chinese_title(ol_key):
+    if not re.fullmatch(r"/works/OL\d+W", ol_key or ""):
+        return ""
+    ckey = f"chinese_title:v1:{ol_key}"
+    cached = cache_get(ckey, CHINESE_TITLE_CACHE_TTL)
+    if cached is None:
+        cached = disk_cache_get(ckey, CHINESE_TITLE_CACHE_TTL)
+        if cached is not None:
+            cache_set(ckey, cached)
+    if cached is not None:
+        return cached.get("title", "")
+
+    editions_data = ol_get(f"{ol_key}/editions.json", {"limit": 100}) or {}
+    chinese_editions = [
+        edition for edition in editions_data.get("entries", [])
+        if "chi" in edition_language_codes(edition)
+    ]
+    for edition in chinese_editions:
+        title = str(edition.get("title") or "").strip()
+        if is_chinese_title(title):
+            result = {"title": title}
+            cache_set(ckey, result)
+            disk_cache_set(ckey, result)
+            return title
+
+    isbns = []
+    for edition in chinese_editions:
+        for field in ("isbn_13", "isbn_10"):
+            for isbn in edition.get(field) or []:
+                normalized = re.sub(r"[^0-9Xx]", "", str(isbn))
+                if normalized and normalized not in isbns:
+                    isbns.append(normalized)
+
+    title = ""
+    for isbn in isbns[:8]:
+        try:
+            with CHINESE_TITLE_LOOKUP_SEMAPHORE:
+                response = SESSION.get(
+                    f"https://m.douban.com/rexxar/api/v2/book/isbn/{isbn}",
+                    timeout=8,
+                    headers={"Referer": "https://book.douban.com/"},
+                )
+            if response.status_code != 200:
+                continue
+            candidate = str(response.json().get("title") or "").strip()
+            if is_chinese_title(candidate):
+                title = candidate
+                break
+        except (requests.RequestException, ValueError):
+            continue
+
+    result = {"title": title}
+    cache_set(ckey, result)
+    disk_cache_set(ckey, result)
+    return title
+
+def resolve_english_title(ol_key):
+    if not re.fullmatch(r"/works/OL\d+W", ol_key or ""):
+        return ""
+    ckey = f"english_title:v1:{ol_key}"
+    cached = cache_get(ckey, CHINESE_TITLE_CACHE_TTL)
+    if cached is None:
+        cached = disk_cache_get(ckey, CHINESE_TITLE_CACHE_TTL)
+        if cached is not None:
+            cache_set(ckey, cached)
+    if cached is not None:
+        return cached.get("title", "")
+
+    data = ol_get("/search.json", {
+        "q": f"key:{ol_key} language:eng",
+        "limit": 1,
+        "fields": OL_BOOK_FIELDS,
+    })
+    record = ((data or {}).get("docs") or [{}])[0]
+    edition = first_matching_edition(record, "en")
+    title = str((edition or {}).get("title") or "").strip()
+    if not title_matches_lang(title, "en"):
+        title = ""
+    result = {"title": title}
+    cache_set(ckey, result)
+    disk_cache_set(ckey, result)
+    return title
 
 def extract_book(w, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
@@ -326,9 +552,61 @@ def extract_book(w, lang=None):
             break
     if not author:
         return None
-    cover_url = f"/olcover/{cover_id}" if cover_id else ""
+    cover_url = open_library_cover_url(cover_id)
     ol_key = w.get("key", "")
-    return {"title": title, "author": author, "cover_url": cover_url, "ol_key": ol_key}
+    book = {"title": title, "author": author, "cover_url": cover_url, "ol_key": ol_key}
+    remember_book_hint(book, lang)
+    return book
+
+def remember_book_hint(book, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    ol_key = str((book or {}).get("ol_key") or "").strip()
+    if not re.fullmatch(r"/works/OL\d+W", ol_key):
+        return
+    hint = {
+        "title": str(book.get("title") or "").strip(),
+        "author": str(book.get("author") or "").strip(),
+        "cover_url": str(book.get("cover_url") or "").strip(),
+        "ol_key": ol_key,
+    }
+    with BOOK_HINTS_LOCK:
+        current = BOOK_HINTS.get((lang, ol_key), {})
+        BOOK_HINTS[(lang, ol_key)] = {
+            key: value or current.get(key, "")
+            for key, value in hint.items()
+        }
+
+def hinted_book_metadata(work_id, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    ol_key = ol_key_from_work_id(work_id)
+    if not ol_key:
+        return None
+    with BOOK_HINTS_LOCK:
+        local_hint = dict(BOOK_HINTS.get((lang, ol_key), {}))
+        english_hint = dict(BOOK_HINTS.get(("en", ol_key), {}))
+    hint = local_hint or english_hint
+    if not hint:
+        return None
+    selected_title = hint.get("title") or english_hint.get("title") or "Book"
+    localized_title = ""
+    title = selected_title
+    download_title = selected_title
+    if lang == "cn":
+        local_title = local_hint.get("title", "")
+        english_title = english_hint.get("title", "")
+        if english_title:
+            title = english_title
+        if local_title and is_chinese_title(local_title):
+            localized_title = local_title
+            download_title = local_title
+    return {
+        "title": title,
+        "localized_title": localized_title,
+        "download_title": download_title,
+        "author": hint.get("author") or english_hint.get("author", ""),
+        "cover_url": hint.get("cover_url") or english_hint.get("cover_url", ""),
+        "ol_key": ol_key,
+    }
 
 def book_identity_keys(book):
     keys = []
@@ -436,6 +714,15 @@ def fetch_category_page_books(topic, page=1, mode="nonfiction", lang=None):
     cached = cache_get(ckey, 900)
     if cached:
         return cached
+    if page == 1:
+        shelf = next(
+            (item for item in get_shelves(mode, lang) if item.get("topic") == topic),
+            None,
+        )
+        if shelf and shelf.get("books"):
+            result = (shelf["books"][:SHELF_BOOK_TARGET], len(shelf["books"]), SHELF_MAX_OPEN_LIBRARY_PAGES)
+            cache_set(ckey, result)
+            return result
     target = SHELF_BOOK_TARGET * page
     seen_keys = seen_keys_before_shelf(topic, mode, lang)
     max_pages = min(SHELF_MAX_OPEN_LIBRARY_PAGES, max(SHELF_REFILL_OPEN_LIBRARY_PAGES, page + 2))
@@ -455,6 +742,15 @@ def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
     cached = cache_get(ckey, 900)
     if cached:
         return cached
+    if page == 1:
+        shelf = next(
+            (item for item in get_shelves(mode, lang) if item.get("topic") == topic),
+            None,
+        )
+        if shelf and shelf.get("books"):
+            result = (shelf["books"][:SHELF_BOOK_TARGET], len(shelf["books"]), SHELF_MAX_OPEN_LIBRARY_PAGES)
+            cache_set(ckey, result)
+            return result
     target = SHELF_BOOK_TARGET * page
     seen_keys = seen_keys_before_shelf(topic, mode, lang)
     max_pages = min(SHELF_MAX_OPEN_LIBRARY_PAGES, max(SHELF_REFILL_OPEN_LIBRARY_PAGES, page + 2))
@@ -574,6 +870,16 @@ def dedup(books):
         best.append(group[0])
     return best
 
+def book_matches_language(book, language):
+    if not language or language == "all":
+        return True
+    values = {
+        part.strip().lower()
+        for part in re.split(r"[;,/]", book.language or "")
+        if part.strip()
+    }
+    return language.lower() in values
+
 def strip_html(text):
     if not text:
         return ""
@@ -593,6 +899,32 @@ def extract_desc(work):
     desc = re.sub(r"\s+", " ", desc).strip()
     return desc
 
+def english_description_for_work(ol_key, work=None):
+    work = work or ol_get_work(ol_key) or {}
+    description = extract_desc(work)
+    if is_english_text(description):
+        return description
+
+    editions_data = ol_get(f"{ol_key}/editions.json", {"limit": 100}) or {}
+    candidates = []
+    for edition in editions_data.get("entries", []):
+        if "eng" not in edition_language_codes(edition):
+            continue
+        candidate = extract_desc(edition)
+        if is_english_text(candidate):
+            candidates.append(candidate)
+    if not candidates:
+        return ""
+
+    def description_rank(candidate):
+        word_count = len(candidate.split())
+        awkward_lead = candidate.startswith(('"', "'")) or bool(
+            re.match(r"^[A-Z][A-Z !'-]{12,}", candidate)
+        )
+        return awkward_lead, not 40 <= word_count <= 350, abs(word_count - 120)
+
+    return min(candidates, key=description_rank)
+
 def first_work_author(work):
     authors = work.get("authors") or []
     for item in authors:
@@ -610,6 +942,10 @@ def book_metadata_from_work(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
     ckey = f"book_meta:{lang}:{work_id}"
     cached = cache_get(ckey, API_DISK_CACHE_TTL)
+    if cached is None:
+        cached = disk_cache_get(ckey, API_DISK_CACHE_TTL)
+        if cached is not None:
+            cache_set(ckey, cached)
     if cached:
         return cached
     ol_key = ol_key_from_work_id(work_id)
@@ -629,36 +965,28 @@ def book_metadata_from_work(work_id, lang=None):
     covers = work.get("covers") or []
     cover_id = edition_cover_id(edition or {}) or search_record.get("cover_i") or (covers[0] if covers else "")
     authors = search_record.get("author_name") or []
+    selected_title = (edition or {}).get("title") or search_record.get("title") or work.get("title", "")
+    title = selected_title
+    localized_title = ""
+    download_title = selected_title
+    if lang == "cn":
+        localized_title = selected_title if is_chinese_title(selected_title) else resolve_chinese_title(ol_key)
+        title = resolve_english_title(ol_key) or localized_title or selected_title
+        download_title = localized_title or selected_title or title
+        if localized_title == title:
+            localized_title = ""
     result = {
-        "title": (edition or {}).get("title") or search_record.get("title") or work.get("title", ""),
+        "title": title,
+        "localized_title": localized_title,
+        "download_title": download_title,
         "author": (authors[0] if authors else "") or first_work_author(work),
-        "cover_url": f"/olcover/{cover_id}" if cover_id else "",
+        "cover_url": open_library_cover_url(cover_id),
         "ol_key": ol_key,
     }
     cache_set(ckey, result)
+    disk_cache_set(ckey, result)
+    remember_book_hint(result, lang)
     return result
-
-def enrich_book_descriptions(books):
-    enriched = [dict(book) for book in books]
-
-    def load_description(index, ol_key):
-        if not ol_key or not ol_key.startswith("/works/"):
-            return index, ""
-        work = ol_get_work(ol_key)
-        return index, extract_desc(work or {})
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [
-            pool.submit(load_description, index, book.get("ol_key", ""))
-            for index, book in enumerate(enriched)
-        ]
-        for future in as_completed(futures):
-            try:
-                index, description = future.result()
-                enriched[index]["description"] = description
-            except:
-                pass
-    return enriched
 
 app = Flask(__name__)
 
@@ -667,18 +995,30 @@ def cache_headers(resp):
     if request.method in ("GET", "HEAD") and resp.status_code < 400:
         if resp.mimetype == "text/html":
             resp.headers["Cache-Control"] = "private, max-age=90, stale-while-revalidate=600"
-        elif request.path.startswith(("/api/book", "/api/category", "/api/shelf", "/api/discover")):
+        elif request.path.startswith(("/api/book", "/api/category", "/api/shelf", "/api/discover", "/api/cn-display-title")):
             resp.headers["Cache-Control"] = "private, max-age=600, stale-while-revalidate=3600"
         elif request.path.startswith("/api/search"):
             resp.headers["Cache-Control"] = "private, max-age=120"
         elif request.path.startswith("/static/"):
-            resp.headers["Cache-Control"] = "public, max-age=3600"
+            resp.headers["Cache-Control"] = (
+                "public, max-age=31536000, immutable"
+                if request.args.get("v")
+                else "public, max-age=3600"
+            )
     if resp.mimetype == "text/html" or request.path.startswith("/api/"):
         resp.set_cookie("book_lang", get_book_lang(), max_age=31536000, samesite="Lax")
     return resp
 
 @app.context_processor
 def inject_book_context():
+    static_paths = (
+        os.path.join(app.static_folder, "libflix.css"),
+        os.path.join(app.static_folder, "download-ui.js"),
+    )
+    asset_version = max(
+        (int(os.path.getmtime(path)) for path in static_paths if os.path.exists(path)),
+        default=1,
+    )
     return {
         "book_lang": get_book_lang(),
         "book_lang_label": BOOK_LANG_CONFIG[get_book_lang()]["label"],
@@ -687,6 +1027,7 @@ def inject_book_context():
         "category_url": clean_category_url,
         "discover_url": clean_discover_url,
         "book_url": book_url,
+        "asset_version": asset_version,
     }
 
 @app.template_filter("size_url")
@@ -696,6 +1037,8 @@ def size_url(url, size="M"):
     zoom = {"S": "1", "M": "3", "L": "5"}.get(size, "3")
     if url.startswith("/"):
         return f"{url.rstrip('/')}/{size}"
+    if "covers.openlibrary.org/b/id/" in url:
+        return re.sub(r"-[SML]\.jpg(?:\?.*)?$", f"-{size}.jpg", url)
     if "zoom=" in url:
         return re.sub(r'zoom=\d+', f'zoom={zoom}', url)
     return url
@@ -706,9 +1049,12 @@ SORT_OPTIONS = {
     "time_added": "Date Added"
 }
 
-def disk_load_shelves(mode="nonfiction", lang=None):
+def shelf_cache_path(mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    path = SHELF_DISK_CACHE.replace(".json", f"_{lang}_{mode}.json")
+    return SHELF_DISK_CACHE.replace(".json", f"_{lang}_{mode}.json")
+
+def disk_load_shelves(mode="nonfiction", lang=None):
+    path = shelf_cache_path(mode, lang)
     try:
         with open(path, "r") as f:
             data = json.load(f)
@@ -719,8 +1065,7 @@ def disk_load_shelves(mode="nonfiction", lang=None):
     return None
 
 def disk_save_shelves(shelves, mode="nonfiction", lang=None):
-    lang = lang or DEFAULT_BOOK_LANG
-    path = SHELF_DISK_CACHE.replace(".json", f"_{lang}_{mode}.json")
+    path = shelf_cache_path(mode, lang)
     try:
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
@@ -729,11 +1074,48 @@ def disk_save_shelves(shelves, mode="nonfiction", lang=None):
     except:
         pass
 
+def shelf_cache_is_fresh(mode="nonfiction", lang=None):
+    try:
+        return time.time() - os.path.getmtime(shelf_cache_path(mode, lang)) < SHELF_REFRESH_TTL
+    except OSError:
+        return False
+
+def schedule_shelf_refresh(mode="nonfiction", lang=None, delay=3):
+    lang = lang or DEFAULT_BOOK_LANG
+    refresh_key = (lang, mode)
+    if shelf_cache_is_fresh(mode, lang):
+        return
+    with SHELF_REFRESH_LOCK:
+        if refresh_key in SHELF_REFRESHING:
+            return
+        SHELF_REFRESHING.add(refresh_key)
+
+    def refresh():
+        try:
+            if delay:
+                time.sleep(delay)
+            shelves = normalize_shelf_labels(fetch_shelves(mode, lang), mode)
+            if shelves:
+                cache_set(f"shelves_{lang}_{mode}", shelves)
+                disk_save_shelves(shelves, mode, lang)
+        finally:
+            with SHELF_REFRESH_LOCK:
+                SHELF_REFRESHING.discard(refresh_key)
+
+    threading.Thread(target=refresh, daemon=True, name=f"shelf-refresh-{lang}-{mode}").start()
+
 def normalize_shelf_labels(shelves, mode="nonfiction"):
     names_by_topic = {topic: name for name, topic in get_shelves_def(mode)}
     normalized = []
     for shelf in shelves or []:
         shelf_copy = dict(shelf)
+        shelf_copy["books"] = []
+        for book in shelf.get("books", []):
+            book_copy = dict(book)
+            match = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", book_copy.get("cover_url", ""))
+            if match:
+                book_copy["cover_url"] = open_library_cover_url(match.group(1))
+            shelf_copy["books"].append(book_copy)
         topic = shelf_copy.get("topic", "")
         if topic in names_by_topic:
             shelf_copy["name"] = names_by_topic[topic]
@@ -745,13 +1127,14 @@ def get_shelves(mode="nonfiction", lang=None):
     ckey = f"shelves_{lang}_{mode}"
     cached = cache_get(ckey, CACHE_TTL_OL)
     if cached:
+        schedule_shelf_refresh(mode, lang)
         return normalize_shelf_labels(cached, mode)
     disk = disk_load_shelves(mode, lang)
     if disk:
         shelves = dedupe_and_refill_shelves(disk, mode, lang)
         shelves = normalize_shelf_labels(shelves, mode)
         cache_set(ckey, shelves)
-        disk_save_shelves(shelves, mode, lang)
+        schedule_shelf_refresh(mode, lang)
         return shelves
     shelves = fetch_shelves(mode, lang)
     shelves = normalize_shelf_labels(shelves, mode)
@@ -823,7 +1206,7 @@ def render_home(mode="nonfiction", lang=None, error=None):
                     if (b.get("ol_key") or f"{b.get('title')}|{b.get('author')}") != hero_key
                 ]
                 hero_books = hero_books[:7]
-                hero_items = enrich_book_descriptions(hero_books)
+                hero_items = [dict(book, description="") for book in hero_books]
                 hero = hero_items[0]
     return render_template("index.html", shelves=shelves, hero=hero, hero_books=hero_books, hero_items=hero_items, mode=mode, error=error)
 
@@ -952,7 +1335,10 @@ def search():
     page = int(request.args.get("page", 1)) if request.args.get("page", "1").isdigit() else 1
     page = max(1, page)
     fmt = request.args.get("format", "all")
-    lang = request.args.get("lang", "English")
+    default_download_lang = "Chinese" if get_book_lang() == "cn" else "English"
+    lang = request.args.get("lang", default_download_lang)
+    if lang not in ("English", "Chinese", "all"):
+        lang = default_download_lang
     dedup_on = request.args.get("dedup", "1") == "1"
     return render_template("search.html",
         query=q, sort=sort, order=order, limit=limit,
@@ -986,9 +1372,24 @@ def book_page(work_id, clean_mode, clean_lang):
     g.book_lang_override = lang
     if clean_mode is None and ("mode" in request.args or "book_lang" in request.args):
         return preserve_query_redirect(clean_book_url(work_id, mode, lang))
-    book = book_metadata_from_work(work_id, lang)
-    if not book:
+    ol_key = ol_key_from_work_id(work_id)
+    if not ol_key:
         return render_template("book.html", title="Book not found", author="", cover_url="", ol_key="", mode=mode), 404
+    ckey = f"book_meta:{lang}:{work_id}"
+    book = cache_get(ckey, API_DISK_CACHE_TTL) or disk_cache_get(ckey, API_DISK_CACHE_TTL)
+    if book:
+        cache_set(ckey, book)
+    else:
+        book = hinted_book_metadata(work_id, lang)
+    if book is None:
+        book = {
+            "title": "Book",
+            "localized_title": "",
+            "download_title": "",
+            "author": "",
+            "cover_url": "",
+            "ol_key": ol_key,
+        }
     return render_template("book.html", mode=mode, **book)
 
 @app.route("/api/similar")
@@ -1024,14 +1425,58 @@ def api_book():
     work = ol_get_work(ol_key)
     if not work:
         return jsonify({"success": False, "error": "Book not found"})
-    description = extract_desc(work)
+    description = english_description_for_work(ol_key, work)
+    if request.args.get("description_only") == "1":
+        return jsonify({"success": True, "description": description})
+    metadata = book_metadata_from_work(work_id_from_ol_key(ol_key), get_book_lang()) or {}
     subjects = work.get("subjects", [])[:20]
+    download_queries = (
+        chinese_download_queries(ol_key, metadata)
+        if get_book_lang() == "cn"
+        else []
+    )
     return jsonify({
         "success": True,
-        "title": work.get("title", ""),
+        "title": metadata.get("title") or work.get("title", ""),
+        "localized_title": metadata.get("localized_title", ""),
+        "download_title": metadata.get("download_title", ""),
+        "author": metadata.get("author", ""),
+        "cover_url": metadata.get("cover_url", ""),
+        "download_queries": download_queries,
         "description": description,
         "subjects": subjects,
     })
+
+@app.route("/api/cn-display-title")
+def api_cn_display_title():
+    ol_key = request.args.get("ol_key", "").strip()
+    if not re.fullmatch(r"/works/OL\d+W", ol_key):
+        return jsonify({"success": False, "error": "Invalid Open Library work"}), 400
+    title = resolve_english_title(ol_key)
+    return jsonify({"success": bool(title), "title": title, "ol_key": ol_key})
+
+@app.route("/api/cn-display-titles")
+def api_cn_display_titles():
+    ol_keys = []
+    for ol_key in request.args.getlist("ol_key")[:24]:
+        ol_key = ol_key.strip()
+        if re.fullmatch(r"/works/OL\d+W", ol_key) and ol_key not in ol_keys:
+            ol_keys.append(ol_key)
+    if not ol_keys:
+        return jsonify({"success": False, "error": "No valid Open Library works"}), 400
+
+    titles = {}
+    with ThreadPoolExecutor(max_workers=min(4, len(ol_keys))) as pool:
+        futures = {pool.submit(resolve_english_title, ol_key): ol_key for ol_key in ol_keys}
+        for future in as_completed(futures):
+            ol_key = futures[future]
+            try:
+                title = future.result()
+            except Exception:
+                title = ""
+            if title:
+                titles[ol_key] = title
+    return jsonify({"success": True, "titles": titles})
 
 @app.route("/api/search")
 def api_search():
@@ -1047,8 +1492,22 @@ def api_search():
     fmt = request.args.get("format", "all").lower()
     if fmt not in ("all", "epub", "pdf", "mobi"):
         fmt = "all"
-    lang = request.args.get("lang", "English")
+    default_download_lang = "Chinese" if get_book_lang() == "cn" else "English"
+    lang = request.args.get("lang", default_download_lang)
+    if lang not in ("English", "Chinese", "all"):
+        lang = default_download_lang
     dedup_on = request.args.get("dedup", "1") == "1"
+    result_cache_key = (
+        f"download_search:v1:{q}:{sort}:{order}:{limit}:{page}:"
+        f"{fmt}:{lang}:{int(dedup_on)}"
+    )
+    cached_result = cache_get(result_cache_key, 900)
+    if cached_result is None:
+        cached_result = disk_cache_get(result_cache_key, 900)
+        if cached_result is not None:
+            cache_set(result_cache_key, cached_result)
+    if cached_result is not None:
+        return jsonify(cached_result)
 
     sort_field = "y" if sort == "year" else sort
     try:
@@ -1076,7 +1535,7 @@ def api_search():
     fmt_filter = None if fmt == "all" else fmt
     filtered = []
     for b in books:
-        if lang_filter and b.language.lower() != lang_filter.lower():
+        if lang_filter and not book_matches_language(b, lang_filter):
             continue
         if fmt_filter and b.ext.lower() != fmt_filter.lower():
             continue
@@ -1092,7 +1551,7 @@ def api_search():
         cover_dir = getattr(b, "cover_dir", "")
         d["cover_url"] = f"/cover/{d['md5']}?dir={cover_dir}" if cover_dir and d['md5'] else ""
         result_books.append(d)
-    return jsonify({
+    result = {
         "success": True,
         "query": q,
         "books": result_books,
@@ -1105,7 +1564,10 @@ def api_search():
         "format": fmt,
         "lang": lang,
         "dedup_on": dedup_on,
-    })
+    }
+    cache_set(result_cache_key, result)
+    disk_cache_set(result_cache_key, result)
+    return jsonify(result)
 
 @app.route("/download/<md5>")
 def download(md5):
@@ -1314,22 +1776,20 @@ def api_sendtokindle():
     status = 200 if final.get("success") else 502
     return jsonify(final), status
 
-def warm_cache():
-    lang = DEFAULT_BOOK_LANG
-    for mode in ("nonfiction", "fiction"):
-        disk = disk_load_shelves(mode, lang)
-        if disk:
-            cache_set(f"shelves_{lang}_{mode}", disk)
-            print(f"Loaded {len(disk)} Open Library {lang} {mode} shelves from disk cache (instant)", flush=True)
-    print(f"Warming cache: fetching fresh Open Library {lang} shelves...", flush=True)
-    t0 = time.time()
-    for mode in ("nonfiction", "fiction"):
-        shelves = fetch_shelves(mode, lang)
-        cache_set(f"shelves_{lang}_{mode}", shelves)
-        disk_save_shelves(shelves, mode, lang)
-        print(f"  {mode}: {len(shelves)} shelves", flush=True)
-    print(f"Cache warmed in {time.time()-t0:.1f}s", flush=True)
+def load_cached_shelves():
+    for lang in BOOK_LANGS:
+        for mode in ("nonfiction", "fiction"):
+            disk = disk_load_shelves(mode, lang)
+            if not disk:
+                continue
+            shelves = normalize_shelf_labels(disk, mode)
+            for shelf in shelves:
+                for book in shelf.get("books", []):
+                    remember_book_hint(book, lang)
+            cache_set(f"shelves_{lang}_{mode}", shelves)
+            print(f"Loaded {len(shelves)} Open Library {lang} {mode} shelves from disk cache", flush=True)
 
 if __name__ == "__main__":
-    threading.Thread(target=warm_cache, daemon=True).start()
+    initialize_disk_cache()
+    load_cached_shelves()
     app.run(host="0.0.0.0", port=5800, debug=True, use_reloader=False)

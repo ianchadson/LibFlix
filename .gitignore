@@ -10,4 +10,8 @@ tmp/
 .env
 shelf_cache*.json
 api_cache.json
+api_cache.json.tmp
+api_cache.sqlite3
+api_cache.sqlite3-shm
+api_cache.sqlite3-wal
 output/playwright/

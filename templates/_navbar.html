@@ -38,7 +38,11 @@
   .settings-action-btn { width:100%; min-height:38px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.065); color:#fff; border-radius:10px; padding:8px 10px; display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:.78rem; font-weight:650; transition:background .16s ease, border-color .16s ease, transform .16s ease; }
   .settings-action-btn:hover { background:rgba(255,255,255,.11); border-color:rgba(255,255,255,.18); transform:translateY(-1px); }
   .settings-action-icon { width:18px; height:18px; border-radius:5px; background:rgba(229,9,20,.16); color:#ff4b54; display:inline-flex; align-items:center; justify-content:center; font-size:.82rem; font-weight:800; flex:0 0 auto; }
-  .settings-action-text { display:flex; align-items:center; gap:8px; min-width:0; }
+  .settings-action-text { display:flex; align-items:center; gap:9px; min-width:0; text-align:left; }
+  .settings-action-copy { display:flex; flex-direction:column; gap:2px; min-width:0; }
+  .settings-action-title { color:#fff; font-size:.8rem; font-weight:720; line-height:1.1; }
+  .settings-action-state { color:rgba(255,255,255,.46); font-size:.67rem; font-weight:570; line-height:1.15; }
+  .settings-action-btn.is-configured .settings-action-state { color:#65d994; }
   .settings-action-arrow { color:rgba(255,255,255,.42); font-size:1rem; line-height:1; }
   .kindle-modal { position:absolute; left:0; right:0; top:0; min-height:100vh; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(4,4,5,.72); z-index:9998; }
   .kindle-modal.open { display:flex; }
@@ -157,7 +161,7 @@
   <div class="lib-nav-shell">
     <div class="lib-nav-main">
       <a class="navbar-brand" href="{{ home_url(nav_mode, book_lang) }}">LibFlix</a>
-      <div class="cat-tabs d-flex overflow-auto" style="scrollbar-width:none">
+      <div class="cat-tabs">
       {% if nav_mode == 'fiction' %}
       <a href="{{ home_url('fiction', book_lang) }}" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">Home</a>
       <a href="{{ category_url('trending_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">Trending</a>
@@ -186,9 +190,9 @@
       {% endif %}
       </div>
       <div class="nav-actions">
-        <form {% if search_id %}id="{{ search_id }}" action="javascript:"{% else %}action="{{ search_action | default(discover_url(nav_mode, book_lang)) }}" method="get"{% endif %} class="search-bar d-flex" role="search">
-          <input type="text" class="form-control" name="q" value="{{ search_value or '' }}" placeholder="Search..." aria-label="Search books">
-          <button class="btn ms-1 search-submit" type="submit" aria-label="Search" aria-expanded="false">
+        <form {% if search_id %}id="{{ search_id }}" action="javascript:"{% else %}action="{{ search_action | default(discover_url(nav_mode, book_lang)) }}" method="get"{% endif %} class="search-bar" role="search">
+          <input type="text" name="q" value="{{ search_value or '' }}" placeholder="Search..." aria-label="Search books">
+          <button class="search-submit" type="submit" aria-label="Search" aria-expanded="false">
             <span class="nav-search-icon" aria-hidden="true"></span>
           </button>
         </form>
@@ -217,9 +221,15 @@
               </div>
             </div>
             <div class="settings-group">
-              <div class="settings-label">Send</div>
+              <div class="settings-label">Kindle</div>
               <button class="settings-action-btn" id="navKindleSettings" type="button">
-                <span class="settings-action-text"><span class="settings-action-icon">K</span> Kindle settings</span>
+                <span class="settings-action-text">
+                  <span class="settings-action-icon">K</span>
+                  <span class="settings-action-copy">
+                    <span class="settings-action-title">Settings</span>
+                    <span class="settings-action-state" id="navKindleState">Configure Connection</span>
+                  </span>
+                </span>
                 <span class="settings-action-arrow" aria-hidden="true">›</span>
               </button>
             </div>
@@ -239,8 +249,8 @@
   <div class="kindle-card">
     <div class="kindle-card-head">
       <div>
-        <h2 class="kindle-card-title" id="kindleModalTitle">Send to Kindle</h2>
-        <p class="kindle-card-sub">Your delivery details stay in this browser.</p>
+        <h2 class="kindle-card-title" id="kindleModalTitle">Kindle</h2>
+        <p class="kindle-card-sub" id="kindleModalSub">Configure your Send to Kindle connection.</p>
       </div>
       <button class="kindle-close" type="button" onclick="closeKindleModal()" aria-label="Close Kindle settings">×</button>
     </div>
@@ -287,7 +297,7 @@
 <div class="app-toast" id="appToast" role="status" aria-live="polite" aria-atomic="true"></div>
 <script>
   (() => {
-    const TRANSITION_NAV_DELAY = 60;
+    const TRANSITION_NAV_DELAY = 0;
     const showTransition = () => {
       const overlay = document.getElementById('appTransition');
       document.body.classList.add('is-leaving');
@@ -315,6 +325,8 @@
       return true;
     };
     const prefetchedPages = new Set();
+    let intentPrefetchTimer = null;
+    let intentPrefetchLink = null;
     const canPrefetchPages = () => {
       const connection = navigator.connection || navigator.webkitConnection || navigator.mozConnection;
       return !(connection?.saveData || /(^|-)2g$/.test(connection?.effectiveType || ''));
@@ -323,7 +335,7 @@
       if (!canPrefetchPages() || !isInternalNavigation(href)) return;
       const url = new URL(href, window.location.href);
       const cacheKey = url.pathname + url.search;
-      if (prefetchedPages.has(cacheKey) || prefetchedPages.size > 36) return;
+      if (prefetchedPages.has(cacheKey) || prefetchedPages.size >= 12) return;
       prefetchedPages.add(cacheKey);
       const link = document.createElement('link');
       link.rel = 'prefetch';
@@ -332,7 +344,7 @@
       document.head.appendChild(link);
     };
     const prefetchLink = link => {
-      if (!link || link.querySelector('.book-card')) return;
+      if (!link) return;
       prefetchPage(link.href);
     };
     const navigateWithTransition = href => {
@@ -348,6 +360,7 @@
       }, TRANSITION_NAV_DELAY);
     };
     window.LibFlixLoading = { show: showTransition, hide: hideTransition };
+    document.addEventListener('DOMContentLoaded', hideTransition, { once: true });
     window.addEventListener('pageshow', hideTransition);
     window.addEventListener('load', hideTransition);
     window.addEventListener('pagehide', showTransition);
@@ -362,7 +375,20 @@
     });
     document.addEventListener('pointerover', event => {
       const link = event.target.closest('a[href]');
-      prefetchLink(link);
+      if (!link || link === intentPrefetchLink) return;
+      if (intentPrefetchTimer) window.clearTimeout(intentPrefetchTimer);
+      intentPrefetchLink = link;
+      intentPrefetchTimer = window.setTimeout(() => {
+        prefetchLink(link);
+        intentPrefetchTimer = null;
+      }, 100);
+    }, { passive: true });
+    document.addEventListener('pointerout', event => {
+      const link = event.target.closest('a[href]');
+      if (!link || link !== intentPrefetchLink || link.contains(event.relatedTarget)) return;
+      if (intentPrefetchTimer) window.clearTimeout(intentPrefetchTimer);
+      intentPrefetchTimer = null;
+      intentPrefetchLink = null;
     }, { passive: true });
     document.addEventListener('focusin', event => {
       const link = event.target.closest('a[href]');
@@ -372,16 +398,6 @@
       const link = event.target.closest('a[href]');
       prefetchLink(link);
     }, { passive: true });
-    const warmLikelyPages = () => {
-      document.querySelectorAll('.cat-tabs a[href], .hero-actions a[href]').forEach((link, index) => {
-        if (index < 10) prefetchPage(link.href);
-      });
-    };
-    if ('requestIdleCallback' in window) {
-      requestIdleCallback(warmLikelyPages, { timeout: 1800 });
-    } else {
-      window.setTimeout(warmLikelyPages, 900);
-    }
     document.addEventListener('submit', event => {
       const form = event.target;
       if (!form || event.defaultPrevented) return;
@@ -432,6 +448,8 @@
     });
     const kindleSettingsButton = document.getElementById('navKindleSettings');
     const kindleModal = document.getElementById('kindleModal');
+    const kindleState = document.getElementById('navKindleState');
+    const kindleModalSub = document.getElementById('kindleModalSub');
     const kindlePasswordToggle = document.getElementById('kindlePasswordToggle');
     const kindleForget = document.getElementById('kindleForget');
     let modalReturnFocus = null;
@@ -442,6 +460,24 @@
       } catch {
         return null;
       }
+    };
+    const isKindleConfigured = settings => Boolean(
+      settings?.kindle && settings?.host && settings?.sender && settings?.pass
+    );
+    const updateKindleConnectionState = () => {
+      const configured = isKindleConfigured(getKindleSettings());
+      kindleSettingsButton?.classList.toggle('is-configured', configured);
+      if (kindleState) kindleState.textContent = configured ? 'Configured' : 'Configure Connection';
+      kindleSettingsButton?.setAttribute(
+        'aria-label',
+        configured ? 'Kindle connection configured' : 'Configure Kindle connection'
+      );
+      if (kindleModalSub) {
+        kindleModalSub.textContent = configured
+          ? 'Connection configured in this browser.'
+          : 'Configure your Send to Kindle connection.';
+      }
+      return configured;
     };
     const setKindleStatus = (message, color = 'rgba(255,255,255,.54)') => {
       const status = document.getElementById('ke_status');
@@ -456,7 +492,8 @@
       modalReturnFocus = document.activeElement;
       kindleModal.classList.add('open');
       document.body.classList.add('modal-open');
-      kindleForget?.classList.toggle('visible', Boolean(settings));
+      kindleForget?.classList.toggle('visible', isKindleConfigured(settings));
+      updateKindleConnectionState();
       setKindleStatus('');
       document.getElementById('ke_kindle').value = settings?.kindle || '';
       document.getElementById('ke_host').value = settings?.host || 'smtp.gmail.com';
@@ -475,12 +512,13 @@
       modalReturnFocus = null;
     };
     window.saveKindleSettings = () => {
+      const savedSettings = getKindleSettings();
       const settings = {
         kindle: document.getElementById('ke_kindle')?.value.trim() || '',
         host: document.getElementById('ke_host')?.value.trim() || '',
         port: document.getElementById('ke_port')?.value.trim() || '587',
         sender: document.getElementById('ke_sender')?.value.trim() || '',
-        pass: document.getElementById('ke_pass')?.value || '',
+        pass: document.getElementById('ke_pass')?.value || savedSettings?.pass || '',
       };
       if (!settings.kindle || !settings.host || !settings.sender || !settings.pass) {
         setKindleStatus('All fields are required.', '#ff6b72');
@@ -489,6 +527,7 @@
       localStorage.setItem('libflix_kindle', JSON.stringify(settings));
       setKindleStatus('Saved.', '#35d07f');
       kindleForget?.classList.add('visible');
+      updateKindleConnectionState();
       window.setTimeout(window.closeKindleModal, 650);
     };
     window.clearKindleSettings = () => {
@@ -499,6 +538,7 @@
       document.getElementById('ke_sender').value = '';
       document.getElementById('ke_pass').value = '';
       kindleForget?.classList.remove('visible');
+      updateKindleConnectionState();
       setKindleStatus('Settings removed.', '#d4aa55');
     };
     kindlePasswordToggle?.addEventListener('click', () => {
@@ -509,6 +549,7 @@
       kindlePasswordToggle.setAttribute('aria-label', show ? 'Hide app password' : 'Show app password');
     });
     kindleForget?.addEventListener('click', window.clearKindleSettings);
+    updateKindleConnectionState();
     kindleSettingsButton?.addEventListener('click', event => {
       event.stopPropagation();
       setSettingsOpen(false);
@@ -711,5 +752,88 @@
     });
     document.addEventListener('scroll', scheduleQuickPeekScrollSync, { passive: true, capture: true });
     window.addEventListener('resize', hideQuickPeek);
+  })();
+
+  (() => {
+    if (document.documentElement.lang !== 'zh') return;
+    const requests = new Map();
+    const pending = new Map();
+    let batchTimer = null;
+    let batchActive = false;
+
+    const flushBatch = () => {
+      if (batchActive || !pending.size) return;
+      const jobs = Array.from(pending.entries()).slice(0, 24);
+      jobs.forEach(([olKey]) => pending.delete(olKey));
+      const params = new URLSearchParams();
+      jobs.forEach(([olKey]) => params.append('ol_key', olKey));
+      batchActive = true;
+      fetch('/api/cn-display-titles?' + params)
+        .then(response => response.json())
+        .then(data => {
+          const titles = data.success ? (data.titles || {}) : {};
+          jobs.forEach(([olKey, resolve]) => resolve(titles[olKey] || ''));
+        })
+        .catch(() => jobs.forEach(([, resolve]) => resolve('')))
+        .finally(() => {
+          batchActive = false;
+          if (pending.size) batchTimer = window.setTimeout(flushBatch, 20);
+        });
+    };
+    const scheduleBatch = () => {
+      if (batchTimer || batchActive) return;
+      batchTimer = window.setTimeout(() => {
+        batchTimer = null;
+        flushBatch();
+      }, 20);
+    };
+
+    window.LibFlixResolveCnDisplayTitle = olKey => {
+      if (!/^\/works\/OL\d+W$/.test(olKey || '')) return Promise.resolve('');
+      if (requests.has(olKey)) return requests.get(olKey);
+      const request = new Promise(resolve => {
+        pending.set(olKey, resolve);
+        scheduleBatch();
+      });
+      requests.set(olKey, request);
+      return request;
+    };
+
+    const updateCard = (card, title) => {
+      if (!card?.isConnected || !title) return;
+      card.dataset.title = title;
+      const label = card.querySelector('.info .t');
+      if (label) label.textContent = title;
+      const image = card.querySelector('img');
+      if (image) image.alt = title;
+    };
+    const resolveCard = card => {
+      if (!card || card.dataset.cnDisplayTitleQueued === '1') return;
+      const olKey = card.dataset.olKey || '';
+      if (!olKey) return;
+      card.dataset.cnDisplayTitleQueued = '1';
+      window.LibFlixResolveCnDisplayTitle(olKey).then(title => updateCard(card, title));
+    };
+    const observer = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        observer.unobserve(entry.target);
+        resolveCard(entry.target);
+      });
+    }, { rootMargin: '240px' });
+    const observeCards = root => {
+      if (root.matches?.('.book-card')) observer.observe(root);
+      root.querySelectorAll?.('.book-card').forEach(card => observer.observe(card));
+    };
+    const start = () => {
+      observeCards(document);
+      new MutationObserver(mutations => {
+        mutations.forEach(mutation => mutation.addedNodes.forEach(node => {
+          if (node.nodeType === Node.ELEMENT_NODE) observeCards(node);
+        }));
+      }).observe(document.body, { childList: true, subtree: true });
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
+    else start();
   })();
 </script>

@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ 'zh' if book_lang == 'cn' else 'en' }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Search: {{ query }} - LibFlix</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="preconnect" href="https://covers.openlibrary.org" crossorigin>
   <style>
     * { box-sizing: border-box; }
     body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
@@ -51,7 +51,7 @@
       .cat-tab { font-size: .65rem; padding: 2px 6px; }
     }
   </style>
-  <link href="{{ url_for('static', filename='libflix.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='libflix.css', v=asset_version) }}" rel="stylesheet">
 </head>
 <body class="page-discover">
   {% set active_tab = '' %}
@@ -119,7 +119,7 @@
         const href = bookUrl(b);
         const card = document.createElement('a');
         card.href = href;
-        card.className = 'text-decoration-none';
+        card.className = 'book-card-link';
         const imgFallback = 'this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';';
         card.innerHTML = '<div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">' +
           (b.cover_url ? '<div class="cover-skeleton"></div><img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + imgFallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>' : '<div class="placeholder">?</div>') +

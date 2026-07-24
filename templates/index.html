@@ -1,10 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ 'zh' if book_lang == 'cn' else 'en' }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LibFlix - Book Discovery Library</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="preconnect" href="https://covers.openlibrary.org" crossorigin>
   <style>
     * { box-sizing: border-box; }
     body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
@@ -89,6 +89,8 @@
     .shelf-title { font-size: 1.3rem; font-weight: 600; padding-left: 4px; }
     .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; scrollbar-width: none; -ms-overflow-style: none; }
     .shelf-row::-webkit-scrollbar { display: none; }
+    .shelf-deferred-placeholder { display:flex; gap:6px; min-height:225px; overflow:hidden; pointer-events:none; }
+    .shelf-deferred-card { flex:0 0 150px; height:225px; border-radius:8px; background:linear-gradient(110deg,#1d1f23 8%,#292c31 18%,#1d1f23 33%); background-size:200% 100%; animation:coverShimmer 1.15s linear infinite; }
     .shelf-more-btn { flex: 0 0 auto; align-self: center; width: 44px; height: 44px; margin: 0 18px; border: 1px solid rgba(255,255,255,.16); background: #e50914; color: #fff; border-radius: 999px; display: flex; align-items: center; justify-content: center; transition: background .18s ease, border-color .18s ease, opacity .18s ease, transform .18s ease; }
     .shelf-more-btn:hover { background: #f40612; border-color: rgba(255,255,255,.28); transform: translateX(2px); }
     .shelf-more-btn.loading { opacity: .88; pointer-events: none; transform: none; cursor: progress; }
@@ -162,11 +164,13 @@
       .book-card, .book-card img { width: 120px; }
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
+      .shelf-deferred-placeholder { min-height:180px; }
+      .shelf-deferred-card { flex-basis:120px; height:180px; }
       .shelf-more-btn { width: 40px; height: 40px; margin: 0 12px; }
       .cat-tab { font-size: .65rem; padding: 2px 6px; }
     }
   </style>
-  <link href="{{ url_for('static', filename='libflix.css') }}" rel="stylesheet">
+  <link href="{{ url_for('static', filename='libflix.css', v=asset_version) }}" rel="stylesheet">
 </head>
 <body class="page-home">
   {% set active_tab = 'home' if mode != 'fiction' else 'trending_fiction' %}
@@ -215,7 +219,7 @@
             <div class="hero-book {{ 'primary' if loop.index == 1 else 'side-' ~ (loop.index - 1) }}">
               {% if hero_book.cover_url %}
               <div class="cover-skeleton"></div>
-              <img src="{{ hero_book.cover_url | size_url('L') }}" alt="" loading="eager" decoding="async" fetchpriority="{{ 'high' if loop.index == 1 else 'auto' }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.previousElementSibling.style.display='none';this.style.display='none';this.parentNode.querySelector('.placeholder').style.display='flex';">
+              <img src="{{ hero_book.cover_url | size_url('L' if loop.index == 1 else 'M') }}" alt="" loading="{{ 'eager' if loop.index == 1 else 'lazy' }}" decoding="async" fetchpriority="{{ 'high' if loop.index == 1 else 'low' }}" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.previousElementSibling.style.display='none';this.style.display='none';this.parentNode.querySelector('.placeholder').style.display='flex';">
               <div class="placeholder" style="display:none">?</div>
               {% else %}
               <div class="placeholder">?</div>
@@ -239,21 +243,21 @@
   </section>
   {% endif %}
 
-  <div class="px-3 px-md-4 home-shelves">
+  <div class="home-shelves">
     {% if error %}
     <div class="error-banner">{{ error }}</div>
     {% endif %}
 
     {% for shelf in shelves %}
-    <div class="shelf" data-topic="{{ shelf.topic }}" data-page="1" data-total-pages="25" data-loading="0">
+    <div class="shelf" data-topic="{{ shelf.topic }}" data-page="0" data-total-pages="25" data-loading="0" data-deferred="1">
       <div class="shelf-head">
         <div class="shelf-title">{{ shelf.name }}</div>
       </div>
       <div class="shelf-row">
-        {% for book in shelf.books %}
-        {% include "_book_card.html" %}
-        {% endfor %}
-        <button class="shelf-more-btn" type="button" aria-label="Load more {{ shelf.name }} books">
+        <div class="shelf-deferred-placeholder" aria-label="Loading {{ shelf.name }} books">
+          {% for _ in range(7) %}<span class="shelf-deferred-card"></span>{% endfor %}
+        </div>
+        <button class="shelf-more-btn loading" type="button" aria-label="Load more {{ shelf.name }} books">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"></path><path d="m13 6 6 6-6 6"></path></svg>
           <span class="more-spinner" aria-hidden="true"></span>
         </button>
@@ -262,7 +266,7 @@
     {% endfor %}
   </div>
 
-  <footer class="text-center text-muted py-4 small">
+  <footer class="app-footer">
     Powered by Open Library &amp; libgen.li
   </footer>
   </main>
@@ -270,10 +274,10 @@
   <script>
     const MODE = {{ mode | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
-    const SHELF_TARGET = 40;
     const HERO_BOOKS = {{ (hero_items | default([])) | tojson }};
     let heroIndex = 0;
     let heroCycleTimer = null;
+    const heroDescriptionRequests = new Map();
 
     function esc(s) {
       const d = document.createElement('div');
@@ -284,12 +288,14 @@
     function heroCoverSrc(url) {
       if (!url) return '';
       if (url.startsWith('/')) return url.replace(/\/$/, '') + '/L';
+      if (url.includes('covers.openlibrary.org/b/id/')) return url.replace(/-[SML]\.jpg(?:\?.*)?$/, '-L.jpg');
       return url.replace(/zoom=\d+/, 'zoom=5');
     }
 
     function heroCoverMediumSrc(url) {
       if (!url) return '';
       if (url.startsWith('/')) return url.replace(/\/$/, '') + '/M';
+      if (url.includes('covers.openlibrary.org/b/id/')) return url.replace(/-[SML]\.jpg(?:\?.*)?$/, '-M.jpg');
       return url.replace(/zoom=\d+/, 'zoom=3');
     }
 
@@ -312,7 +318,9 @@
       const book = item.book || {};
       const targetIndex = item.targetIndex;
       const cls = index === 0 ? 'primary' : 'side-' + index;
-      const cover = heroCoverSrc(book.cover_url || '');
+      const cover = index === 0
+        ? heroCoverSrc(book.cover_url || '')
+        : heroCoverMediumSrc(book.cover_url || '');
       const label = esc('Feature ' + (book.title || 'book'));
       if (!cover) return '<button type="button" class="hero-book ' + cls + '" data-hero-index="' + targetIndex + '" aria-label="' + label + '"><div class="placeholder">?</div></button>';
       return `<button type="button" class="hero-book ${cls}" data-hero-index="${targetIndex}" aria-label="${label}">
@@ -443,6 +451,34 @@
       }
     }
 
+    function hydrateHeroDescription(index) {
+      const book = HERO_BOOKS[index];
+      if (!book || book.description || !book.ol_key) return Promise.resolve(book?.description || '');
+      if (heroDescriptionRequests.has(book.ol_key)) {
+        return heroDescriptionRequests.get(book.ol_key);
+      }
+      const request = fetch(
+        '/api/book?ol_key=' + encodeURIComponent(book.ol_key) +
+        '&book_lang=' + encodeURIComponent(BOOK_LANG) +
+        '&description_version=2&description_only=1'
+      )
+        .then(response => response.json())
+        .then(data => {
+          book.description = data.success ? (data.description || '') : '';
+          if (heroIndex === index) {
+            const descEl = document.getElementById('heroDesc');
+            if (descEl) {
+              descEl.textContent = book.description;
+              descEl.style.visibility = book.description ? 'visible' : 'hidden';
+            }
+          }
+          return book.description;
+        })
+        .catch(() => '');
+      heroDescriptionRequests.set(book.ol_key, request);
+      return request;
+    }
+
     function renderHero(nextIndex, animate = true) {
       if (!HERO_BOOKS.length) return;
       const previousIndex = heroIndex;
@@ -481,6 +517,7 @@
       }
       renderHeroStack(animate && previousIndex !== heroIndex, direction);
       renderHeroBackdrop(animate && previousIndex !== heroIndex, direction);
+      hydrateHeroDescription(heroIndex);
       document.querySelectorAll('.hero-dot').forEach((dot, i) => {
         dot.classList.toggle('active', i === heroIndex);
         dot.setAttribute('aria-current', i === heroIndex ? 'true' : 'false');
@@ -509,6 +546,17 @@
 
     buildHeroDots();
     renderHero(0, false);
+    if (BOOK_LANG === 'cn' && window.LibFlixResolveCnDisplayTitle) {
+      Promise.all(HERO_BOOKS.map(book => {
+        return window.LibFlixResolveCnDisplayTitle(book.ol_key || '').then(title => {
+          if (!title) return false;
+          book.title = title;
+          return true;
+        });
+      })).then(results => {
+        if (results.some(Boolean)) renderHero(heroIndex, false);
+      });
+    }
     const heroPrev = document.getElementById('heroPrev');
     const heroNext = document.getElementById('heroNext');
     if (heroPrev) heroPrev.addEventListener('click', () => { renderHero(heroIndex - 1); scheduleHeroCycle(); });
@@ -603,7 +651,7 @@
       const cover = b.cover_url
         ? '<div class="cover-skeleton"></div><img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>'
         : '<div class="placeholder">?</div>';
-      return '<a href="' + href + '" class="text-decoration-none"><div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">' + cover + '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' + (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') + '</div></div></a>';
+      return '<a href="' + href + '" class="book-card-link"><div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">' + cover + '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' + (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') + '</div></div></a>';
     }
 
     function loadShelfMore(shelf) {
@@ -618,6 +666,8 @@
       fetch('/api/shelf/' + encodeURIComponent(topic) + '?page=' + nextPage + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
         .then(r => r.json())
         .then(data => {
+          shelf.querySelector('.shelf-deferred-placeholder')?.remove();
+          shelf.dataset.deferred = '0';
           if (!data.success || !data.books.length) {
             shelf.dataset.totalPages = String(nextPage - 1);
             if (btn) btn.style.display = 'none';
@@ -640,6 +690,7 @@
         })
         .finally(() => {
           shelf.dataset.loading = '0';
+          shelf.dataset.deferred = '0';
           if (btn) btn.classList.remove('loading');
         });
     }
@@ -658,7 +709,7 @@
       const row = shelf.querySelector('.shelf-row');
       if (!row) return;
       const count = row.querySelectorAll('.book-card').length;
-      if (count < SHELF_TARGET || row.scrollWidth <= row.clientWidth + 80) {
+      if (count === 0 || row.scrollWidth <= row.clientWidth + 80) {
         loadShelfMore(shelf);
       }
     }
@@ -672,7 +723,14 @@
       if (row) row.addEventListener('scroll', () => maybeLoadShelfMore(shelf), { passive: true });
     });
 
-    setTimeout(() => document.querySelectorAll('.shelf').forEach(primeShelf), 250);
+    const shelfObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        shelfObserver.unobserve(entry.target);
+        primeShelf(entry.target);
+      });
+    }, { rootMargin: '120px 0px' });
+    document.querySelectorAll('.shelf').forEach(shelf => shelfObserver.observe(shelf));
 
   </script>
 </body>

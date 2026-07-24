@@ -49,6 +49,14 @@ No API key is required. Open Library is the only discovery backend.
 
 - **Open Library discovery** - browsing, shelves, categories, metadata, covers,
   similar books, and discovery search all use Open Library with no API key.
+- **Consistent CN title presentation** - CN shelves and hero items use stable
+  English edition titles when Open Library provides them. Book pages pair that
+  title with a verified Chinese title, while download rows preserve the exact
+  source-edition title used to find the file.
+- **Resilient CN download matching** - empty Chinese searches automatically
+  retry cleaned edition names, every Chinese Open Library edition alias,
+  Simplified Chinese forms, and finally the English title. The file-language
+  filter remains Chinese throughout the fallback chain.
 - **Expandable browse settings** - Fiction / Non-Fiction and EN / CN controls
   live in the top-right Settings menu instead of always occupying the toolbar.
   Each mode has its own shelf set and category tabs, while EN/CN maps to English
@@ -83,13 +91,22 @@ No API key is required. Open Library is the only discovery backend.
 - **Trending naming** - the first shelf and first top-nav category are labeled
   `Trending` across fiction and non-fiction. Cached shelf labels are normalized
   at render time so older `New & Popular` cache files do not leak into the UI.
-- **Fuller shelves by default** - shelf requests fetch larger Open Library
-  batches and render up to 40 books per shelf initially.
+- **Progressively hydrated shelves** - the homepage sends stable shelf skeletons
+  in the initial document, then loads a complete 40-book row as each shelf
+  approaches the viewport. Rows never appear artificially short, while distant
+  shelves add no initial card or image cost.
 - **Shelf-order dedupe** - books shown in an earlier homepage shelf are removed
   from all later shelves. Later shelves are refilled from deeper Open Library
   pages where possible so rows stay useful without repeating entries.
 - **Horizontal infinite scroll** - homepage shelves automatically load another
   page when the user scrolls near the end of a row.
+- **Intent-aware navigation prefetch** - internal pages are prefetched only
+  after deliberate pointer hover, keyboard focus, or touch intent. The app does
+  not speculatively download every category after page load.
+- **Instant book shells** - every rendered card registers its title, author,
+  cover, and work key as a lightweight server hint. Opening that card can
+  render the book page immediately while descriptions and secondary metadata
+  hydrate independently.
 - **Compact More affordance** - a small round arrow button remains as a fallback
   at the end of each shelf instead of a full-height tile.
 - **Hidden horizontal scrollbars** - homepage shelf rows hide scrollbars while
@@ -117,7 +134,8 @@ No API key is required. Open Library is the only discovery backend.
   renders, strips source markup, and collapses behind `Read more` on smaller
   screens when needed.
 - **More Like This** - the first subject loads a single-row horizontal
-  similar-books shelf with the same hover quick peek used elsewhere.
+  similar-books shelf with the same hover quick peek used elsewhere. Its API
+  request waits until the section approaches the viewport.
 - **Hidden More Like This scrollbar** - the shelf scrolls horizontally without a
   visible scrollbar.
 - **Inline edition picker** - download candidates appear as responsive edition
@@ -129,8 +147,8 @@ No API key is required. Open Library is the only discovery backend.
 - **Clear actions** - every available edition has explicit format-aware Download
   and Kindle actions; the strongest candidate is labeled `Best match`.
 - **Send to Kindle settings** - the global Settings menu opens a keyboard-safe
-  Kindle sheet with password visibility, local browser storage, and a forget
-  action.
+  Kindle sheet with password visibility, local browser storage, a forget
+  action, and a visible configured / configure-connection state.
 - **Live Kindle delivery progress** - the selected edition expands to show a
   responsive progress bar, current delivery stage, transferred file size, and
   clear completion or failure state while LibFlix downloads and emails the file.
@@ -157,9 +175,15 @@ No API key is required. Open Library is the only discovery backend.
   settings, focus states, empty states, and notifications share one restrained
   visual language in `static/libflix.css`.
 - **Single transition loader** - route changes use one shared LibFlix overlay;
-  local AJAX loaders remain scoped to the content they are updating.
+  it never waits for covers or download-source results, while local AJAX
+  loaders remain scoped to the content they are updating.
 - **Progressive cover loading** - cover geometry stays stable while images load,
   with lightweight placeholders and animation reserved for high-priority areas.
+- **Direct Open Library covers** - cover images load from Open Library's CDN
+  with one preconnected high-resolution active cover and medium side-stack
+  covers, avoiding an extra Flask proxy hop.
+- **On-demand hero metadata** - only the active hero description is requested;
+  later descriptions hydrate when their book becomes active.
 - **Accessible interaction** - pages provide a skip link, named icon controls,
   visible keyboard focus, modal focus return, scroll locking, reduced-motion
   fallbacks, and non-selectable app chrome while content remains selectable.
@@ -179,6 +203,8 @@ No API key is required. Open Library is the only discovery backend.
 | `/api/category/<topic>` | JSON endpoint for category infinite scroll |
 | `/api/discover` | JSON endpoint for discovery search pagination |
 | `/api/book` | JSON endpoint for Open Library work details |
+| `/api/cn-display-title` | Cached English display-title lookup for CN browse cards |
+| `/api/cn-display-titles` | Batched English display-title lookup for visible CN cards |
 | `/api/similar` | JSON endpoint for similar Open Library books |
 | `/api/search` | JSON endpoint for libgen download search |
 | `/api/sendtokindle` | Send selected download to Kindle via SMTP |
@@ -200,9 +226,13 @@ requests. They are ignored by git.
 
 | File Pattern | Purpose |
 |---|---|
-| `api_cache.json` | Disk cache for Open Library/API responses |
+| `api_cache.sqlite3` | WAL-enabled keyed cache for Open Library/API responses |
 | `shelf_cache_<lang>_<mode>.json` | Warm shelf cache for each language and mode |
 | `shelf_cache*.json` | Historical and current shelf cache files ignored by git |
+
+Legacy `api_cache.json` data is migrated once into SQLite and removed after a
+successful migration. Shelf files are loaded immediately at startup; stale
+shelves refresh after a delay without blocking the first page.
 
 ## Architecture
 
@@ -215,7 +245,7 @@ language, expandable toolbar, infinite scroll, and count-removal changes.
 ## Tech Stack
 
 - **Backend:** Flask, requests, BeautifulSoup4
-- **Frontend:** Bootstrap 5 and vanilla JavaScript
+- **Frontend:** Local CSS and vanilla JavaScript
 - **Discovery:** Open Library Search/Works/Covers APIs
 - **Downloads:** Modular downloader interface, currently libgen.li
 - **Port:** 5800
