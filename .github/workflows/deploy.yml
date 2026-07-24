@@ -1,0 +1,66 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Check syntax
+        run: |
+          python -m py_compile app.py downloaders/*.py
+
+      - name: Package release
+        run: |
+          printf 'GITHUB_SHA=%s\n' "$GITHUB_SHA" > .deploy-meta
+          tar \
+            --exclude .git \
+            --exclude __pycache__ \
+            --exclude '*.pyc' \
+            --exclude api_cache.json \
+            --exclude api_cache.sqlite3 \
+            --exclude 'api_cache.sqlite3-*' \
+            --exclude 'shelf_cache*.json' \
+            --exclude release.tar.gz \
+            -czf release.tar.gz .
+
+      - name: Install SSH key
+        run: |
+          install -m 0700 -d ~/.ssh
+          printf '%s\n' "$VPS_DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 0600 ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+        env:
+          VPS_DEPLOY_KEY: ${{ secrets.VPS_DEPLOY_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+
+      - name: Deploy
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+            -o IdentitiesOnly=yes \
+            "$VPS_USER@$VPS_HOST" < release.tar.gz
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
