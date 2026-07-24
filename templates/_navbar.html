@@ -216,8 +216,8 @@
             <div class="settings-group">
               <div class="settings-label">Language</div>
               <div class="lang-toggle" aria-label="Book language">
-                <a href="{{ lang_url('en') }}" class="lang-btn {% if book_lang == 'en' %}active{% endif %}" title="English books">EN</a>
-                <a href="{{ lang_url('cn') }}" class="lang-btn {% if book_lang == 'cn' %}active{% endif %}" title="Chinese books">CN</a>
+                <a href="{{ url_for('switch_language', lang='en', next=lang_url('en')) }}" data-no-prefetch class="lang-btn {% if book_lang == 'en' %}active{% endif %}" title="English books">EN</a>
+                <a href="{{ url_for('switch_language', lang='cn', next=lang_url('cn')) }}" data-no-prefetch class="lang-btn {% if book_lang == 'cn' %}active{% endif %}" title="Chinese books">CN</a>
               </div>
             </div>
             <div class="settings-group">
@@ -344,7 +344,7 @@
       document.head.appendChild(link);
     };
     const prefetchLink = link => {
-      if (!link) return;
+      if (!link || link.hasAttribute('data-no-prefetch')) return;
       prefetchPage(link.href);
     };
     const navigateWithTransition = href => {

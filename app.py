@@ -1092,9 +1092,22 @@ def book_metadata_from_work(work_id, lang=None):
 
 app = Flask(__name__)
 
+@app.route("/language/<lang>")
+def switch_language(lang):
+    lang = normalize_book_lang(lang)
+    if not lang:
+        return redirect("/")
+    target = request.args.get("next", "/")
+    if not target.startswith("/") or target.startswith("//"):
+        target = "/"
+    g.book_lang_override = lang
+    return redirect(target)
+
 @app.after_request
 def cache_headers(resp):
-    if request.method in ("GET", "HEAD") and resp.status_code < 400:
+    if request.endpoint == "switch_language":
+        resp.headers["Cache-Control"] = "no-store"
+    elif request.method in ("GET", "HEAD") and resp.status_code < 400:
         if resp.mimetype == "text/html":
             resp.headers["Cache-Control"] = "private, max-age=90, stale-while-revalidate=600"
         elif request.path.startswith(("/api/book", "/api/category", "/api/shelf", "/api/discover", "/api/cn-display-title")):
