@@ -212,10 +212,20 @@
       if (!downloadRequested && buildSearchQuery(0)) doSearch(1, 0);
     }
 
+    function requestDownloadsIfReady() {
+      if (downloadRequested) return;
+      if (buildSearchQuery(0)) {
+        doSearch(1, 0);
+      } else {
+        showDownloadState('empty');
+      }
+    }
+
     function loadBookDetails() {
       if (!olKey) {
         showNoDescription();
         renderSimilarEmpty('No similar books are available.');
+        requestDownloadsIfReady();
         return;
       }
       fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang=' + encodeURIComponent(BOOK_LANG) + '&description_version=2')
@@ -237,10 +247,12 @@
           } else {
             renderSimilarEmpty('No similar books are available.');
           }
+          requestDownloadsIfReady();
         })
         .catch(() => {
           showNoDescription();
           renderSimilarEmpty('Similar books could not be loaded.');
+          requestDownloadsIfReady();
         });
     }
 
@@ -318,7 +330,10 @@
 
     function doSearch(page, queryIndex) {
       queryIndex = Number(queryIndex) || 0;
-      if (!buildSearchQuery(queryIndex)) return;
+      if (!buildSearchQuery(queryIndex)) {
+        showDownloadState('empty');
+        return;
+      }
       downloadRequested = true;
       currentPage = page || 1;
       if (activeSearch) activeSearch.abort();
