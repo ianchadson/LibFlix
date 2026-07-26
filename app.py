@@ -1,4 +1,5 @@
 import re, os, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3, unicodedata
+from contextlib import contextmanager
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, quote, urlencode
 from dataclasses import dataclass
@@ -163,6 +164,18 @@ OPENCC_T2S = OpenCC("t2s")
 def disk_cache_key(key):
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
+@contextmanager
+def disk_cache_connection(timeout=5):
+    connection = sqlite3.connect(API_SQLITE_CACHE, timeout=timeout)
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
 def initialize_disk_cache():
     global SQLITE_CACHE_READY
     if SQLITE_CACHE_READY:
@@ -172,7 +185,7 @@ def initialize_disk_cache():
             return
         database_exists = os.path.exists(API_SQLITE_CACHE)
         migrated_legacy_cache = False
-        with sqlite3.connect(API_SQLITE_CACHE, timeout=10) as connection:
+        with disk_cache_connection(timeout=10) as connection:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=NORMAL")
             connection.execute(
@@ -213,7 +226,7 @@ def disk_cache_get(key, ttl=API_DISK_CACHE_TTL):
     cache_key = disk_cache_key(key)
     initialize_disk_cache()
     try:
-        with sqlite3.connect(API_SQLITE_CACHE, timeout=5) as connection:
+        with disk_cache_connection(timeout=5) as connection:
             row = connection.execute(
                 "SELECT created_at, payload FROM api_cache WHERE cache_key = ?",
                 (cache_key,),
@@ -233,7 +246,7 @@ def disk_cache_set(key, data):
     initialize_disk_cache()
     try:
         payload = json.dumps(data, separators=(",", ":"))
-        with sqlite3.connect(API_SQLITE_CACHE, timeout=5) as connection:
+        with disk_cache_connection(timeout=5) as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO api_cache(cache_key, created_at, payload) VALUES (?, ?, ?)",
                 (cache_key, time.time(), payload),
