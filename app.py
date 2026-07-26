@@ -47,7 +47,17 @@ BOOK_LANG_CONFIG = {
     },
 }
 CHINESE_DOWNLOAD_TITLE_ALIASES = {
+    "steve jobs": ["Steve Jobs:A Biography", "史蒂夫·乔布斯传"],
     "the big short": ["大空头"],
+}
+KNOWN_WORK_METADATA = {
+    "OL16085155W": {
+        "title": "Steve Jobs",
+        "localized_title": "史蒂夫·乔布斯传",
+        "download_title": "史蒂夫·乔布斯传",
+        "author": "Walter Isaacson",
+        "cover_url": "https://covers.openlibrary.org/b/id/12374726-M.jpg",
+    },
 }
 GENERIC_SIMILAR_SUBJECTS = {
     "action/adventure", "biography", "business", "competition", "contests",
@@ -1072,6 +1082,18 @@ def search_record_for_work(ol_key, lang=None):
             return record
     return {}
 
+def known_book_metadata(work_id, lang=None):
+    known = KNOWN_WORK_METADATA.get(work_id)
+    if not known:
+        return None
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    result = dict(known)
+    if lang != "cn":
+        result["localized_title"] = ""
+        result["download_title"] = result.get("title", "")
+    result["ol_key"] = ol_key_from_work_id(work_id)
+    return result
+
 def book_metadata_from_work(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
     ckey = f"book_meta:{lang}:{work_id}"
@@ -1088,7 +1110,12 @@ def book_metadata_from_work(work_id, lang=None):
     work = ol_get_work(ol_key)
     search_record = search_record_for_work(ol_key, lang)
     if not work and not search_record:
-        return None
+        result = known_book_metadata(work_id, lang)
+        if result:
+            cache_set(ckey, result)
+            disk_cache_set(ckey, result)
+            remember_book_hint(result, lang)
+        return result
     edition = first_matching_edition(search_record, lang)
     covers = (work or {}).get("covers") or []
     cover_id = edition_cover_id(edition or {}) or search_record.get("cover_i") or (covers[0] if covers else "")
