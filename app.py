@@ -1053,6 +1053,25 @@ def first_work_author(work):
             return name
     return ""
 
+def search_record_for_work(ol_key, lang=None):
+    if not re.fullmatch(r"/works/OL\d+W", ol_key or ""):
+        return {}
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    queries = [
+        f"key:{ol_key} language:{BOOK_LANG_CONFIG[lang]['ol_lang']}",
+        f"key:{ol_key}",
+    ]
+    for query in dict.fromkeys(queries):
+        data = ol_get("/search.json", {
+            "q": query,
+            "limit": 1,
+            "fields": OL_BOOK_FIELDS,
+        })
+        record = ((data or {}).get("docs") or [{}])[0]
+        if record.get("key") == ol_key:
+            return record
+    return {}
+
 def book_metadata_from_work(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
     ckey = f"book_meta:{lang}:{work_id}"
@@ -1067,20 +1086,14 @@ def book_metadata_from_work(work_id, lang=None):
     if not ol_key:
         return None
     work = ol_get_work(ol_key)
-    if not work:
+    search_record = search_record_for_work(ol_key, lang)
+    if not work and not search_record:
         return None
-
-    search_data = ol_get("/search.json", {
-        "q": f"key:{ol_key} language:{BOOK_LANG_CONFIG[lang]['ol_lang']}",
-        "limit": 1,
-        "fields": OL_BOOK_FIELDS,
-    })
-    search_record = ((search_data or {}).get("docs") or [{}])[0]
     edition = first_matching_edition(search_record, lang)
-    covers = work.get("covers") or []
+    covers = (work or {}).get("covers") or []
     cover_id = edition_cover_id(edition or {}) or search_record.get("cover_i") or (covers[0] if covers else "")
     authors = search_record.get("author_name") or []
-    selected_title = (edition or {}).get("title") or search_record.get("title") or work.get("title", "")
+    selected_title = (edition or {}).get("title") or search_record.get("title") or (work or {}).get("title", "")
     title = selected_title
     localized_title = ""
     download_title = selected_title
@@ -1094,7 +1107,7 @@ def book_metadata_from_work(work_id, lang=None):
         "title": title,
         "localized_title": localized_title,
         "download_title": download_title,
-        "author": (authors[0] if authors else "") or first_work_author(work),
+        "author": (authors[0] if authors else "") or first_work_author(work or {}),
         "cover_url": open_library_cover_url(cover_id),
         "ol_key": ol_key,
     }
@@ -1508,7 +1521,7 @@ def book_page(work_id, clean_mode, clean_lang):
     if book:
         cache_set(ckey, book)
     else:
-        book = hinted_book_metadata(work_id, lang)
+        book = book_metadata_from_work(work_id, lang) or hinted_book_metadata(work_id, lang)
     if book is None:
         book = {
             "title": "Book",
@@ -1592,13 +1605,13 @@ def api_book():
     if not ol_key.startswith("/works/"):
         return jsonify({"success": False, "error": "Book not found"})
 
-    work = ol_get_work(ol_key)
-    if not work:
+    work = ol_get_work(ol_key) or {}
+    metadata = book_metadata_from_work(work_id_from_ol_key(ol_key), get_book_lang()) or {}
+    if not work and not metadata:
         return jsonify({"success": False, "error": "Book not found"})
-    description = english_description_for_work(ol_key, work)
+    description = english_description_for_work(ol_key, work) if work else ""
     if request.args.get("description_only") == "1":
         return jsonify({"success": True, "description": description})
-    metadata = book_metadata_from_work(work_id_from_ol_key(ol_key), get_book_lang()) or {}
     subjects = work.get("subjects", [])[:20]
     similar_subjects = similar_subject_candidates(subjects)
     download_queries = (
