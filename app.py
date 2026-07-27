@@ -938,6 +938,15 @@ def author_match_score(candidate, target):
     sequence_score = round(140 * SequenceMatcher(None, candidate, target).ratio())
     return max(token_score, sequence_score)
 
+def source_metadata_language_penalty(book, preferred_language):
+    if (preferred_language or "").casefold() != "english":
+        return 0
+    if is_chinese_title(book.title) or is_chinese_title(book.author):
+        return -500
+    if is_chinese_title(book.publisher):
+        return -140
+    return 0
+
 def book_score(book, target_title="", target_author="", preferred_language=""):
     score = title_match_score(book.title, target_title)
     score += author_match_score(book.author, target_author)
@@ -945,6 +954,7 @@ def book_score(book, target_title="", target_author="", preferred_language=""):
     score += fmt_scores.get(book.ext.lower(), 0)
     if preferred_language:
         score += 80 if book_matches_language(book, preferred_language) else -200
+    score += source_metadata_language_penalty(book, preferred_language)
     try:
         y = int(book.year)
         if 1900 <= y <= 2030:
@@ -1712,7 +1722,7 @@ def api_search():
     target_title = request.args.get("target_title", "").strip() or q
     target_author = request.args.get("target_author", "").strip()
     result_cache_key = (
-        f"download_search:v2:{q}:{sort}:{order}:{limit}:{page}:"
+        f"download_search:v3:{q}:{sort}:{order}:{limit}:{page}:"
         f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}"
     )
     cached_result = cache_get(result_cache_key, 900)

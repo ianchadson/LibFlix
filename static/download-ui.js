@@ -45,7 +45,7 @@
       ? '/download/' + encodeURIComponent(book.md5) + '?filename=' + encodeURIComponent(filename)
       : '';
     const cover = book.cover_url
-      ? '<img class="edition-cover" src="' + escapeHtml(book.cover_url) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="edition-cover-placeholder" hidden aria-hidden="true">' + escapeHtml((title[0] || '?').toUpperCase()) + '</div>'
+      ? '<span class="edition-cover-loading" aria-hidden="true"></span><img class="edition-cover" src="' + escapeHtml(book.cover_url) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="edition-cover-placeholder" hidden aria-hidden="true">' + escapeHtml((title[0] || '?').toUpperCase()) + '</div>'
       : '<div class="edition-cover-placeholder" aria-hidden="true">' + escapeHtml((title[0] || '?').toUpperCase()) + '</div>';
     const metadata = [
       '<span class="edition-format ' + escapeHtml(format) + '">' + escapeHtml(format) + '</span>',
@@ -62,7 +62,7 @@
       : '<div class="edition-actions"><span class="edition-action edition-kindle" aria-disabled="true">Unavailable</span></div>';
 
     return '<article class="edition-row' + (recommended ? ' recommended' : '') + '">' +
-      '<div>' + cover + '</div>' +
+      '<div class="edition-cover-frame">' + cover + '</div>' +
       '<div class="edition-copy">' +
         '<div class="edition-title-line"><h3 class="edition-title" title="' + escapeHtml(book.title || '') + '">' + escapeHtml(title) + '</h3>' + (recommended ? '<span class="edition-recommended">Best match</span>' : '') + '</div>' +
         (author ? '<div class="edition-byline">' + escapeHtml(author) + '</div>' : '') +
