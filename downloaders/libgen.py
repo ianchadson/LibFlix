@@ -145,6 +145,10 @@ class LibgenDownloader(Downloader):
 
     # ------------------------------------------------------- resolve + fetch
     def resolve_download(self, book_id: str) -> str:
+        cache_key = f"lg-download:{book_id}"
+        cached = cache_get(cache_key, 600)
+        if cached:
+            return cached
         try:
             r = SESSION.get(
                 f"{MIRROR}/ads.php",
@@ -157,23 +161,31 @@ class LibgenDownloader(Downloader):
             for a in soup.find_all("a"):
                 href = a.get("href", "")
                 if "get.php" in href or "download" in href.lower() or "/dl/" in href:
-                    return urljoin(r.url, href)
+                    resolved = urljoin(r.url, href)
+                    cache_set(cache_key, resolved)
+                    return resolved
             for a in soup.find_all("a"):
                 href = a.get("href", "")
                 if href.startswith("http") and ("libgen" in href or "booksdl" in href):
-                    return urljoin(r.url, href)
+                    resolved = urljoin(r.url, href)
+                    cache_set(cache_key, resolved)
+                    return resolved
             txt = r.text
             m = re.search(
                 r'https?://[^"\']+\.(?:epub|pdf|mobi|djvu|zip|rar)[^"\']*', txt, re.I
             )
             if m:
-                return m.group(0)
+                resolved = m.group(0)
+                cache_set(cache_key, resolved)
+                return resolved
             m = re.search(r'(?:href|HREF)=["\']([^"\']+)["\']', txt)
             if m:
-                return urljoin(r.url, m.group(1))
+                resolved = urljoin(r.url, m.group(1))
+                cache_set(cache_key, resolved)
+                return resolved
         except Exception:
-            return f"{MIRROR}/ads.php?md5={book_id}"
-        return f"{MIRROR}/ads.php?md5={book_id}"
+            return ""
+        return ""
 
     # ---------------------------------------------------------------- cover
     def cover_url(self, book: Book) -> Optional[str]:

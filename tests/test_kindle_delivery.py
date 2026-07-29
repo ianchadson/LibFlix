@@ -1,4 +1,5 @@
 import smtplib
+import time
 import unittest
 from unittest.mock import patch
 
@@ -71,6 +72,35 @@ class KindleDeliveryTests(unittest.TestCase):
         self.assertIn("Reconnecting to email", [event.get("stage") for event in events])
         self.assertEqual(events[-1]["type"], "complete")
         self.assertTrue(events[-1]["success"])
+
+    def test_slow_download_resolution_emits_heartbeat(self):
+        data = {
+            "md5": "b" * 32,
+            "title": "Test Book",
+            "ext": "epub",
+            "kindle_email": "reader@kindle.com",
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 587,
+            "smtp_user": "sender@example.com",
+            "smtp_pass": "app-password",
+        }
+
+        def slow_resolve(book_id):
+            time.sleep(0.03)
+            return "https://example.com/book.epub"
+
+        with (
+            patch.object(app.DOWNLOADER, "resolve_download", side_effect=slow_resolve),
+            patch.object(app.SESSION, "get", return_value=FakeDownloadResponse()),
+            patch("smtplib.SMTP", FakeSMTP),
+            patch.object(app, "RESOLVE_HEARTBEAT_SECONDS", 0.01),
+        ):
+            events = list(app._send_to_kindle_events(data))
+
+        finding_events = [event for event in events if event.get("stage") == "Finding book file"]
+        self.assertGreaterEqual(len(finding_events), 2)
+        self.assertTrue(any(event.get("progress") is None for event in finding_events))
+        self.assertEqual(events[-1]["type"], "complete")
 
 
 if __name__ == "__main__":

@@ -1811,6 +1811,8 @@ def api_search():
 @app.route("/download/<md5>")
 def download(md5):
     url = DOWNLOADER.resolve_download(md5)
+    if not url:
+        return jsonify({"success": False, "error": "The download source did not return a file link."}), 502
     filename = request.args.get("filename", f"{md5}.epub")
     filename = re.sub(r'[\r\n\\/\"<>|:*?]+', ' ', filename)
     filename = re.sub(r'\s+', ' ', filename).strip()[:140] or f"{md5}.epub"
@@ -1866,6 +1868,19 @@ def _kindle_progress(stage, progress=None, detail=""):
     if detail:
         event["detail"] = detail
     return event
+
+
+RESOLVE_HEARTBEAT_SECONDS = 4
+
+
+def _resolve_download_progress(md5):
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(DOWNLOADER.resolve_download, md5)
+        while True:
+            try:
+                return future.result(timeout=RESOLVE_HEARTBEAT_SECONDS)
+            except FutureTimeoutError:
+                yield _kindle_progress("Finding book file", None, "Waiting for the download source")
 
 
 def _format_transfer_size(value):
@@ -1951,7 +1966,8 @@ def _send_to_kindle_events(data):
 
     try:
         yield _kindle_progress("Preparing delivery", progress)
-        dl_url = DOWNLOADER.resolve_download(md5)
+        yield _kindle_progress("Finding book file", None, "Checking the download source")
+        dl_url = yield from _resolve_download_progress(md5)
         if not dl_url:
             raise RuntimeError("The download source did not return a file link.")
 
