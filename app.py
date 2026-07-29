@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, quote, urlencode
 from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -1878,6 +1878,58 @@ def _format_transfer_size(value):
         size /= 1024
 
 
+def _open_smtp_connection(host, port, timeout=45):
+    import smtplib, ssl
+
+    server = smtplib.SMTP(host, port, timeout=timeout)
+    try:
+        server.ehlo()
+        server.starttls(context=ssl.create_default_context())
+        server.ehlo()
+        if server.sock:
+            import socket
+            server.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        return server
+    except Exception:
+        server.close()
+        raise
+
+
+def _close_smtp_connection(server):
+    if not server:
+        return
+    try:
+        server.quit()
+    except Exception:
+        server.close()
+
+
+def _send_message_progress(server, message, attachment_size):
+    detail = f"Uploading {_format_transfer_size(attachment_size)} attachment"
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(server.send_message, message)
+        while True:
+            try:
+                future.result(timeout=4)
+                return
+            except FutureTimeoutError:
+                yield _kindle_progress("Uploading to email", None, detail)
+
+
+def _kindle_delivery_error(error):
+    import smtplib
+
+    if isinstance(error, smtplib.SMTPServerDisconnected):
+        return "The email server disconnected during upload. Try the smaller edition or check the provider's attachment limit."
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return "The email upload timed out. Try the smaller edition and send again."
+    if isinstance(error, smtplib.SMTPDataError):
+        return "The email provider rejected the attachment. Try a smaller edition or check its attachment limit."
+    if isinstance(error, smtplib.SMTPRecipientsRefused):
+        return "The email provider rejected the Kindle address. Check the address and approved sender settings."
+    return str(error)
+
+
 def _send_to_kindle_events(data):
     import smtplib, tempfile
     from email.mime.multipart import MIMEMultipart
@@ -1954,14 +2006,24 @@ def _send_to_kindle_events(data):
 
         progress = 78
         yield _kindle_progress("Connecting to email", progress)
-        with smtplib.SMTP(smtp_host, smtp_port, timeout=30) as server:
-            server.starttls()
+        server = _open_smtp_connection(smtp_host, smtp_port)
+        try:
             progress = 84
             yield _kindle_progress("Signing in securely", progress)
             server.login(smtp_user, smtp_pass)
             progress = 92
-            yield _kindle_progress("Sending to Kindle", progress)
-            server.send_message(msg)
+            yield _kindle_progress("Sending to Kindle", progress, f"Uploading {_format_transfer_size(downloaded)} attachment")
+            try:
+                yield from _send_message_progress(server, msg, downloaded)
+            except (smtplib.SMTPServerDisconnected, TimeoutError, ConnectionError, OSError):
+                _close_smtp_connection(server)
+                server = None
+                yield _kindle_progress("Reconnecting to email", None, "The first upload connection was interrupted")
+                server = _open_smtp_connection(smtp_host, smtp_port)
+                server.login(smtp_user, smtp_pass)
+                yield from _send_message_progress(server, msg, downloaded)
+        finally:
+            _close_smtp_connection(server)
 
         progress = 100
         yield {"type": "complete", "success": True, "stage": "Sent to Kindle", "progress": progress}
@@ -1974,12 +2036,13 @@ def _send_to_kindle_events(data):
             "error": "SMTP auth failed. For Gmail, use an App Password.",
         }
     except Exception as e:
+        app.logger.warning("Kindle delivery failed at %s%% (%s): %s", progress, type(e).__name__, e)
         yield {
             "type": "error",
             "success": False,
             "stage": "Delivery failed",
             "progress": progress,
-            "error": str(e),
+            "error": _kindle_delivery_error(e),
         }
     finally:
         if tmp_path:
