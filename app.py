@@ -1,4 +1,4 @@
-import re, os, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3, unicodedata
+import re, os, io, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3, unicodedata, uuid, ipaddress, socket
 from contextlib import contextmanager
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, quote, urlencode
@@ -8,8 +8,14 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import requests
 from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
-from flask import Flask, render_template, request, Response, stream_with_context, jsonify, g, redirect
+from flask import Flask, render_template, request, Response, stream_with_context, jsonify, g, redirect, send_file, has_request_context
 from opencc import OpenCC
+
+try:
+    from PIL import Image, UnidentifiedImageError
+except ImportError:  # Pillow is installed from requirements in production.
+    Image = None
+    UnidentifiedImageError = OSError
 
 # Modular download source — see ``downloaders/`` package.
 from downloaders import DOWNLOADER
@@ -23,11 +29,18 @@ CACHE = {}
 CACHE_TTL_OL = 3600
 API_DISK_CACHE_TTL = 21600
 CHINESE_TITLE_CACHE_TTL = 2592000
+API_CACHE_RETENTION_TTL = 7776000
+OL_STALE_TTL = 7776000
+BOOK_DETAIL_FRESH_TTL = 604800
+BOOK_DETAIL_STALE_TTL = 7776000
+SIMILAR_FRESH_TTL = 604800
+SIMILAR_STALE_TTL = 2592000
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("LIBFLIX_DATA_DIR") or APP_DIR
 SHELF_DISK_CACHE = os.path.join(DATA_DIR, "shelf_cache.json")
 API_DISK_CACHE = os.path.join(DATA_DIR, "api_cache.json")
 API_SQLITE_CACHE = os.path.join(DATA_DIR, "api_cache.sqlite3")
+COVER_CACHE_DIR = os.path.join(DATA_DIR, "covers")
 SHELF_REFRESH_TTL = 21600
 OL_BOOK_FIELDS = "key,title,author_name,cover_i,cover_id,language,editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id"
 SHELF_BOOK_TARGET = 40
@@ -56,7 +69,7 @@ KNOWN_WORK_METADATA = {
         "localized_title": "史蒂夫·乔布斯传",
         "download_title": "史蒂夫·乔布斯传",
         "author": "Walter Isaacson",
-        "cover_url": "https://covers.openlibrary.org/b/id/12374726-M.jpg",
+        "cover_url": "/olcover/12374726/M",
     },
 }
 GENERIC_SIMILAR_SUBJECTS = {
@@ -161,7 +174,8 @@ def lang_url(lang):
 SESSION = requests.Session()
 SESSION.mount("https://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
 SESSION.mount("http://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
-SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
+OL_CONTACT = os.environ.get("LIBFLIX_CONTACT", "https://github.com/ianchadson/LibFlix")
+SESSION.headers.update({"User-Agent": f"LibFlix/1.0 ({OL_CONTACT})"})
 DISK_CACHE_LOCK = threading.Lock()
 CHINESE_TITLE_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(4)
 SHELF_REFRESH_LOCK = threading.Lock()
@@ -170,6 +184,31 @@ SQLITE_CACHE_READY = False
 BOOK_HINTS = {}
 BOOK_HINTS_LOCK = threading.Lock()
 OPENCC_T2S = OpenCC("t2s")
+OL_GATEWAY_LOCK = threading.Lock()
+OL_STATE_LOCK = threading.Lock()
+OL_INFLIGHT_LOCK = threading.Lock()
+OL_INFLIGHT = {}
+OL_REFRESHING = set()
+OL_REFRESH_LOCK = threading.Lock()
+OL_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="openlibrary")
+OL_LAST_REQUEST_AT = 0.0
+OL_FAILURES = 0
+OL_CIRCUIT_OPEN_UNTIL = 0.0
+OL_MIN_INTERVAL = max(0.34, float(os.environ.get("OPENLIBRARY_MIN_INTERVAL", "1.05")))
+OL_CONNECT_TIMEOUT = max(1.0, float(os.environ.get("OPENLIBRARY_CONNECT_TIMEOUT", "3")))
+OL_READ_TIMEOUT = max(2.0, float(os.environ.get("OPENLIBRARY_READ_TIMEOUT", "8")))
+OL_CIRCUIT_FAILURE_THRESHOLD = 3
+OL_CIRCUIT_COOLDOWN = 60
+BOOK_DETAIL_REFRESHING = set()
+BOOK_DETAIL_REFRESH_LOCK = threading.Lock()
+BOOK_DETAIL_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="book-detail")
+SIMILAR_REFRESHING = set()
+SIMILAR_REFRESH_LOCK = threading.Lock()
+SIMILAR_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="similar-books")
+COVER_LOCKS = {}
+COVER_LOCKS_LOCK = threading.Lock()
+COVER_WARM_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="cover-warm")
+KINDLE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="kindle-delivery")
 
 def disk_cache_key(key):
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
@@ -205,6 +244,14 @@ def initialize_disk_cache():
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS api_cache_created_at ON api_cache(created_at)"
             )
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS kindle_jobs ("
+                "job_id TEXT PRIMARY KEY, created_at REAL NOT NULL, updated_at REAL NOT NULL, "
+                "status TEXT NOT NULL, events TEXT NOT NULL)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS kindle_jobs_updated_at ON kindle_jobs(updated_at)"
+            )
             if not database_exists and os.path.exists(API_DISK_CACHE):
                 try:
                     with open(API_DISK_CACHE, "r") as legacy_file:
@@ -223,7 +270,11 @@ def initialize_disk_cache():
                     pass
             connection.execute(
                 "DELETE FROM api_cache WHERE created_at < ?",
-                (time.time() - CHINESE_TITLE_CACHE_TTL,),
+                (time.time() - API_CACHE_RETENTION_TTL,),
+            )
+            connection.execute(
+                "DELETE FROM kindle_jobs WHERE updated_at < ?",
+                (time.time() - 86400,),
             )
         if migrated_legacy_cache:
             try:
@@ -232,7 +283,7 @@ def initialize_disk_cache():
                 pass
         SQLITE_CACHE_READY = True
 
-def disk_cache_get(key, ttl=API_DISK_CACHE_TTL):
+def disk_cache_entry(key):
     cache_key = disk_cache_key(key)
     initialize_disk_cache()
     try:
@@ -243,13 +294,22 @@ def disk_cache_get(key, ttl=API_DISK_CACHE_TTL):
             ).fetchone()
             if not row:
                 return None
-            if time.time() - row[0] >= ttl:
-                connection.execute("DELETE FROM api_cache WHERE cache_key = ?", (cache_key,))
-                return None
-            return json.loads(row[1])
+            return {"created_at": row[0], "age": max(0, time.time() - row[0]), "data": json.loads(row[1])}
     except (sqlite3.Error, ValueError):
         pass
     return None
+
+def disk_cache_get(key, ttl=API_DISK_CACHE_TTL):
+    entry = disk_cache_entry(key)
+    if not entry or entry["age"] >= ttl:
+        return None
+    return entry["data"]
+
+def disk_cache_get_stale(key, ttl=API_CACHE_RETENTION_TTL):
+    entry = disk_cache_entry(key)
+    if not entry or entry["age"] >= ttl:
+        return None
+    return entry["data"]
 
 def disk_cache_set(key, data):
     cache_key = disk_cache_key(key)
@@ -273,24 +333,130 @@ def cache_get(key, ttl=CACHE_TTL_OL):
 def cache_set(key, data):
     CACHE[key] = {"d": data, "t": time.time()}
 
-def ol_get(path, params=None):
+def add_server_timing(name, started_at=None, duration=None, description=""):
+    if not has_request_context():
+        return
+    if duration is None:
+        duration = (time.perf_counter() - started_at) * 1000 if started_at is not None else 0
+    timings = getattr(g, "server_timings", None)
+    if timings is None:
+        timings = []
+        g.server_timings = timings
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "", str(name))[:32] or "app"
+    safe_description = re.sub(r'["\\\\]', "", str(description))[:80]
+    item = f"{safe_name};dur={max(0, duration):.1f}"
+    if safe_description:
+        item += f';desc="{safe_description}"'
+    timings.append(item)
+
+def openlibrary_status():
+    with OL_STATE_LOCK:
+        return {
+            "circuit_open": time.monotonic() < OL_CIRCUIT_OPEN_UNTIL,
+            "failures": OL_FAILURES,
+            "retry_after": max(0, round(OL_CIRCUIT_OPEN_UNTIL - time.monotonic())),
+        }
+
+def _openlibrary_failure():
+    global OL_FAILURES, OL_CIRCUIT_OPEN_UNTIL
+    with OL_STATE_LOCK:
+        OL_FAILURES += 1
+        if OL_FAILURES >= OL_CIRCUIT_FAILURE_THRESHOLD:
+            OL_CIRCUIT_OPEN_UNTIL = time.monotonic() + OL_CIRCUIT_COOLDOWN
+
+def _openlibrary_success():
+    global OL_FAILURES, OL_CIRCUIT_OPEN_UNTIL
+    with OL_STATE_LOCK:
+        OL_FAILURES = 0
+        OL_CIRCUIT_OPEN_UNTIL = 0.0
+
+def _openlibrary_request(path, params=None):
+    global OL_LAST_REQUEST_AT
+    if openlibrary_status()["circuit_open"]:
+        return None
+    started = time.perf_counter()
+    try:
+        with OL_GATEWAY_LOCK:
+            wait_for = OL_MIN_INTERVAL - (time.monotonic() - OL_LAST_REQUEST_AT)
+            if wait_for > 0:
+                time.sleep(wait_for)
+            OL_LAST_REQUEST_AT = time.monotonic()
+        response = SESSION.get(
+            f"{OL}{path}",
+            params=params,
+            timeout=(OL_CONNECT_TIMEOUT, OL_READ_TIMEOUT),
+        )
+        response.raise_for_status()
+        data = response.json()
+        _openlibrary_success()
+        add_server_timing("openlibrary", started, description="origin")
+        return data
+    except (requests.RequestException, ValueError):
+        _openlibrary_failure()
+        add_server_timing("openlibrary", started, description="failed")
+        return None
+
+def _refresh_ol_cache(key, path, params):
+    try:
+        data = _openlibrary_request(path, params)
+        if data is not None:
+            cache_set(key, data)
+            disk_cache_set(key, data)
+    finally:
+        with OL_REFRESH_LOCK:
+            OL_REFRESHING.discard(key)
+
+def schedule_ol_refresh(key, path, params=None):
+    with OL_REFRESH_LOCK:
+        if key in OL_REFRESHING or openlibrary_status()["circuit_open"]:
+            return False
+        OL_REFRESHING.add(key)
+    OL_REFRESH_EXECUTOR.submit(_refresh_ol_cache, key, path, params)
+    return True
+
+def ol_get(path, params=None, allow_stale=True):
     key = f"ol:{path}:{str(params)}"
     cached = cache_get(key, CACHE_TTL_OL)
     if cached is not None:
+        add_server_timing("olcache", duration=0, description="memory")
         return cached
     cached = disk_cache_get(key)
     if cached is not None:
         cache_set(key, cached)
+        add_server_timing("olcache", duration=0, description="disk")
         return cached
-    try:
-        r = SESSION.get(f"{OL}{path}", params=params, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        cache_set(key, data)
-        disk_cache_set(key, data)
-        return data
-    except:
+    stale = disk_cache_get_stale(key, OL_STALE_TTL) if allow_stale else None
+    if stale is not None:
+        cache_set(key, stale)
+        schedule_ol_refresh(key, path, params)
+        add_server_timing("olcache", duration=0, description="stale")
+        return stale
+
+    with OL_INFLIGHT_LOCK:
+        event = OL_INFLIGHT.get(key)
+        leader = event is None
+        if leader:
+            event = threading.Event()
+            OL_INFLIGHT[key] = event
+    if not leader:
+        event.wait(OL_CONNECT_TIMEOUT + OL_READ_TIMEOUT + 2)
+        shared = cache_get(key, CACHE_TTL_OL) or disk_cache_get(key)
+        if shared is not None:
+            add_server_timing("olcache", duration=0, description="shared")
+            return shared
         return None
+
+    try:
+        data = _openlibrary_request(path, params)
+        if data is not None:
+            cache_set(key, data)
+            disk_cache_set(key, data)
+        return data
+    finally:
+        with OL_INFLIGHT_LOCK:
+            inflight = OL_INFLIGHT.pop(key, None)
+            if inflight:
+                inflight.set()
 
 def ol_get_work(ol_key):
     return ol_get(ol_key + ".json")
@@ -409,7 +575,14 @@ def open_library_cover_url(cover_id, size="M"):
     if not cover_id:
         return ""
     size = size if size in ("S", "M", "L") else "M"
-    return f"https://covers.openlibrary.org/b/id/{cover_id}-{size}.jpg"
+    return f"/olcover/{cover_id}/{size}"
+
+def localize_cover_url(url, size="M"):
+    url = str(url or "")
+    local = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", url)
+    remote = re.search(r"covers\.openlibrary\.org/b/id/(\d+)-[SML]\.jpg", url)
+    match = local or remote
+    return open_library_cover_url(match.group(1), size) if match else url
 
 def edition_language_codes(edition):
     codes = set()
@@ -775,7 +948,7 @@ def fetch_category_page_books(topic, page=1, mode="nonfiction", lang=None):
     page = max(1, page)
     ckey = f"category_page:{lang}:{mode}:{topic}:{page}"
     cached = cache_get(ckey, 900)
-    if cached:
+    if cached and (cached[0] or page > 1):
         return cached
     if page == 1:
         shelf = next(
@@ -792,7 +965,15 @@ def fetch_category_page_books(topic, page=1, mode="nonfiction", lang=None):
     books, total, total_pages = collect_unique_topic_books(topic, lang, seen_keys, target, max_pages)
     start = SHELF_BOOK_TARGET * (page - 1)
     result = (books[start:target], total, total_pages)
-    cache_set(ckey, result)
+    if result[0]:
+        cache_set(ckey, result)
+    elif page == 1:
+        shelf = next(
+            (item for item in disk_load_shelves(mode, lang) or [] if item.get("topic") == topic),
+            None,
+        )
+        if shelf and shelf.get("books"):
+            result = (shelf["books"][:SHELF_BOOK_TARGET], len(shelf["books"]), 1)
     return result
 
 def fetch_category_books(topic, page=1, lang=None, mode="nonfiction"):
@@ -950,7 +1131,7 @@ def source_metadata_language_penalty(book, preferred_language):
 def book_score(book, target_title="", target_author="", preferred_language=""):
     score = title_match_score(book.title, target_title)
     score += author_match_score(book.author, target_author)
-    fmt_scores = {"epub": 120, "mobi": 85, "azw3": 85, "pdf": 60, "djvu": 25, "chm": 10, "txt": 8}
+    fmt_scores = {"epub": 160, "pdf": 70, "mobi": 25, "azw3": 20, "txt": 12, "djvu": -20, "chm": -30}
     score += fmt_scores.get(book.ext.lower(), 0)
     if preferred_language:
         score += 80 if book_matches_language(book, preferred_language) else -200
@@ -962,12 +1143,12 @@ def book_score(book, target_title="", target_author="", preferred_language=""):
     except (TypeError, ValueError):
         pass
     bytes_val = parse_size_bytes(book.size)
-    if book.ext.lower() == "epub" and (bytes_val < 50000 or bytes_val > 200 * 1024 * 1024):
-        score -= 100
-    elif book.ext.lower() == "pdf" and (bytes_val < 100000 or bytes_val > 500 * 1024 * 1024):
-        score -= 100
+    if book.ext.lower() == "epub" and (bytes_val < 50000 or bytes_val > 50 * 1024 * 1024):
+        score -= 140
+    elif book.ext.lower() == "pdf" and (bytes_val < 100000 or bytes_val > 100 * 1024 * 1024):
+        score -= 130
     elif bytes_val:
-        score += 20
+        score += 30 if bytes_val <= 25 * 1024 * 1024 else 12
     if book.publisher.strip():
         score += 12
     try:
@@ -978,6 +1159,31 @@ def book_score(book, target_title="", target_author="", preferred_language=""):
     if getattr(book, "cover_dir", ""):
         score += 6
     return score
+
+def recommendation_reasons(book, target_title="", target_author="", preferred_language=""):
+    reasons = []
+    title_score = title_match_score(book.title, target_title)
+    author_score = author_match_score(book.author, target_author)
+    extension = (book.ext or "").lower()
+    size_bytes = parse_size_bytes(book.size)
+    if title_score >= 900:
+        reasons.append("Strong title match")
+    if target_author and author_score >= 180:
+        reasons.append("Author match")
+    if preferred_language and book_matches_language(book, preferred_language):
+        reasons.append(preferred_language)
+    if extension == "epub":
+        reasons.append("Kindle-ready EPUB")
+    elif extension == "pdf":
+        reasons.append("Readable PDF")
+    if size_bytes and size_bytes <= 25 * 1024 * 1024:
+        reasons.append("Easy to send")
+    try:
+        if int(book.pages) > 0:
+            reasons.append("Complete page data")
+    except (TypeError, ValueError):
+        pass
+    return reasons[:4]
 
 def dedup(books, scorer=None):
     scorer = scorer or book_score
@@ -1153,7 +1359,123 @@ def book_metadata_from_work(work_id, lang=None):
     remember_book_hint(result, lang)
     return result
 
+def book_detail_cache_key(work_id, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    return f"book_detail:v3:{lang}:{work_id}"
+
+def cached_book_detail(work_id, lang=None, allow_stale=True):
+    key = book_detail_cache_key(work_id, lang)
+    cached = cache_get(key, BOOK_DETAIL_FRESH_TTL)
+    if cached is not None:
+        return cached, "memory"
+    cached = disk_cache_get(key, BOOK_DETAIL_FRESH_TTL)
+    if cached is not None:
+        cache_set(key, cached)
+        return cached, "disk"
+    if allow_stale:
+        stale = disk_cache_get_stale(key, BOOK_DETAIL_STALE_TTL)
+        if stale is not None:
+            return stale, "stale"
+    return None, "miss"
+
+def fallback_book_detail(work_id, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    metadata_key = f"book_meta:{lang}:{work_id}"
+    metadata = (
+        cache_get(metadata_key, BOOK_DETAIL_STALE_TTL)
+        or disk_cache_get_stale(metadata_key, BOOK_DETAIL_STALE_TTL)
+        or hinted_book_metadata(work_id, lang)
+        or known_book_metadata(work_id, lang)
+        or {}
+    )
+    if not metadata:
+        return None
+    return {
+        "success": True,
+        "title": metadata.get("title", ""),
+        "localized_title": metadata.get("localized_title", ""),
+        "download_title": metadata.get("download_title") or metadata.get("title", ""),
+        "author": metadata.get("author", ""),
+        "cover_url": localize_cover_url(metadata.get("cover_url", "")),
+        "download_queries": [],
+        "description": "",
+        "subjects": [],
+        "similar_subjects": [],
+        "complete": False,
+    }
+
+def build_book_detail(work_id, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    ol_key = ol_key_from_work_id(work_id)
+    if not ol_key:
+        return None
+    work = ol_get_work(ol_key) or {}
+    metadata = book_metadata_from_work(work_id, lang) or fallback_book_detail(work_id, lang) or {}
+    if metadata.get("success"):
+        metadata = {
+            key: value for key, value in metadata.items()
+            if key in {"title", "localized_title", "download_title", "author", "cover_url"}
+        }
+    if not work and not metadata:
+        return None
+    description = english_description_for_work(ol_key, work) if work else ""
+    subjects = work.get("subjects", [])[:20]
+    detail = {
+        "success": True,
+        "title": metadata.get("title") or work.get("title", ""),
+        "localized_title": metadata.get("localized_title", ""),
+        "download_title": metadata.get("download_title") or metadata.get("title") or work.get("title", ""),
+        "author": metadata.get("author", ""),
+        "cover_url": localize_cover_url(metadata.get("cover_url", "")),
+        "download_queries": chinese_download_queries(ol_key, metadata) if lang == "cn" else [],
+        "description": description,
+        "subjects": subjects,
+        "similar_subjects": similar_subject_candidates(subjects),
+        "complete": bool(work),
+    }
+    if detail["title"] or detail["author"]:
+        key = book_detail_cache_key(work_id, lang)
+        cache_set(key, detail)
+        disk_cache_set(key, detail)
+        remember_book_hint({**detail, "ol_key": ol_key}, lang)
+        return detail
+    return None
+
+def _refresh_book_detail(work_id, lang):
+    refresh_key = (lang, work_id)
+    try:
+        build_book_detail(work_id, lang)
+    finally:
+        with BOOK_DETAIL_REFRESH_LOCK:
+            BOOK_DETAIL_REFRESHING.discard(refresh_key)
+
+def schedule_book_detail_refresh(work_id, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    refresh_key = (lang, work_id)
+    with BOOK_DETAIL_REFRESH_LOCK:
+        if refresh_key in BOOK_DETAIL_REFRESHING:
+            return False
+        BOOK_DETAIL_REFRESHING.add(refresh_key)
+    BOOK_DETAIL_EXECUTOR.submit(_refresh_book_detail, work_id, lang)
+    return True
+
+def get_book_detail(work_id, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    detail, cache_state = cached_book_detail(work_id, lang)
+    if detail is not None:
+        if cache_state == "stale":
+            schedule_book_detail_refresh(work_id, lang)
+        return detail, cache_state
+    fallback = fallback_book_detail(work_id, lang)
+    schedule_book_detail_refresh(work_id, lang)
+    return fallback, "fallback" if fallback else "miss"
+
 app = Flask(__name__)
+
+@app.before_request
+def start_request_timing():
+    g.request_started_at = time.perf_counter()
+    g.server_timings = []
 
 @app.route("/language/<lang>")
 def switch_language(lang):
@@ -1168,10 +1490,18 @@ def switch_language(lang):
 
 @app.after_request
 def cache_headers(resp):
+    if getattr(g, "request_started_at", None) is not None:
+        add_server_timing("app", g.request_started_at, description=request.endpoint or "request")
+    if getattr(g, "server_timings", None):
+        resp.headers["Server-Timing"] = ", ".join(g.server_timings)
     if request.endpoint == "switch_language":
         resp.headers["Cache-Control"] = "no-store"
+    elif getattr(g, "cache_control_override", None):
+        resp.headers["Cache-Control"] = g.cache_control_override
     elif request.method in ("GET", "HEAD") and resp.status_code < 400:
-        if resp.mimetype == "text/html":
+        if request.path.startswith(("/api/kindle/", "/api/health")):
+            resp.headers["Cache-Control"] = "no-store"
+        elif resp.mimetype == "text/html":
             resp.headers["Cache-Control"] = "private, max-age=90, stale-while-revalidate=600"
         elif request.path.startswith(("/api/book", "/api/category", "/api/shelf", "/api/discover", "/api/cn-display-title")):
             resp.headers["Cache-Control"] = "private, max-age=600, stale-while-revalidate=3600"
@@ -1186,6 +1516,78 @@ def cache_headers(resp):
     if resp.mimetype == "text/html" or request.path.startswith("/api/"):
         resp.set_cookie("book_lang", get_book_lang(), max_age=31536000, samesite="Lax")
     return resp
+
+@app.route("/api/health")
+def api_health():
+    database = {
+        "ready": False,
+        "writable": os.access(DATA_DIR, os.W_OK),
+        "cache_entries": 0,
+    }
+    job_counts = {}
+    try:
+        initialize_disk_cache()
+        with disk_cache_connection(timeout=1) as connection:
+            database["cache_entries"] = connection.execute(
+                "SELECT COUNT(*) FROM api_cache"
+            ).fetchone()[0]
+            job_counts = {
+                status: count
+                for status, count in connection.execute(
+                    "SELECT status, COUNT(*) FROM kindle_jobs GROUP BY status"
+                ).fetchall()
+            }
+        database["ready"] = True
+    except (OSError, sqlite3.Error):
+        pass
+    payload = {
+        "success": database["ready"],
+        "service": "libflix",
+        "database": database,
+        "openlibrary": openlibrary_status(),
+        "cache": {
+            "memory_entries": len(CACHE),
+            "book_refreshes": len(BOOK_DETAIL_REFRESHING),
+            "similar_refreshes": len(SIMILAR_REFRESHING),
+            "loaded_shelf_sets": sum(
+                1 for key in CACHE if str(key).startswith("shelves_")
+            ),
+        },
+        "kindle_jobs": job_counts,
+    }
+    return jsonify(payload), 200 if payload["success"] else 503
+
+@app.route("/favicon.ico")
+def favicon():
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+        '<rect width="64" height="64" rx="12" fill="#f20d1b"/>'
+        '<path d="M18 14h9v28h19v8H18z" fill="#fff"/>'
+        '</svg>'
+    )
+    response = Response(svg, mimetype="image/svg+xml")
+    response.headers["Cache-Control"] = "public, max-age=604800, immutable"
+    return response
+
+@app.route("/api/metrics/web-vitals", methods=["POST"])
+def web_vitals():
+    if request.content_length and request.content_length > 4096:
+        return "", 413
+    payload = request.get_json(silent=True) or {}
+    metrics = {}
+    path = payload.get("path")
+    if isinstance(path, str) and path.startswith("/") and len(path) <= 200:
+        metrics["path"] = path
+    for key in ("navigation", "fcp", "lcp", "inp"):
+        value = payload.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 600000:
+            metrics[key] = value
+    cls = payload.get("cls")
+    if isinstance(cls, (int, float)) and not isinstance(cls, bool) and 0 <= cls <= 100:
+        metrics["cls"] = cls
+    if metrics:
+        print("WEB_VITALS " + json.dumps(metrics, separators=(",", ":")), flush=True)
+    return "", 204
 
 @app.context_processor
 def inject_book_context():
@@ -1213,10 +1615,14 @@ def size_url(url, size="M"):
     if not url:
         return url
     zoom = {"S": "1", "M": "3", "L": "5"}.get(size, "3")
+    local_cover = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", url)
+    if local_cover:
+        return f"/olcover/{local_cover.group(1)}/{size}"
+    remote_cover = re.search(r"covers\.openlibrary\.org/b/id/(\d+)-[SML]\.jpg", url)
+    if remote_cover:
+        return f"/olcover/{remote_cover.group(1)}/{size}"
     if url.startswith("/"):
         return f"{url.rstrip('/')}/{size}"
-    if "covers.openlibrary.org/b/id/" in url:
-        return re.sub(r"-[SML]\.jpg(?:\?.*)?$", f"-{size}.jpg", url)
     if "zoom=" in url:
         return re.sub(r'zoom=\d+', f'zoom={zoom}', url)
     return url
@@ -1291,6 +1697,11 @@ def normalize_shelf_labels(shelves, mode="nonfiction"):
         for book in shelf.get("books", []):
             book_copy = dict(book)
             match = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", book_copy.get("cover_url", ""))
+            if not match:
+                match = re.search(
+                    r"covers\.openlibrary\.org/b/id/(\d+)-[SML]\.jpg",
+                    book_copy.get("cover_url", ""),
+                )
             if match:
                 book_copy["cover_url"] = open_library_cover_url(match.group(1))
             shelf_copy["books"].append(book_copy)
@@ -1384,7 +1795,11 @@ def render_home(mode="nonfiction", lang=None, error=None):
                     if (b.get("ol_key") or f"{b.get('title')}|{b.get('author')}") != hero_key
                 ]
                 hero_books = hero_books[:7]
-                hero_items = [dict(book, description="") for book in hero_books]
+                hero_items = []
+                for book in hero_books:
+                    work_id = work_id_from_ol_key(book.get("ol_key", ""))
+                    detail, _ = cached_book_detail(work_id, lang) if work_id else (None, "miss")
+                    hero_items.append(dict(book, description=(detail or {}).get("description", "")))
                 hero = hero_items[0]
     return render_template("index.html", shelves=shelves, hero=hero, hero_books=hero_books, hero_items=hero_items, mode=mode, error=error)
 
@@ -1553,35 +1968,32 @@ def book_page(work_id, clean_mode, clean_lang):
     ol_key = ol_key_from_work_id(work_id)
     if not ol_key:
         return render_template("book.html", title="Book not found", author="", cover_url="", ol_key="", mode=mode), 404
-    ckey = f"book_meta:{lang}:{work_id}"
-    book = cache_get(ckey, API_DISK_CACHE_TTL) or disk_cache_get(ckey, API_DISK_CACHE_TTL)
-    if book:
-        cache_set(ckey, book)
-    else:
-        book = book_metadata_from_work(work_id, lang) or hinted_book_metadata(work_id, lang)
-    if book is None:
-        book = {
+    detail, detail_cache = get_book_detail(work_id, lang)
+    if detail is None:
+        detail = {
             "title": "Book",
             "localized_title": "",
             "download_title": "",
             "author": "",
             "cover_url": "",
-            "ol_key": ol_key,
+            "description": "",
+            "similar_subjects": [],
+            "download_queries": [],
+            "complete": False,
         }
-    return render_template("book.html", mode=mode, **book)
+    return render_template(
+        "book.html",
+        mode=mode,
+        ol_key=ol_key,
+        detail_cache=detail_cache,
+        **detail,
+    )
 
-@app.route("/api/similar")
-def api_similar():
-    subjects = [
-        subject.strip()
-        for subject in request.args.getlist("subject")[:2]
-        if subject.strip()
-    ]
-    ol_key = request.args.get("ol_key", "").strip()
-    lang = get_book_lang()
-    if not subjects:
-        return jsonify({"success": False, "error": "No subject"})
+def similar_cache_key(ol_key, subjects, lang):
+    normalized = "|".join(sorted(subject.casefold() for subject in subjects))
+    return f"similar:v2:{lang}:{ol_key}:{normalized}"
 
+def build_similar_books(ol_key, subjects, lang):
     def fetch_subject(subject):
         data = ol_get("/search.json", {
             "q": f"subject:{subject} language:{BOOK_LANG_CONFIG[lang]['ol_lang']}",
@@ -1632,7 +2044,53 @@ def api_similar():
         books.append(book)
         if len(books) == 12:
             break
-    return jsonify({"success": True, "books": books})
+    return books
+
+def _refresh_similar_books(cache_key, ol_key, subjects, lang):
+    try:
+        books = build_similar_books(ol_key, subjects, lang)
+        if books:
+            payload = {"success": True, "books": books, "refreshing": False}
+            cache_set(cache_key, payload)
+            disk_cache_set(cache_key, payload)
+    finally:
+        with SIMILAR_REFRESH_LOCK:
+            SIMILAR_REFRESHING.discard(cache_key)
+
+def schedule_similar_refresh(cache_key, ol_key, subjects, lang):
+    with SIMILAR_REFRESH_LOCK:
+        if cache_key in SIMILAR_REFRESHING:
+            return False
+        SIMILAR_REFRESHING.add(cache_key)
+    SIMILAR_EXECUTOR.submit(_refresh_similar_books, cache_key, ol_key, subjects, lang)
+    return True
+
+@app.route("/api/similar")
+def api_similar():
+    subjects = [
+        subject.strip()
+        for subject in request.args.getlist("subject")[:2]
+        if subject.strip()
+    ]
+    ol_key = request.args.get("ol_key", "").strip()
+    lang = get_book_lang()
+    if not subjects:
+        return jsonify({"success": False, "error": "No subject"})
+    cache_key = similar_cache_key(ol_key, subjects, lang)
+    payload = cache_get(cache_key, SIMILAR_FRESH_TTL) or disk_cache_get(cache_key, SIMILAR_FRESH_TTL)
+    if payload:
+        add_server_timing("similar", duration=0, description="cache")
+        return jsonify(payload)
+    stale = disk_cache_get_stale(cache_key, SIMILAR_STALE_TTL)
+    if stale:
+        schedule_similar_refresh(cache_key, ol_key, subjects, lang)
+        add_server_timing("similar", duration=0, description="stale")
+        g.cache_control_override = "private, max-age=15"
+        return jsonify({**stale, "refreshing": True})
+    schedule_similar_refresh(cache_key, ol_key, subjects, lang)
+    add_server_timing("similar", duration=0, description="background")
+    g.cache_control_override = "private, max-age=2"
+    return jsonify({"success": True, "books": [], "refreshing": True})
 
 @app.route("/api/book")
 def api_book():
@@ -1641,33 +2099,24 @@ def api_book():
         return jsonify({"success": False, "error": "No ol_key provided"})
     if not ol_key.startswith("/works/"):
         return jsonify({"success": False, "error": "Book not found"})
-
-    work = ol_get_work(ol_key) or {}
-    metadata = book_metadata_from_work(work_id_from_ol_key(ol_key), get_book_lang()) or {}
-    if not work and not metadata:
+    work_id = work_id_from_ol_key(ol_key)
+    detail, cache_state = get_book_detail(work_id, get_book_lang())
+    if not detail:
         return jsonify({"success": False, "error": "Book not found"})
-    description = english_description_for_work(ol_key, work) if work else ""
+    response_payload = dict(detail)
+    response_payload["refreshing"] = cache_state in ("stale", "fallback", "miss") or not detail.get("complete")
+    response_payload["cache"] = cache_state
+    if response_payload["refreshing"]:
+        g.cache_control_override = "private, max-age=2"
     if request.args.get("description_only") == "1":
-        return jsonify({"success": True, "description": description})
-    subjects = work.get("subjects", [])[:20]
-    similar_subjects = similar_subject_candidates(subjects)
-    download_queries = (
-        chinese_download_queries(ol_key, metadata)
-        if get_book_lang() == "cn"
-        else []
-    )
-    return jsonify({
-        "success": True,
-        "title": metadata.get("title") or work.get("title", ""),
-        "localized_title": metadata.get("localized_title", ""),
-        "download_title": metadata.get("download_title", ""),
-        "author": metadata.get("author", ""),
-        "cover_url": metadata.get("cover_url", ""),
-        "download_queries": download_queries,
-        "description": description,
-        "subjects": subjects,
-        "similar_subjects": similar_subjects,
-    })
+        response_payload = {
+            "success": True,
+            "description": detail.get("description", ""),
+            "refreshing": response_payload["refreshing"],
+            "cache": cache_state,
+        }
+    add_server_timing("book", duration=0, description=cache_state)
+    return jsonify(response_payload)
 
 @app.route("/api/cn-display-title")
 def api_cn_display_title():
@@ -1722,7 +2171,7 @@ def api_search():
     target_title = request.args.get("target_title", "").strip() or q
     target_author = request.args.get("target_author", "").strip()
     result_cache_key = (
-        f"download_search:v3:{q}:{sort}:{order}:{limit}:{page}:"
+        f"download_search:v4:{q}:{sort}:{order}:{limit}:{page}:"
         f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}"
     )
     cached_result = cache_get(result_cache_key, 900)
@@ -1731,24 +2180,41 @@ def api_search():
         if cached_result is not None:
             cache_set(result_cache_key, cached_result)
     if cached_result is not None:
+        add_server_timing("downloads", duration=0, description="cache")
         return jsonify(cached_result)
 
     sort_field = "y" if sort in ("year", "best_match") else sort
+    download_started = time.perf_counter()
     try:
         books, total = DOWNLOADER.search(q, sort=sort_field, order=order, page=page, limit=limit)
     except requests.Timeout:
+        stale = disk_cache_get_stale(result_cache_key, 604800)
+        if stale:
+            g.cache_control_override = "private, max-age=15"
+            add_server_timing("downloads", download_started, description="stale-timeout")
+            return jsonify({**stale, "stale": True})
         return jsonify({
             "success": False,
             "error": "The download source timed out.",
             "code": "source_timeout",
         }), 504
     except requests.RequestException:
+        stale = disk_cache_get_stale(result_cache_key, 604800)
+        if stale:
+            g.cache_control_override = "private, max-age=15"
+            add_server_timing("downloads", download_started, description="stale-unavailable")
+            return jsonify({**stale, "stale": True})
         return jsonify({
             "success": False,
             "error": "The download source is temporarily unreachable.",
             "code": "source_unavailable",
         }), 503
     except Exception:
+        stale = disk_cache_get_stale(result_cache_key, 604800)
+        if stale:
+            g.cache_control_override = "private, max-age=15"
+            add_server_timing("downloads", download_started, description="stale-error")
+            return jsonify({**stale, "stale": True})
         return jsonify({
             "success": False,
             "error": "Downloads could not be checked right now.",
@@ -1787,7 +2253,13 @@ def api_search():
     for i, b in enumerate(books):
         d = b.to_dict(i + 1 + (page - 1) * limit)
         cover_dir = getattr(b, "cover_dir", "")
-        d["cover_url"] = f"/cover/{d['md5']}?dir={cover_dir}" if cover_dir and d['md5'] else ""
+        d["cover_url"] = f"/cover/{d['md5']}/S?dir={cover_dir}" if cover_dir and d['md5'] else ""
+        d["recommendation_reasons"] = recommendation_reasons(
+            b,
+            target_title=target_title,
+            target_author=target_author,
+            preferred_language=lang_filter or "",
+        )
         d["best_match"] = b is best_book
         result_books.append(d)
     result = {
@@ -1806,6 +2278,7 @@ def api_search():
     }
     cache_set(result_cache_key, result)
     disk_cache_set(result_cache_key, result)
+    add_server_timing("downloads", download_started, description="origin")
     return jsonify(result)
 
 @app.route("/download/<md5>")
@@ -1832,36 +2305,95 @@ def download(md5):
     )
     return resp
 
-@app.route("/cover/<md5>")
-def cover(md5):
+def cover_dimensions(size):
+    return {
+        "S": (120, 180),
+        "M": (360, 540),
+        "L": (720, 1080),
+    }.get(size, (360, 540))
+
+def cover_cache_path(namespace, identity, size):
+    digest = hashlib.sha256(f"{namespace}:{identity}:{size}".encode("utf-8")).hexdigest()
+    extension = "webp" if Image is not None else "jpg"
+    return os.path.join(COVER_CACHE_DIR, namespace, digest[:2], f"{digest}.{extension}")
+
+def cover_lock(cache_path):
+    with COVER_LOCKS_LOCK:
+        lock = COVER_LOCKS.get(cache_path)
+        if lock is None:
+            lock = threading.Lock()
+            COVER_LOCKS[cache_path] = lock
+        return lock
+
+def write_optimized_cover(content, cache_path, size):
+    os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+    temporary = f"{cache_path}.{uuid.uuid4().hex}.tmp"
+    if Image is None:
+        with open(temporary, "wb") as output:
+            output.write(content)
+    else:
+        with Image.open(io.BytesIO(content)) as source:
+            source.thumbnail(cover_dimensions(size), Image.Resampling.LANCZOS)
+            converted = source.convert("RGB")
+            converted.save(temporary, format="WEBP", quality=82, method=4)
+    os.replace(temporary, cache_path)
+
+def ensure_cover_cached(namespace, identity, size, source_url, referer=""):
+    size = size if size in ("S", "M", "L") else "M"
+    cache_path = cover_cache_path(namespace, identity, size)
+    hit = os.path.exists(cache_path) and os.path.getsize(cache_path) > 100
+    if not hit:
+        with cover_lock(cache_path):
+            hit = os.path.exists(cache_path) and os.path.getsize(cache_path) > 100
+            if not hit:
+                headers = {"Referer": referer} if referer else {}
+                try:
+                    response = SESSION.get(
+                        source_url,
+                        timeout=(3, 10),
+                        headers=headers,
+                    )
+                    response.raise_for_status()
+                    if len(response.content) <= 100:
+                        return None, hit
+                    write_optimized_cover(response.content, cache_path, size)
+                except (requests.RequestException, OSError, UnidentifiedImageError):
+                    return None, hit
+    return cache_path, hit
+
+def cached_cover_response(namespace, identity, size, source_url, referer=""):
+    started = time.perf_counter()
+    cache_path, hit = ensure_cover_cached(namespace, identity, size, source_url, referer)
+    if not cache_path:
+        return "", 404
+    response = send_file(
+        cache_path,
+        mimetype="image/webp" if Image is not None else "image/jpeg",
+        conditional=True,
+        max_age=2592000,
+    )
+    response.headers["Cache-Control"] = "public, max-age=2592000, stale-while-revalidate=604800, immutable"
+    response.headers["X-LibFlix-Cover-Cache"] = "HIT" if hit else "MISS"
+    add_server_timing("cover", started, description="hit" if hit else "miss")
+    return response
+
+@app.route("/cover/<md5>", defaults={"size": "S"})
+@app.route("/cover/<md5>/<size>")
+def cover(md5, size):
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", md5):
+        return "", 404
     cover_dir = request.args.get("dir", "")
-    if not cover_dir:
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}", cover_dir):
         return "", 404
     url = f"{MIRROR}/covers/{cover_dir}/{md5}.jpg"
-    try:
-        r = SESSION.get(url, timeout=15, headers={"Referer": f"{MIRROR}/"})
-        if r.status_code == 200 and len(r.content) > 100:
-            resp = Response(r.content, mimetype=r.headers.get("content-type", "image/jpeg"))
-            resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
-            return resp
-    except:
-        pass
-    return "", 404
+    return cached_cover_response("downloads", f"{cover_dir}:{md5.lower()}", size.upper(), url, f"{MIRROR}/")
 
 @app.route("/olcover/<int:cover_id>")
 @app.route("/olcover/<int:cover_id>/<size>")
 def olcover(cover_id, size="M"):
-    s = size.upper() if size in ("S", "M", "L") else "M"
+    s = size.upper() if size.upper() in ("S", "M", "L") else "M"
     url = f"https://covers.openlibrary.org/b/id/{cover_id}-{s}.jpg"
-    try:
-        r = SESSION.get(url, timeout=10)
-        if r.status_code == 200 and len(r.content) > 100:
-            resp = Response(r.content, mimetype=r.headers.get("content-type", "image/jpeg"))
-            resp.headers["Cache-Control"] = "public, max-age=604800, immutable"
-            return resp
-    except:
-        pass
-    return "", 404
+    return cached_cover_response("openlibrary", str(cover_id), s, url)
 
 def _kindle_progress(stage, progress=None, detail=""):
     event = {"type": "progress", "stage": stage, "progress": progress}
@@ -1896,6 +2428,10 @@ def _format_transfer_size(value):
 def _open_smtp_connection(host, port, timeout=45):
     import smtplib, ssl
 
+    if int(port) == 465:
+        server = smtplib.SMTP_SSL(host, port, timeout=timeout, context=ssl.create_default_context())
+        server.ehlo()
+        return server
     server = smtplib.SMTP(host, port, timeout=timeout)
     try:
         server.ehlo()
@@ -2067,17 +2603,141 @@ def _send_to_kindle_events(data):
             except OSError:
                 pass
 
+def validate_kindle_payload(data):
+    required = ("md5", "kindle_email", "smtp_host", "smtp_user", "smtp_pass")
+    if not all(data.get(field) for field in required):
+        return "Missing required fields"
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", str(data.get("md5", ""))):
+        return "Invalid book identifier"
+    try:
+        port = int(data.get("smtp_port", 587))
+    except (TypeError, ValueError):
+        return "SMTP port must be a number"
+    if port not in (465, 587, 2525):
+        return "Use a secure SMTP port: 465, 587, or 2525"
+    host = str(data.get("smtp_host", "")).strip().rstrip(".")
+    if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", host):
+        return "Invalid SMTP hostname"
+    try:
+        addresses = {
+            item[4][0]
+            for item in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        }
+    except socket.gaierror:
+        return "The SMTP hostname could not be resolved"
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            return "Private or local SMTP servers are not supported"
+    data["smtp_port"] = port
+    data["smtp_host"] = host
+    return ""
+
+def kindle_job_create():
+    initialize_disk_cache()
+    job_id = uuid.uuid4().hex
+    now = time.time()
+    queued = [{"type": "progress", "stage": "Queued for delivery", "progress": 1}]
+    with disk_cache_connection(timeout=5) as connection:
+        connection.execute(
+            "INSERT INTO kindle_jobs(job_id, created_at, updated_at, status, events) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (job_id, now, now, "queued", json.dumps(queued, separators=(",", ":"))),
+        )
+    return job_id
+
+def kindle_job_append(job_id, event):
+    initialize_disk_cache()
+    with disk_cache_connection(timeout=5) as connection:
+        row = connection.execute(
+            "SELECT events FROM kindle_jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+        if not row:
+            return
+        events = json.loads(row[0])
+        events.append(event)
+        status = "complete" if event.get("type") == "complete" else "failed" if event.get("type") == "error" else "running"
+        connection.execute(
+            "UPDATE kindle_jobs SET updated_at = ?, status = ?, events = ? WHERE job_id = ?",
+            (time.time(), status, json.dumps(events, separators=(",", ":")), job_id),
+        )
+
+def kindle_job_get(job_id, cursor=0):
+    initialize_disk_cache()
+    with disk_cache_connection(timeout=5) as connection:
+        row = connection.execute(
+            "SELECT created_at, updated_at, status, events FROM kindle_jobs WHERE job_id = ?",
+            (job_id,),
+        ).fetchone()
+    if not row:
+        return None
+    events = json.loads(row[3])
+    status = row[2]
+    if status in ("queued", "running") and time.time() - row[1] > 300:
+        timeout_event = {
+            "type": "error",
+            "success": False,
+            "stage": "Delivery interrupted",
+            "progress": None,
+            "error": "The delivery worker stopped responding. Start the delivery again.",
+        }
+        kindle_job_append(job_id, timeout_event)
+        events.append(timeout_event)
+        status = "failed"
+    cursor = max(0, min(int(cursor or 0), len(events)))
+    return {
+        "job_id": job_id,
+        "status": status,
+        "events": events[cursor:],
+        "cursor": len(events),
+    }
+
+def run_kindle_job(job_id, data):
+    try:
+        for event in _send_to_kindle_events(data):
+            kindle_job_append(job_id, event)
+    except Exception as error:
+        kindle_job_append(job_id, {
+            "type": "error",
+            "success": False,
+            "stage": "Delivery failed",
+            "progress": None,
+            "error": _kindle_delivery_error(error),
+        })
+
+@app.route("/api/kindle/jobs", methods=["POST"])
+def api_create_kindle_job():
+    data = request.get_json(silent=True) or {}
+    error = validate_kindle_payload(data)
+    if error:
+        return jsonify({"success": False, "error": error}), 400
+    job_id = kindle_job_create()
+    KINDLE_EXECUTOR.submit(run_kindle_job, job_id, dict(data))
+    return jsonify({
+        "success": True,
+        "job_id": job_id,
+        "status_url": f"/api/kindle/jobs/{job_id}",
+    }), 202
+
+@app.route("/api/kindle/jobs/<job_id>")
+def api_kindle_job(job_id):
+    if not re.fullmatch(r"[a-f0-9]{32}", job_id):
+        return jsonify({"success": False, "error": "Invalid delivery job"}), 400
+    cursor = request.args.get("cursor", "0")
+    cursor = int(cursor) if cursor.isdigit() else 0
+    job = kindle_job_get(job_id, cursor)
+    if not job:
+        return jsonify({"success": False, "error": "Delivery job not found"}), 404
+    return jsonify({"success": True, **job})
+
 
 @app.route("/api/sendtokindle", methods=["POST"])
 def api_sendtokindle():
     data = request.get_json(silent=True) or {}
-    required = ("md5", "kindle_email", "smtp_host", "smtp_user", "smtp_pass")
-    if not all(data.get(field) for field in required):
-        return jsonify({"success": False, "error": "Missing required fields"}), 400
-    try:
-        data["smtp_port"] = int(data.get("smtp_port", 587))
-    except (TypeError, ValueError):
-        return jsonify({"success": False, "error": "SMTP port must be a number"}), 400
+    error = validate_kindle_payload(data)
+    if error:
+        return jsonify({"success": False, "error": error}), 400
 
     if request.args.get("stream") == "1":
         def stream_events():
@@ -2095,6 +2755,7 @@ def api_sendtokindle():
     return jsonify(final), status
 
 def load_cached_shelves():
+    warm_jobs = []
     for lang in BOOK_LANGS:
         for mode in ("nonfiction", "fiction"):
             disk = disk_load_shelves(mode, lang)
@@ -2104,10 +2765,45 @@ def load_cached_shelves():
             for shelf in shelves:
                 for book in shelf.get("books", []):
                     remember_book_hint(book, lang)
+            trending = shelves[0].get("books", []) if shelves else []
+            for index, book in enumerate(trending[:12]):
+                match = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", book.get("cover_url", ""))
+                if not match:
+                    continue
+                warm_jobs.append((match.group(1), "M"))
+                if index < 7:
+                    warm_jobs.append((match.group(1), "L"))
             cache_set(f"shelves_{lang}_{mode}", shelves)
             print(f"Loaded {len(shelves)} Open Library {lang} {mode} shelves from disk cache", flush=True)
+    schedule_cover_warm(warm_jobs)
+
+def schedule_cover_warm(jobs):
+    jobs = list(dict.fromkeys(jobs))
+    if not jobs:
+        return
+    os.makedirs(COVER_CACHE_DIR, exist_ok=True)
+    marker = os.path.join(COVER_CACHE_DIR, ".warm-started")
+    try:
+        if os.path.exists(marker):
+            if time.time() - os.path.getmtime(marker) < 86400:
+                return
+            os.unlink(marker)
+        with open(marker, "x") as marker_file:
+            marker_file.write(str(time.time()))
+    except FileExistsError:
+        return
+    except OSError:
+        return
+
+    def warm(cover_id, size):
+        url = f"https://covers.openlibrary.org/b/id/{cover_id}-{size}.jpg"
+        ensure_cover_cached("openlibrary", cover_id, size, url)
+
+    for cover_id, size in jobs:
+        COVER_WARM_EXECUTOR.submit(warm, cover_id, size)
+
+initialize_disk_cache()
+load_cached_shelves()
 
 if __name__ == "__main__":
-    initialize_disk_cache()
-    load_cached_shelves()
     app.run(host="0.0.0.0", port=5800, debug=True, use_reloader=False)

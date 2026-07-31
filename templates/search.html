@@ -54,8 +54,8 @@
     <nav class="download-pagination" id="downloadPagination" aria-label="Download result pages" hidden></nav>
   </main>
 
-  <script src="{{ url_for('static', filename='download-ui.js', v=asset_version) }}"></script>
-  <script>
+  <script data-page-script src="{{ url_for('static', filename='download-ui.js', v=asset_version) }}"></script>
+  <script data-page-script>
     const MODE = {{ mode | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
     const QUERY = {{ query | tojson }};
@@ -170,6 +170,9 @@
     };
 
     fetchResults(currentPage);
+    window.LibFlixPageCleanup = () => {
+      if (activeSearch) activeSearch.abort();
+    };
   </script>
 </body>
 </html>

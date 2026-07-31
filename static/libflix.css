@@ -19,6 +19,26 @@
   --app-reading: 1120px;
 }
 
+@view-transition {
+  navigation: auto;
+}
+
+::view-transition-old(root) {
+  animation: libflixPageOut .14s ease both;
+}
+
+::view-transition-new(root) {
+  animation: libflixPageIn .2s ease both;
+}
+
+@keyframes libflixPageOut {
+  to { opacity: 0; transform: translateY(-3px); }
+}
+
+@keyframes libflixPageIn {
+  from { opacity: 0; transform: translateY(4px); }
+}
+
 * {
   box-sizing: border-box;
 }
@@ -1167,6 +1187,22 @@ footer {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+
+.edition-reasons {
+  margin-top: 7px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.edition-reasons span {
+  padding: 3px 6px;
+  border-radius: 4px;
+  background: rgba(242, 13, 27, .08);
+  color: #c4c6cb;
+  font-size: .66rem;
+  line-height: 1.2;
 }
 
 .edition-format {

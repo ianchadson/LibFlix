@@ -27,7 +27,8 @@ Browser requests /
        -> Open Library search when cache is cold or a shelf needs refill
   -> render index.html with fixed-height cycleable hero + shelves
        -> shelf wrappers render as stable skeletons
-       -> active hero description hydrates through /api/book?description_only=1
+       -> cached hero descriptions render when already assembled
+       -> missing active description hydrates through /api/book?description_only=1
   -> IntersectionObserver hydrates each complete shelf near the viewport
   -> user scrolls a shelf horizontally
   -> JS fetches /api/shelf/<topic>?page=N&mode=...&book_lang=...
@@ -93,11 +94,13 @@ download source directly.
 
 ```text
 Browser requests /book/OL3431878W
-  -> Flask resolves /works/OL3431878W through Open Library
-  -> Flask renders book.html with title, author, cover, and work key
+  -> Flask reads assembled detail cache or card-backed local hint
+  -> Flask renders title, author, cover, cached description, and work key
+     without waiting for Open Library
   -> JS fetches /api/book?ol_key=...&book_lang=...
-  -> cleaned description renders asynchronously
-  -> first subject triggers /api/similar
+  -> local response is returned immediately and may report refreshing=true
+  -> bounded background task refreshes missing/stale metadata
+  -> cached subjects seed /api/similar without blocking the page
   -> JS fetches /api/search for download options
   -> shared download-ui.js renders responsive edition rows
 ```
@@ -108,6 +111,12 @@ book route and drop title, author, cover, mode, and language query noise.
 Important behavior:
 
 - `/api/book` accepts Open Library work keys only.
+- Book HTML is local-first; upstream metadata is never required before first
+  render.
+- Assembled details stay fresh for seven days and remain eligible as stale
+  fallback for up to 90 days.
+- The browser performs at most two quiet detail/similar retries while a
+  background refresh is running.
 - Similar books are Open Library subject searches; subjects remain internal and
   are not rendered as chips in the preview UI.
 - The More Like This shelf hides horizontal scrollbars.
@@ -179,8 +188,10 @@ can be verified.
 
 | Function | Responsibility |
 |---|---|
-| `ol_get(path, params)` | Cached Open Library JSON request |
+| `ol_get(path, params)` | Rate-limited, coalesced Open Library request with circuit breaker and durable stale fallback |
 | `ol_get_work(ol_key)` | Work detail lookup |
+| `build_book_detail(ol_key, lang)` | Assemble and persist the app-facing title, author, cover, description, subjects, and download aliases |
+| `schedule_book_detail_refresh(ol_key, lang)` | Refresh one stale/missing assembled detail in a bounded executor |
 | `shelf_query(topic, lang)` | Mode/topic/language Open Library query builder |
 | `extract_book(record, lang)` | Normalize Open Library search record to app book card |
 | `first_matching_edition(record, lang)` | Prefer an edition matching the active language |
@@ -201,6 +212,12 @@ can be verified.
 | `fetch_shelf_page_books(topic, page, mode, lang)` | Return logical horizontal shelf pages after cross-shelf dedupe |
 | `fetch_discovery_books(q, page, lang)` | Paginated `/discover` JSON source |
 | `fetch_shelves(mode, lang)` | Homepage shelf builder using parallel candidate prefetch plus top-to-bottom dedupe |
+
+The gateway uses a descriptive application user agent, spaces requests by at
+least `OPENLIBRARY_MIN_INTERVAL`, and opens a short process-local circuit after
+three consecutive failures. Expired SQLite values are not deleted during
+lookup; they remain available as stale fallback while at most two refresh tasks
+run in the background.
 
 ### Download Helpers
 
@@ -254,7 +271,7 @@ Returns:
     {
       "title": "A Brief History of Time",
       "author": "Stephen Hawking",
-      "cover_url": "https://covers.openlibrary.org/b/id/240726-M.jpg",
+      "cover_url": "/olcover/240726/M",
       "ol_key": "/works/OL82563W"
     }
   ],
@@ -302,11 +319,15 @@ Returns:
   "success": true,
   "title": "Cosmos",
   "description": "...",
-  "subjects": ["Science", "Astronomy"]
+  "subjects": ["Science", "Astronomy"],
+  "refreshing": false,
+  "cache": "fresh"
 }
 ```
 
-Non-Open-Library keys return `Book not found`.
+When only a local hint is available, the endpoint still returns a successful
+payload with `refreshing: true`; a bounded background task assembles the missing
+metadata. Non-Open-Library keys return `Book not found`.
 
 ### `GET /api/similar`
 
@@ -340,16 +361,67 @@ Params:
 Resolves the md5 through the active downloader and streams the remote file
 through Flask.
 
+### `POST /api/kindle/jobs`
+
+Validates the selected file and Kindle/SMTP settings, writes a queued job row,
+and returns immediately:
+
+```json
+{
+  "success": true,
+  "job_id": "7d29...",
+  "status": "queued"
+}
+```
+
+The supplied SMTP credentials remain only in process memory. They are not
+stored in the SQLite job or event rows.
+
+### `GET /api/kindle/jobs/<job_id>`
+
+Returns the current status and events after an optional integer `cursor`:
+
+```json
+{
+  "success": true,
+  "job_id": "7d29...",
+  "status": "running",
+  "events": [
+    {"id": 3, "type": "progress", "stage": "Downloading book", "progress": 42}
+  ],
+  "cursor": 3
+}
+```
+
+The browser polls this route and stores the active id in `sessionStorage`, so
+the selected row can restore progress after navigation or refresh.
+
 ### `POST /api/sendtokindle`
 
 Downloads the selected file, builds an email attachment, and sends it through
-the SMTP credentials supplied by the browser.
+the SMTP credentials supplied by the browser. This endpoint remains for
+compatibility; the current UI uses background jobs.
 
 Appending `?stream=1` returns newline-delimited JSON (`application/x-ndjson`)
 instead of waiting for one final JSON response. Events contain `type`, `stage`,
 and `progress`; download events also include transferred-size `detail` when
 available. The final event is either `complete` at 100 or `error`. The original
 non-streaming JSON behavior remains available for compatibility.
+
+### Cover endpoints
+
+`GET /olcover/<cover_id>/<size>` and
+`GET /cover/<md5>/<size>?dir=<directory>` validate identifiers, fetch a bounded
+upstream rendition, optionally convert it to a size-specific WebP thumbnail,
+and store it under `LIBFLIX_DATA_DIR/covers`. Responses expose
+`X-LibFlix-Cover-Cache` and long-lived browser caching.
+
+### Health and browser timing
+
+- `GET /api/health` reports local cache, loaded shelves, Open Library circuit,
+  and Kindle-job state without adding a blocking external probe.
+- `POST /api/metrics/web-vitals` validates and records small LCP, CLS, and INP
+  payloads sent by the browser.
 
 ## Template Responsibilities
 
@@ -390,19 +462,32 @@ The navbar exposes:
 window.LibFlixLoading = { show: showTransition, hide: hideTransition };
 ```
 
-Internal links and forms call `showTransition()` before navigation where the
-browser can do so safely. This keeps slow Open Library and libgen-backed pages
-feeling like an app transition rather than a blank page wait. Legacy result
-redirects also use the shared loader when available.
+Same-origin links use a persistent app-shell navigation path. The destination
+document is fetched, the existing navbar stays mounted, and `<main>` plus the
+footer are replaced inside an optional View Transition. Page-specific style and
+script tags are synchronized, body/title/language state is updated, and browser
+history uses the same path on `popstate`. Unsupported responses or runtime
+failures fall back to a normal document navigation.
+
+The shared loader starts after a 180 ms delay. Fast cached transitions therefore
+do not flash; slower transitions still provide feedback. The prefetcher waits
+for 260 ms of pointer intent, caps concurrent speculative documents at four,
+and also supports keyboard/touch intent. Language changes intentionally use a
+full document request so the server-selected locale remains authoritative.
 
 The page-entry animation fades opacity only. It deliberately does not transform
 `body`, because a transformed page changes the containing block for fixed
 overlays and causes modals or quick peek to drift after scrolling.
 
+Each page registers a cleanup callback for its observers, event listeners,
+timers, and active requests before the app shell replaces it.
+
 The Kindle sheet owns focus while open, locks body scrolling, focuses the first
 field, supports password visibility, closes on Escape/backdrop click, and
 returns focus to the invoking control. Settings are stored in localStorage and
-sent to the backend only for an explicit Send to Kindle request.
+sent to the backend only for an explicit Send to Kindle request. Active delivery
+ids live in `sessionStorage`, while SMTP credentials remain out of the job
+database.
 
 ### Homepage Hero
 
@@ -459,20 +544,25 @@ Ranking is dominated by normalized title similarity, including exact,
 containment, token-overlap, and sequence checks. Author agreement is the next
 strongest signal. Language agreement, EPUB/MOBI/AZW3 suitability, plausible file
 size, publisher/pages/cover completeness, and a bounded recency tie-breaker
-follow. The publication year can no longer outweigh a poor title match.
+follow. In English mode, Han text in title/author metadata receives a decisive
+penalty and Chinese publisher branding receives a smaller source-quality
+penalty. Those penalties are not applied in Chinese mode. The publication year
+can no longer outweigh a poor title match.
 Deduplication uses the same scorer to choose the strongest edition inside each
 normalized title/author group before the remaining candidates are globally
 sorted when the explicit `Best match` mode is active. Other sort modes retain
 the source's requested ordering, but the highest-scoring row remains explicitly
-flagged wherever it appears.
+flagged wherever it appears. The flagged row also exposes concise
+`recommendation_reasons` so the interface can explain the decision.
 
 The renderer also:
 
 - uses Unicode-safe filenames and format-aware action labels
-- shows a short preparing state without adding another full-page loader
-- streams Send to Kindle stages into a progress panel inside the selected
-  edition row, using real byte progress for the file download and named states
-  for attachment, authentication, and SMTP delivery
+- starts a background Kindle job without adding another full-page loader
+- polls incremental job events into a progress panel inside the selected edition
+  row, using real byte progress for the file download and named states for
+  attachment, authentication, and SMTP delivery
+- restores a running job from `sessionStorage` after page navigation
 - switches to an indeterminate bar only when the source omits content length
 - preserves an explicit success or retryable error state at the end of delivery
 - hides pagination when `total_pages <= 1`
@@ -488,15 +578,19 @@ download, and local loading surfaces keep bounded animation, while
 `content-visibility` skips work for distant homepage shelves. Fixed dimensions
 prevent async covers and result content from shifting the surrounding layout.
 
-The navbar performs document prefetch only after 100ms of pointer intent or an
-explicit keyboard/touch interaction. There is no idle sweep of category pages.
+The navbar performs document prefetch only after 260 ms of pointer intent or an
+explicit keyboard/touch interaction, and keeps at most four prefetches active
+with a bounded recent-page memory. There is no idle sweep of category pages.
 Book-card intent may prefetch that one clean book URL. Book cards also populate
 an in-process hint index, so their detail route can render title, author, and
 cover without making an Open Library request. Full descriptions, localized
-titles, and similar-book subjects hydrate after the initial shell is visible.
+titles, and similar-book subjects render from the assembled detail cache or
+hydrate after the initial shell is visible.
 Static CSS/JS assets carry an mtime version and receive immutable one-year cache
-headers. Open Library covers load directly from its CDN after a preconnect;
-only the active hero cover uses the large rendition.
+headers. Cover URLs point at LibFlix's persistent local cache. Pillow creates
+size-specific WebP thumbnails when available, a daily background task warms the
+first visible Trending covers, and only the active hero asks for a large
+rendition.
 
 ### Homepage Shelf Infinite Scroll
 
@@ -552,27 +646,34 @@ and WebKit scrollbar hiding rules.
 
 | Data | Store | Key Pattern | TTL / Lifetime |
 |---|---|---|---|
-| Open Library JSON | memory | `ol:{path}:{params}` | 1 hour |
-| Open Library JSON | SQLite `api_cache.sqlite3` | SHA-256 of request key | 6 hours |
+| Open Library JSON | memory | `ol:{path}:{params}` | 1 hour fresh |
+| Open Library JSON | SQLite `api_cache.sqlite3` | SHA-256 of request key | 6 hours fresh; up to 90 days stale |
 | Chinese title resolution | memory + SQLite | `chinese_title:v1:<ol_key>` | 30 days |
 | CN English display title | memory + SQLite | `english_title:v1:<ol_key>` | 30 days |
-| Book metadata | memory + SQLite | `book_meta:<lang>:<work>` | 6 hours |
-| Download search results | memory + SQLite | `download_search:v1:...` | 15 minutes |
+| Assembled book detail | memory + SQLite | `book_detail:v3:<lang>:<work>` | 7 days fresh; up to 90 days stale |
+| Similar books | memory + SQLite | `similar:v2:...` | 7 days fresh; up to 30 days stale |
+| Download search results | memory + SQLite | `download_search:v4:...` | 15 minutes fresh; stale fallback |
 | Homepage shelves | memory | `shelves_{lang}_{mode}` | 1 hour |
 | Homepage shelves | disk | `shelf_cache_{lang}_{mode}.json` | immediate restart hydration; stale after 6 hours |
-| Cover images | Open Library CDN | `covers.openlibrary.org/b/id/...` | provider/browser cache |
+| Cover images | disk + browser | `covers/<source>/<hash>-<size>.*` | persistent disk; 30 days in browser |
+| Kindle jobs/events | SQLite | UUID + ordered event ids | active lifecycle; old terminal jobs pruned |
 | Versioned static assets | browser HTTP cache | `/static/...?...v=<mtime>` | 1 year immutable |
 
 Runtime cache files are ignored by git.
 
 SQLite runs in WAL mode with `synchronous=NORMAL`. Each cache update touches one
 row instead of reading and rewriting the former multi-megabyte JSON object.
-Rows older than the longest supported metadata TTL are pruned at initialization.
+Rows older than the longest supported stale window are pruned at initialization.
 Legacy `api_cache.json` is migrated once when the database does not yet exist.
 
 All four language/mode shelf files are loaded before Flask begins serving.
 Network refresh is not part of startup: a stale requested shelf set schedules a
 single delayed background refresh guarded by `(language, mode)`.
+
+The Open Library gateway spaces upstream calls, coalesces matching in-flight
+requests, and opens a 60-second circuit after three consecutive failures. A
+caller with stale data returns immediately during that circuit rather than
+adding another timeout. Background metadata refresh is limited to two workers.
 
 Shelf-cache startup also builds the lightweight book-hint index. Category,
 discovery, shelf, and similar-book API extraction extends that index during the
@@ -591,6 +692,24 @@ Open Library label. Broad labels such as Fiction, Biography, Fantasy, and
 generic demographic tags are ignored. Candidate works found under both selected
 subjects rank first, while normalized-title deduplication removes translated or
 edition-level duplicates before the 12-card response is returned.
+
+Cover cache paths are validated and hashed before use. A per-path lock prevents
+duplicate cold downloads within one process. Responses include a cache outcome
+header and `Server-Timing`; the first Trending covers are warmed once per day
+without delaying startup.
+
+## Operational Signals
+
+- Every Flask response includes total request time in `Server-Timing`.
+- Open Library, download search, and cover endpoints add operation-specific
+  timing entries.
+- `/api/health` reports local database, shelf, Open Library circuit, and Kindle
+  job state without performing a slow external probe.
+- The persistent navbar records LCP, CLS, and INP when supported and sends a
+  small beacon to `/api/metrics/web-vitals` when the page becomes hidden.
+- The code and cache behavior do not require a Cloudflare-specific rule. See
+  [Performance and resilience](docs/PERFORMANCE_AND_RESILIENCE.md) for tuning,
+  failure behavior, and verification.
 
 ## Discovery Source
 

@@ -15,3 +15,5 @@ api_cache.sqlite3
 api_cache.sqlite3-shm
 api_cache.sqlite3-wal
 output/playwright/
+.playwright-cli/
+covers/

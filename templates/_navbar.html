@@ -297,24 +297,28 @@
 <div class="app-toast" id="appToast" role="status" aria-live="polite" aria-atomic="true"></div>
 <script>
   (() => {
-    const TRANSITION_NAV_DELAY = 0;
-    const showTransition = () => {
+    const LOADER_DELAY = 180;
+    let transitionTimer = null;
+    let navigationController = null;
+    const activateTransition = () => {
       const overlay = document.getElementById('appTransition');
       document.body.classList.add('is-leaving');
       if (overlay) {
-        overlay.style.transition = 'none';
-        overlay.style.opacity = '1';
-        overlay.style.pointerEvents = 'auto';
+        overlay.setAttribute('aria-hidden', 'false');
       }
     };
+    const showTransition = (immediate = false) => {
+      if (transitionTimer) window.clearTimeout(transitionTimer);
+      transitionTimer = immediate
+        ? (activateTransition(), null)
+        : window.setTimeout(activateTransition, LOADER_DELAY);
+    };
     const hideTransition = () => {
+      if (transitionTimer) window.clearTimeout(transitionTimer);
+      transitionTimer = null;
       const overlay = document.getElementById('appTransition');
       document.body.classList.remove('is-leaving');
-      if (overlay) {
-        overlay.style.transition = '';
-        overlay.style.opacity = '';
-        overlay.style.pointerEvents = '';
-      }
+      overlay?.setAttribute('aria-hidden', 'true');
     };
     const isInternalNavigation = href => {
       if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return false;
@@ -325,6 +329,7 @@
       return true;
     };
     const prefetchedPages = new Set();
+    let activePrefetches = 0;
     let intentPrefetchTimer = null;
     let intentPrefetchLink = null;
     const canPrefetchPages = () => {
@@ -335,35 +340,204 @@
       if (!canPrefetchPages() || !isInternalNavigation(href)) return;
       const url = new URL(href, window.location.href);
       const cacheKey = url.pathname + url.search;
-      if (prefetchedPages.has(cacheKey) || prefetchedPages.size >= 12) return;
+      if (prefetchedPages.has(cacheKey) || activePrefetches >= 4) return;
       prefetchedPages.add(cacheKey);
+      while (prefetchedPages.size > 32) {
+        prefetchedPages.delete(prefetchedPages.values().next().value);
+      }
+      activePrefetches += 1;
       const link = document.createElement('link');
       link.rel = 'prefetch';
       link.as = 'document';
       link.href = url.href;
+      let settled = false;
+      let settleTimer = null;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        if (settleTimer) window.clearTimeout(settleTimer);
+        activePrefetches = Math.max(0, activePrefetches - 1);
+        link.remove();
+      };
+      link.addEventListener('load', settle, { once: true });
+      link.addEventListener('error', settle, { once: true });
       document.head.appendChild(link);
+      settleTimer = window.setTimeout(settle, 15000);
     };
     const prefetchLink = link => {
       if (!link || link.hasAttribute('data-no-prefetch')) return;
       prefetchPage(link.href);
     };
-    const navigateWithTransition = href => {
-      showTransition();
-      window.setTimeout(() => {
-        window.location.assign(href);
-      }, TRANSITION_NAV_DELAY);
+
+    const syncNavbar = nextDocument => {
+      const currentTabs = document.querySelector('.cat-tabs');
+      const nextTabs = nextDocument.querySelector('.cat-tabs');
+      if (currentTabs && nextTabs) currentTabs.innerHTML = nextTabs.innerHTML;
+      const currentBrand = document.querySelector('.navbar-brand');
+      const nextBrand = nextDocument.querySelector('.navbar-brand');
+      if (currentBrand && nextBrand) currentBrand.href = nextBrand.href;
+      const currentSettingsLinks = document.querySelectorAll('.mode-toggle a, .lang-toggle a');
+      const nextSettingsLinks = nextDocument.querySelectorAll('.mode-toggle a, .lang-toggle a');
+      currentSettingsLinks.forEach((link, index) => {
+        const next = nextSettingsLinks[index];
+        if (!next) return;
+        link.href = next.href;
+        link.className = next.className;
+      });
+      const currentSearch = document.querySelector('.search-bar');
+      const nextSearch = nextDocument.querySelector('.search-bar');
+      if (currentSearch && nextSearch) {
+        currentSearch.setAttribute('action', nextSearch.getAttribute('action') || '/discover');
+        const currentInput = currentSearch.querySelector('input[name="q"]');
+        const nextInput = nextSearch.querySelector('input[name="q"]');
+        if (currentInput && nextInput) currentInput.value = nextInput.value;
+      }
     };
-    const submitWithTransition = form => {
+
+    const installPageStyles = nextDocument => {
+      document.querySelectorAll('style[data-page-style]').forEach(style => style.remove());
+      nextDocument.querySelectorAll('style[data-page-style]').forEach(style => {
+        const replacement = document.createElement('style');
+        replacement.dataset.pageStyle = '';
+        replacement.textContent = style.textContent;
+        document.head.appendChild(replacement);
+      });
+    };
+
+    const ensurePageScript = script => {
+      if (!script.src) {
+        return Promise.resolve().then(() => Function(script.textContent)());
+      }
+      const source = new URL(script.src, window.location.href).href;
+      if (Array.from(document.scripts).some(existing => existing.src === source)) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        const replacement = document.createElement('script');
+        replacement.src = source;
+        replacement.dataset.pageScript = '';
+        replacement.onload = resolve;
+        replacement.onerror = () => reject(new Error('Page script failed to load'));
+        document.body.appendChild(replacement);
+      });
+    };
+
+    const installPageScripts = async nextDocument => {
+      const scripts = Array.from(nextDocument.querySelectorAll('script[data-page-script]'));
+      for (const script of scripts) await ensurePageScript(script);
+    };
+
+    const replacePage = async (nextDocument, url, push) => {
+      const nextMain = nextDocument.getElementById('mainContent');
+      const currentMain = document.getElementById('mainContent');
+      if (!nextMain || !currentMain) throw new Error('The destination is not app-navigable');
+      window.LibFlixPageCleanup?.();
+      window.LibFlixPageCleanup = null;
+      hideQuickPeek?.();
+      document.querySelectorAll('script[data-page-script]:not([src])').forEach(script => script.remove());
+      installPageStyles(nextDocument);
+      syncNavbar(nextDocument);
+      document.title = nextDocument.title;
+      document.documentElement.lang = nextDocument.documentElement.lang || 'en';
+      document.body.className = nextDocument.body.className;
+      currentMain.replaceWith(document.importNode(nextMain, true));
+      const currentFooter = document.querySelector('body > .app-footer');
+      const nextFooter = nextDocument.querySelector('body > .app-footer');
+      if (currentFooter && nextFooter) currentFooter.replaceWith(document.importNode(nextFooter, true));
+      else if (currentFooter && !nextFooter) currentFooter.remove();
+      else if (!currentFooter && nextFooter) document.body.appendChild(document.importNode(nextFooter, true));
+      if (push) history.pushState({ libflix: true }, '', url);
+      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      await installPageScripts(nextDocument);
+      window.dispatchEvent(new CustomEvent('libflix:navigated', { detail: { url } }));
+    };
+
+    const navigateWithTransition = async (href, { push = true } = {}) => {
+      const url = new URL(href, window.location.href);
+      if (url.pathname.startsWith('/language/')) {
+        showTransition();
+        window.location.assign(url.href);
+        return;
+      }
+      if (navigationController) navigationController.abort();
+      navigationController = new AbortController();
+      const controller = navigationController;
       showTransition();
-      window.setTimeout(() => {
+      try {
+        const response = await fetch(url.href, {
+          signal: controller.signal,
+          headers: {
+            Accept: 'text/html',
+            'X-LibFlix-Navigation': 'partial',
+          },
+        });
+        if (!response.ok) throw new Error('Navigation failed');
+        const html = await response.text();
+        const nextDocument = new DOMParser().parseFromString(html, 'text/html');
+        const update = () => replacePage(nextDocument, url.href, push);
+        if (document.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+          await document.startViewTransition(update).finished;
+        } else {
+          await update();
+        }
+      } catch (error) {
+        if (error.name === 'AbortError') return;
+        window.location.assign(url.href);
+        return;
+      } finally {
+        if (navigationController === controller) navigationController = null;
+        hideTransition();
+      }
+    };
+
+    const submitWithTransition = form => {
+      const method = String(form.method || 'get').toLowerCase();
+      const action = new URL(form.action || window.location.href, window.location.href);
+      if (method !== 'get') {
+        showTransition();
         HTMLFormElement.prototype.submit.call(form);
-      }, TRANSITION_NAV_DELAY);
+        return;
+      }
+      const params = new URLSearchParams(new FormData(form));
+      action.search = params.toString();
+      navigateWithTransition(action.href);
     };
     window.LibFlixLoading = { show: showTransition, hide: hideTransition };
+    window.LibFlixNavigate = navigateWithTransition;
+    if (!window.__libflixVitals) {
+      const vitals = window.__libflixVitals = { lcp: 0, cls: 0, inp: 0 };
+      try {
+        new PerformanceObserver(list => {
+          const entries = list.getEntries();
+          if (entries.length) vitals.lcp = Math.round(entries[entries.length - 1].startTime);
+        }).observe({ type: 'largest-contentful-paint', buffered: true });
+        new PerformanceObserver(list => {
+          list.getEntries().forEach(entry => {
+            if (!entry.hadRecentInput) vitals.cls += entry.value;
+          });
+        }).observe({ type: 'layout-shift', buffered: true });
+        new PerformanceObserver(list => {
+          list.getEntries().forEach(entry => {
+            vitals.inp = Math.max(vitals.inp, Math.round(entry.duration || 0));
+          });
+        }).observe({ type: 'event', buffered: true, durationThreshold: 40 });
+      } catch {}
+      const reportVitals = () => {
+        const navigation = performance.getEntriesByType('navigation')[0];
+        const fcp = performance.getEntriesByName('first-contentful-paint')[0];
+        const payload = JSON.stringify({
+          path: location.pathname,
+          navigation: navigation ? Math.round(navigation.responseStart) : null,
+          fcp: fcp ? Math.round(fcp.startTime) : null,
+          lcp: vitals.lcp || null,
+          cls: Number(vitals.cls.toFixed(4)),
+          inp: vitals.inp || null,
+        });
+        navigator.sendBeacon?.('/api/metrics/web-vitals', new Blob([payload], { type: 'application/json' }));
+      };
+      window.addEventListener('pagehide', reportVitals);
+    }
     document.addEventListener('DOMContentLoaded', hideTransition, { once: true });
     window.addEventListener('pageshow', hideTransition);
     window.addEventListener('load', hideTransition);
-    window.addEventListener('pagehide', showTransition);
     document.addEventListener('click', event => {
       const link = event.target.closest('a[href]');
       if (!link || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -381,7 +555,7 @@
       intentPrefetchTimer = window.setTimeout(() => {
         prefetchLink(link);
         intentPrefetchTimer = null;
-      }, 100);
+      }, 260);
     }, { passive: true });
     document.addEventListener('pointerout', event => {
       const link = event.target.closest('a[href]');
@@ -406,6 +580,7 @@
       event.preventDefault();
       submitWithTransition(form);
     });
+    window.addEventListener('popstate', () => navigateWithTransition(window.location.href, { push: false }));
 
     const searchForm = document.querySelector('.search-bar');
     const searchInput = searchForm?.querySelector('input[name="q"]');
@@ -646,12 +821,13 @@
       if (quickPeekAbortController) quickPeekAbortController.abort();
       quickPeekAbortController = new AbortController();
       const activeController = quickPeekAbortController;
-      fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang={{ book_lang }}', { signal: activeController.signal })
+      const quickPeekLang = document.documentElement.lang === 'zh' ? 'cn' : 'en';
+      fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang=' + quickPeekLang, { signal: activeController.signal })
         .then(response => response.json())
         .then(data => {
           if (quickPeekActiveLink !== link) return;
           const details = data.success ? data : {};
-          quickPeekCache.set(olKey, details);
+          if (!data.refreshing || data.description) quickPeekCache.set(olKey, details);
           renderQuickPeek(card, 'done', details);
           positionQuickPeek(link, quickPeekPointer);
         })

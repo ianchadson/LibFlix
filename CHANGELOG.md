@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-07-31 - Local-first performance and resilient delivery
+
+### Faster page and metadata loading
+
+- Made book HTML local-first: card hints and assembled detail cache entries
+  render immediately instead of waiting for an Open Library work request.
+- Added seven-day assembled book-detail caching with 90-day stale fallback and
+  bounded background refresh.
+- Added a rate-limited Open Library gateway with a descriptive user agent,
+  request coalescing, short connect/read timeouts, a three-failure circuit
+  breaker, and durable stale responses.
+- Fixed empty cached category pages hiding a populated first shelf; useful local
+  books now win over an empty upstream/cache result.
+- Loaded SQLite and shelf hints during Gunicorn import so worker processes start
+  with the same local-first behavior as the development server.
+- Added stale fallback for download-source searches and reduced source search and
+  resolver timeouts.
+
+### App-style navigation
+
+- Kept the navbar mounted across same-origin navigation while replacing page
+  content, page-specific styles, and page-specific scripts.
+- Added History API back/forward support, View Transition fades where supported,
+  and automatic full-navigation fallback.
+- Delayed the shared LibFlix loader by 180 ms so fast cached routes do not flash.
+- Limited intent prefetching to four concurrent documents, retained a bounded
+  recent-page memory, and required 260 ms of stable pointer hover, keyboard
+  focus, or touch intent.
+- Added cleanup hooks for homepage timers, category/discovery observers, book
+  retries, and active search requests before content replacement.
+
+### Faster cover delivery
+
+- Routed Open Library and download-result covers through validated persistent
+  disk caches.
+- Added size-specific WebP thumbnails when Pillow is available, with safe JPEG
+  fallback when it is not.
+- Added per-cover request coalescing, 30-day browser caching,
+  `X-LibFlix-Cover-Cache`, and cover-specific `Server-Timing`.
+- Added a once-daily bounded warm of the first visible Trending covers.
+- Kept stable cover geometry and a subtle reduced-motion-aware loading shimmer.
+
+### Reliable Send to Kindle
+
+- Replaced the UI's long-lived streaming request with background Kindle jobs.
+- Persisted job state and ordered progress events in SQLite so any Gunicorn
+  worker can answer browser polls.
+- Restored active delivery progress from `sessionStorage` after navigation or a
+  refresh.
+- Retained the active job after repeated status-connection failures and exposed
+  a safe `Check status` retry instead of starting a duplicate send.
+- Kept SMTP credentials only in process memory and out of the job database.
+- Restricted SMTP hosts to public addresses and secure submission ports, with
+  implicit TLS support on port 465.
+- Limited concurrent delivery workers and converted stale five-minute jobs into
+  explicit interrupted failures instead of permanent progress stalls.
+
+### Better download recommendations
+
+- Strengthened English-mode ranking against Chinese title/author metadata and
+  demoted Chinese source branding without penalizing Chinese mode.
+- Increased Kindle suitability weighting for EPUB and applied stronger
+  implausible-file-size penalties.
+- Added short recommendation reasons to explain title, author, language, format,
+  and send-size signals behind the selected candidate.
+
+### Observability and documentation
+
+- Added `/api/health` for local database, shelf, Open Library circuit, and Kindle
+  job status.
+- Added request and operation `Server-Timing` plus a small
+  `/api/metrics/web-vitals` receiver for LCP, CLS, and INP.
+- Added regression coverage for stale metadata, category fallback, local-first
+  book responses, cross-worker job events, and credential non-persistence.
+- Added `docs/PERFORMANCE_AND_RESILIENCE.md` with latency model, cache layers,
+  failure behavior, security boundaries, tuning, and headless verification.
+- Documented that the implementation is entirely application code and requires
+  no Cloudflare configuration change.
+
 ## 2026-07-24 - Loading and rendering performance
 
 - Replaced whole-file `api_cache.json` reads and 15 MB rewrites with a

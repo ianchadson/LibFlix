@@ -40,6 +40,9 @@
     const extension = String(book.ext || '').toLowerCase();
     const format = extension || 'file';
     const recommended = book.best_match === true;
+    const reasons = Array.isArray(book.recommendation_reasons)
+      ? book.recommendation_reasons.filter(Boolean).slice(0, 4)
+      : [];
     const filename = cleanFilename(book.title, format);
     const downloadHref = book.md5
       ? '/download/' + encodeURIComponent(book.md5) + '?filename=' + encodeURIComponent(filename)
@@ -64,10 +67,11 @@
     return '<article class="edition-row' + (recommended ? ' recommended' : '') + '">' +
       '<div class="edition-cover-frame">' + cover + '</div>' +
       '<div class="edition-copy">' +
-        '<div class="edition-title-line"><h3 class="edition-title" title="' + escapeHtml(book.title || '') + '">' + escapeHtml(title) + '</h3>' + (recommended ? '<span class="edition-recommended">Best match</span>' : '') + '</div>' +
+        '<div class="edition-title-line"><h3 class="edition-title" title="' + escapeHtml(book.title || '') + '">' + escapeHtml(title) + '</h3>' + (recommended ? '<span class="edition-recommended">Best for Kindle</span>' : '') + '</div>' +
         (author ? '<div class="edition-byline">' + escapeHtml(author) + '</div>' : '') +
         (publisher ? '<div class="edition-publisher">' + escapeHtml(publisher) + '</div>' : '') +
         '<div class="edition-meta">' + metadata + '</div>' +
+        (recommended && reasons.length ? '<div class="edition-reasons" aria-label="Why this edition is recommended">' + reasons.map(reason => '<span>' + escapeHtml(reason) + '</span>').join('') + '</div>' : '') +
       '</div>' +
       actions +
     '</article>';
@@ -78,6 +82,7 @@
     container.innerHTML = (books || []).map(renderEdition).join('');
     container.hidden = !(books || []).length;
     wireActions(container);
+    resumeKindleJobs(container);
   }
 
   const wiredContainers = new WeakSet();
@@ -101,7 +106,17 @@
       }
 
       const kindle = event.target.closest('.edition-kindle[data-md5]');
-      if (!kindle || typeof window.sendToKindle !== 'function') return;
+      if (!kindle) return;
+      const existingJob = window.sessionStorage.getItem(kindleJobStorageKey(kindle.dataset.md5));
+      if (existingJob) {
+        deliverToKindle({
+          button: kindle,
+          payload: { md5: kindle.dataset.md5 },
+          jobId: existingJob,
+        }).catch(error => window.LibFlixNotify?.('Delivery status unavailable: ' + error.message, 'error'));
+        return;
+      }
+      if (typeof window.sendToKindle !== 'function') return;
       window.sendToKindle(kindle.dataset.md5, kindle.dataset.title, kindle.dataset.format, kindle);
     });
   }
@@ -207,7 +222,77 @@
     return completed;
   }
 
-  async function deliverToKindle({ button, payload }) {
+  const wait = duration => new Promise(resolve => window.setTimeout(resolve, duration));
+
+  async function pollKindleJob(jobId, onEvent) {
+    let cursor = 0;
+    let failures = 0;
+    while (true) {
+      try {
+        const response = await fetch('/api/kindle/jobs/' + encodeURIComponent(jobId) + '?cursor=' + cursor, {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || data.success === false) {
+          const error = new Error(data.error || 'Delivery status is unavailable');
+          error.definitive = response.status === 400 || response.status === 404;
+          throw error;
+        }
+        failures = 0;
+        cursor = Number(data.cursor) || cursor;
+        for (const event of data.events || []) {
+          onEvent(event);
+          if (event.type === 'error' || event.success === false) {
+            const error = new Error(event.error || 'Kindle delivery failed');
+            error.kindleEvent = event;
+            throw error;
+          }
+          if (event.type === 'complete') return event;
+        }
+        if (data.status === 'complete') {
+          return { type: 'complete', success: true, stage: 'Sent to Kindle', progress: 100 };
+        }
+        if (data.status === 'failed') {
+          const error = new Error('Kindle delivery failed');
+          error.definitive = true;
+          throw error;
+        }
+        await wait(700);
+      } catch (error) {
+        if (error.kindleEvent || error.definitive) throw error;
+        failures += 1;
+        onEvent({
+          type: 'progress',
+          stage: 'Reconnecting to delivery',
+          progress: null,
+          detail: 'The delivery continues while LibFlix restores its status connection.',
+        });
+        if (failures >= 12) {
+          error.retryable = true;
+          throw error;
+        }
+        await wait(Math.min(500 * failures, 4000));
+      }
+    }
+  }
+
+  function kindleJobStorageKey(md5) {
+    return 'libflix.kindleJob.' + String(md5 || '').toLowerCase();
+  }
+
+  function resumeKindleJobs(container) {
+    container?.querySelectorAll('.edition-kindle[data-md5]').forEach(button => {
+      const jobId = window.sessionStorage.getItem(kindleJobStorageKey(button.dataset.md5));
+      if (!jobId || button.dataset.resuming === 'true') return;
+      button.dataset.resuming = 'true';
+      deliverToKindle({ button, payload: { md5: button.dataset.md5 }, jobId })
+        .catch(() => {})
+        .finally(() => { delete button.dataset.resuming; });
+    });
+  }
+
+  async function deliverToKindle({ button, payload, jobId = '' }) {
     if (!button) throw new Error('Kindle action is unavailable');
     if (!button.dataset.originalHtml) button.dataset.originalHtml = button.innerHTML;
     if (!button.dataset.originalAriaLabel) button.dataset.originalAriaLabel = button.getAttribute('aria-label') || 'Send to Kindle';
@@ -221,27 +306,46 @@
     button.innerHTML = icons.send + '<span>Sending</span>';
 
     try {
-      const response = await fetch('/api/sendtokindle?stream=1', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      const completed = await readKindleProgress(response, event => updateKindleProgress(panel, event));
+      if (!jobId) {
+        const response = await fetch('/api/kindle/jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const created = await response.json().catch(() => ({}));
+        if (!response.ok || created.success === false || !created.job_id) {
+          throw new Error(created.error || 'Kindle delivery could not be started');
+        }
+        jobId = created.job_id;
+        window.sessionStorage.setItem(kindleJobStorageKey(payload.md5), jobId);
+      } else {
+        updateKindleProgress(panel, { type: 'progress', stage: 'Restoring delivery status', progress: null });
+      }
+      const completed = await pollKindleJob(jobId, event => updateKindleProgress(panel, event));
       button.classList.add('sent');
       button.innerHTML = icons.check + '<span>Sent</span>';
       button.setAttribute('aria-label', 'Sent to Kindle');
+      window.sessionStorage.removeItem(kindleJobStorageKey(payload.md5));
       return completed;
     } catch (error) {
       const failure = error.kindleEvent || {};
       updateKindleProgress(panel, {
         type: 'error',
-        stage: failure.stage || 'Delivery failed',
+        stage: failure.stage || (error.retryable ? 'Status connection interrupted' : 'Delivery failed'),
         progress: null,
-        detail: error.message,
+        detail: error.retryable
+          ? 'The delivery may still be running. Use Check status to reconnect.'
+          : error.message,
       });
       panel?.setAttribute('role', 'alert');
-      button.innerHTML = button.dataset.originalHtml;
-      button.setAttribute('aria-label', button.dataset.originalAriaLabel);
+      if (error.retryable && jobId) {
+        button.innerHTML = icons.send + '<span>Check status</span>';
+        button.setAttribute('aria-label', 'Check Kindle delivery status');
+      } else {
+        button.innerHTML = button.dataset.originalHtml;
+        button.setAttribute('aria-label', button.dataset.originalAriaLabel);
+        if (payload.md5) window.sessionStorage.removeItem(kindleJobStorageKey(payload.md5));
+      }
       throw error;
     } finally {
       button.classList.remove('sending');

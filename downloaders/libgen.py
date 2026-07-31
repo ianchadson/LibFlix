@@ -74,7 +74,7 @@ class LibgenDownloader(Downloader):
             "topics[]": ["l", "f"],
             "curtab": "f",
         }
-        r = SESSION.get(f"{MIRROR}/index.php", params=params, timeout=30)
+        r = SESSION.get(f"{MIRROR}/index.php", params=params, timeout=(3, 12))
         r.raise_for_status()
         cache_set(key, r.text)
         return r.text
@@ -153,7 +153,7 @@ class LibgenDownloader(Downloader):
             r = SESSION.get(
                 f"{MIRROR}/ads.php",
                 params={"md5": book_id},
-                timeout=30,
+                timeout=(3, 20),
                 allow_redirects=True,
             )
             r.raise_for_status()

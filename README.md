@@ -155,6 +155,13 @@ No API key is required. Open Library is the only discovery backend.
 - **Live Kindle delivery progress** - the selected edition expands to show a
   responsive progress bar, current delivery stage, transferred file size, and
   clear completion or failure state while LibFlix downloads and emails the file.
+  Delivery runs as a background job, survives page navigation, and restores its
+  latest status when the user returns. SMTP credentials stay in process memory
+  and are never written to the job database.
+- **Kindle-aware recommendations** - the best candidate is selected by title,
+  author, language, format, file sanity, and metadata quality. The chosen row
+  explains its strongest signals, while English mode rejects Chinese
+  title/author metadata and heavily demotes Chinese publisher branding.
 
 ### Download Search
 
@@ -178,15 +185,32 @@ No API key is required. Open Library is the only discovery backend.
   settings, focus states, empty states, and notifications share one restrained
   visual language in `static/libflix.css`.
 - **Single transition loader** - route changes use one shared LibFlix overlay;
-  it never waits for covers or download-source results, while local AJAX
-  loaders remain scoped to the content they are updating.
+  it appears only after a short delay, avoids flashing on fast navigation, and
+  never waits for covers or download-source results. Local AJAX loaders remain
+  scoped to the content they are updating.
+- **Persistent app shell** - same-origin page changes fetch and replace the
+  content area while preserving the top navigation. History navigation,
+  page-specific styles/scripts, focus, and scroll restoration continue to work,
+  with a normal browser navigation as the automatic fallback.
 - **Progressive cover loading** - cover geometry stays stable while images load,
-  with lightweight placeholders and animation reserved for high-priority areas.
-- **Direct Open Library covers** - cover images load from Open Library's CDN
-  with one preconnected high-resolution active cover and medium side-stack
-  covers, avoiding an extra Flask proxy hop.
+  with a subtle shimmer and no layout shift.
+- **Persistent optimized covers** - Open Library and download-result covers pass
+  through a validated local cache. When Pillow is available, LibFlix stores
+  compact size-specific WebP thumbnails; repeat requests are served from disk
+  with long browser caching. The first visible shelf is warmed in the
+  background once per day.
 - **On-demand hero metadata** - only the active hero description is requested;
   later descriptions hydrate when their book becomes active.
+- **Local-first book pages** - cached card hints and assembled book details
+  render immediately. Open Library refreshes happen in the background and stale
+  data remains usable during an upstream outage.
+- **Resilient discovery** - all Open Library traffic uses a rate-limited,
+  coalesced gateway with short timeouts, a circuit breaker, and durable stale
+  fallback. An unavailable upstream no longer turns a cached category or book
+  into a blank page.
+- **Operational visibility** - `/api/health` reports local dependency state,
+  server timing is attached to key responses, and lightweight browser
+  performance metrics are accepted by `/api/metrics/web-vitals`.
 - **Accessible interaction** - pages provide a skip link, named icon controls,
   visible keyboard focus, modal focus return, scroll locking, reduced-motion
   fallbacks, and non-selectable app chrome while content remains selectable.
@@ -210,17 +234,32 @@ No API key is required. Open Library is the only discovery backend.
 | `/api/cn-display-titles` | Batched English display-title lookup for visible CN cards |
 | `/api/similar` | JSON endpoint for similar Open Library books |
 | `/api/search` | JSON endpoint for libgen download search |
-| `/api/sendtokindle` | Send selected download to Kindle via SMTP |
+| `/api/kindle/jobs` | Start a background Send to Kindle delivery |
+| `/api/kindle/jobs/<job_id>` | Poll incremental delivery status |
+| `/api/sendtokindle` | Compatibility endpoint for synchronous/streaming delivery |
+| `/cover/<md5>/<size>` | Cached download-result cover |
+| `/olcover/<cover_id>/<size>` | Cached Open Library cover |
+| `/api/health` | Local cache, source, and job health summary |
+| `/api/metrics/web-vitals` | Lightweight browser performance metric receiver |
 
 ## Configuration
 
-| Env Variable | Values | Purpose |
+| Env Variable | Default | Purpose |
 |---|---|---|
-| `BOOK_LANG` | `en` or `cn` | Optional default discovery language |
+| `BOOK_LANG` | `en` | Optional default discovery language |
+| `LIBFLIX_DATA_DIR` | repository directory | Writable location for SQLite, shelf, cover, and marker caches |
+| `LIBFLIX_CONTACT` | repository URL | Contact value included in the Open Library user agent |
+| `OPENLIBRARY_MIN_INTERVAL` | `1.05` seconds | Minimum process-wide interval between upstream Open Library requests |
+| `OPENLIBRARY_CONNECT_TIMEOUT` | `3` seconds | Open Library connection timeout |
+| `OPENLIBRARY_READ_TIMEOUT` | `8` seconds | Open Library response timeout |
 
 Runtime Send to Kindle settings are configured in the browser and stored in
-localStorage. The SMTP password is sent only to `/api/sendtokindle` when sending
-a book.
+localStorage. The SMTP password is sent only when starting a delivery, remains
+in process memory for that job, and is never stored in SQLite. SMTP targets are
+restricted to public addresses on secure submission ports.
+
+These improvements are application-code changes. They do not depend on, or
+require changes to, Cloudflare configuration.
 
 ## Runtime Cache Files
 
@@ -229,21 +268,28 @@ requests. They are ignored by git.
 
 | File Pattern | Purpose |
 |---|---|
-| `api_cache.sqlite3` | WAL-enabled keyed cache for Open Library/API responses |
+| `api_cache.sqlite3` | WAL-enabled cache for metadata, source results, Kindle job events, and stale fallback |
 | `shelf_cache_<lang>_<mode>.json` | Warm shelf cache for each language and mode |
 | `shelf_cache*.json` | Historical and current shelf cache files ignored by git |
+| `covers/openlibrary/...` | Size-specific cached Open Library covers |
+| `covers/downloads/...` | Size-specific cached download-result covers |
+| `covers/.warm-started` | Daily first-shelf cover warm marker |
 
 Legacy `api_cache.json` data is migrated once into SQLite and removed after a
-successful migration. Shelf files are loaded immediately at startup; stale
-shelves refresh after a delay without blocking the first page.
+successful migration. Shelf files and book hints are loaded before serving;
+stale shelves refresh after a delay without blocking the first page. Expired
+metadata can be served stale while a bounded background refresh runs.
 
 ## Architecture
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for data flow, API contracts, caching
 details, and template responsibilities.
 
-See [CHANGELOG.md](CHANGELOG.md) for the recent Open Library-only discovery,
-language, expandable toolbar, infinite scroll, and count-removal changes.
+See [Performance and resilience](docs/PERFORMANCE_AND_RESILIENCE.md) for the
+latency model, failure behavior, tuning controls, observability, and verification
+checklist.
+
+See [CHANGELOG.md](CHANGELOG.md) for dated implementation details.
 
 ## Tech Stack
 
@@ -258,12 +304,15 @@ language, expandable toolbar, infinite scroll, and count-removal changes.
 Useful local checks:
 
 ```bash
-python3 -m compileall app.py
+python3 -m unittest discover -s tests -v
+python3 -m py_compile app.py downloaders/base.py downloaders/libgen.py
 python3 app.py
 ```
 
-For UI validation, use headless Playwright unless an interactive visible browser
-is explicitly needed. Use isolated Chromium contexts and test:
+For UI validation, use headless Playwright with an isolated Chromium context.
+Validate persistent navigation, browser history, delayed route loading,
+quick-peek positioning after scroll, mobile overflow, cover cache hits, and
+background Kindle progress. Do not use the installed Chrome profile.
 
 ```text
 http://127.0.0.1:5800

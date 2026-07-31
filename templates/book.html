@@ -4,7 +4,6 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} - LibFlix</title>
-  <link rel="preconnect" href="https://covers.openlibrary.org" crossorigin>
   <link href="{{ url_for('static', filename='libflix.css', v=asset_version) }}" rel="stylesheet">
 </head>
 <body class="page-book">
@@ -28,10 +27,10 @@
           <div class="detail-author" id="detailAuthor" {% if not author %}hidden{% endif %}>{{ author }}</div>
 
           <div class="detail-description-wrap" id="descContainer">
-            <div class="desc-skeleton" id="descSkeleton" aria-label="Loading book description">
+            <div class="desc-skeleton" id="descSkeleton" aria-label="Loading book description" {% if description %}style="display:none"{% endif %}>
               <div class="line"></div><div class="line"></div><div class="line"></div><div class="line"></div>
             </div>
-            <div class="detail-desc" id="descText" style="display:none"></div>
+            <div class="detail-desc{% if description %} is-collapsed{% endif %}" id="descText" {% if not description %}style="display:none"{% endif %}>{{ description }}</div>
             <button class="description-toggle" id="descriptionToggle" type="button" aria-expanded="false">Read more</button>
             <div class="loading-message" id="descNone" style="display:none">No description is available for this book.</div>
           </div>
@@ -90,15 +89,16 @@
 
   <footer class="app-footer">Powered by Open Library &amp; libgen.li</footer>
 
-  <script src="{{ url_for('static', filename='download-ui.js', v=asset_version) }}"></script>
-  <script>
+  <script data-page-script src="{{ url_for('static', filename='download-ui.js', v=asset_version) }}"></script>
+  <script data-page-script>
     let bookTitle = {{ title | tojson }};
     let bookAuthor = {{ author | tojson }};
     const olKey = {{ ol_key | tojson }};
     const MODE = {{ mode | default('nonfiction') | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
     let downloadTitle = {{ download_title | default(title) | tojson }};
-    let downloadQueries = downloadTitle ? [downloadTitle] : [];
+    let downloadQueries = {{ download_queries | default([]) | tojson }};
+    if (!downloadQueries.length && downloadTitle) downloadQueries = [downloadTitle];
     const downloadLoader = document.getElementById('downloadLoader');
     const downloadError = document.getElementById('downloadError');
     const downloadEmpty = document.getElementById('downloadEmpty');
@@ -108,11 +108,16 @@
     const filterPanel = document.getElementById('filterPanel');
     let currentPage = 1;
     let activeSearch = null;
-    let similarSubjects = [];
+    let similarSubjects = {{ similar_subjects | default([]) | tojson }};
     let similarVisible = false;
     let similarRequested = false;
+    let similarRetryCount = 0;
     let downloadRequested = false;
     let activeDownloadQueryIndex = 0;
+    let detailRetryCount = 0;
+    let detailRetryTimer = null;
+    let similarRetryTimer = null;
+    let similarObserver = null;
 
     function escapeHtml(value) {
       return window.LibFlixDownloads.escapeHtml(value);
@@ -190,7 +195,9 @@
         downloadQueries = [downloadTitle];
       }
       if (data.cover_url) {
-        const coverUrl = data.cover_url.replace(/-[SML]\.jpg(?:\?.*)?$/, '-L.jpg');
+        const coverUrl = /^\/olcover\/\d+(?:\/[SML])?$/.test(data.cover_url)
+          ? data.cover_url.replace(/\/[SML]$/, '') + '/L'
+          : data.cover_url.replace(/-[SML]\.jpg(?:\?.*)?$/, '-L.jpg');
         const frame = document.getElementById('detailCoverFrame');
         const existing = frame.querySelector('.detail-cover');
         if (existing) {
@@ -232,14 +239,22 @@
         .then(response => response.json())
         .then(data => {
           hydrateBookIdentity(data);
-          document.getElementById('descSkeleton').style.display = 'none';
+          const skeleton = document.getElementById('descSkeleton');
           if (data.success && data.description) {
+            skeleton.style.display = 'none';
             const text = document.getElementById('descText');
             text.textContent = data.description;
             text.style.display = '';
             requestAnimationFrame(updateDescriptionClamp);
           } else {
-            document.getElementById('descNone').style.display = 'block';
+            if (data.refreshing && detailRetryCount < 2) {
+              skeleton.style.display = '';
+              detailRetryCount += 1;
+              detailRetryTimer = window.setTimeout(loadBookDetails, detailRetryCount * 1800);
+            } else {
+              skeleton.style.display = 'none';
+              document.getElementById('descNone').style.display = 'block';
+            }
           }
           if (data.success && data.similar_subjects && data.similar_subjects.length) {
             similarSubjects = data.similar_subjects;
@@ -267,6 +282,12 @@
       fetch('/api/similar?' + params)
         .then(response => response.json())
         .then(data => {
+          if (data.refreshing && (!data.books || !data.books.length) && similarRetryCount < 2) {
+            similarRequested = false;
+            similarRetryCount += 1;
+            similarRetryTimer = window.setTimeout(requestSimilarIfReady, similarRetryCount * 1800);
+            return;
+          }
           if (!data.success || !data.books.length) {
             renderSimilarEmpty('No similar books are available.');
             return;
@@ -401,7 +422,7 @@
 
     const similarSection = document.querySelector('.similar-section');
     if ('IntersectionObserver' in window && similarSection) {
-      const similarObserver = new IntersectionObserver(entries => {
+      similarObserver = new IntersectionObserver(entries => {
         if (!entries.some(entry => entry.isIntersecting)) return;
         similarVisible = true;
         similarObserver.disconnect();
@@ -414,6 +435,14 @@
 
     loadBookDetails();
     if (BOOK_LANG !== 'cn' && downloadTitle.trim() && bookTitle !== 'Book') doSearch(1, 0);
+    if (document.getElementById('descText').textContent.trim()) requestAnimationFrame(updateDescriptionClamp);
+
+    window.LibFlixPageCleanup = () => {
+      if (activeSearch) activeSearch.abort();
+      if (detailRetryTimer) window.clearTimeout(detailRetryTimer);
+      if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
+      similarObserver?.disconnect();
+    };
   </script>
 </body>
 </html>

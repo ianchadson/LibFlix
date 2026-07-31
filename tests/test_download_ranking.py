@@ -1,6 +1,6 @@
 import unittest
 
-from app import book_score, rank_download_books
+from app import book_score, rank_download_books, recommendation_reasons
 from downloaders.base import Book
 
 
@@ -54,6 +54,29 @@ class DownloadRankingTests(unittest.TestCase):
             book_score(edition, "鞋狗", "Phil Knight", "Chinese"),
             0,
         )
+
+    def test_recommendation_reasons_explain_kindle_choice(self):
+        edition = Book(
+            title="Catching Fire",
+            author="Suzanne Collins",
+            publisher="Scholastic",
+            language="English",
+            ext="epub",
+            size="2 MB",
+            pages="391",
+        )
+
+        reasons = recommendation_reasons(
+            edition,
+            target_title="Catching Fire",
+            target_author="Suzanne Collins",
+            preferred_language="English",
+        )
+
+        self.assertIn("Strong title match", reasons)
+        self.assertIn("Author match", reasons)
+        self.assertIn("Kindle-ready EPUB", reasons)
+        self.assertLessEqual(len(reasons), 4)
 
 
 if __name__ == "__main__":

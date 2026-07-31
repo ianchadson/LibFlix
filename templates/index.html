@@ -4,8 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>LibFlix - Book Discovery Library</title>
-  <link rel="preconnect" href="https://covers.openlibrary.org" crossorigin>
-  <style>
+  <style data-page-style>
     * { box-sizing: border-box; }
     body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
     .navbar { background: linear-gradient(180deg, rgba(20,20,20,.9) 0, rgba(20,20,20,.5) 80%, transparent); z-index: 10; min-height: 48px; }
@@ -271,12 +270,13 @@
   </footer>
   </main>
 
-  <script>
+  <script data-page-script>
     const MODE = {{ mode | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
     const HERO_BOOKS = {{ (hero_items | default([])) | tojson }};
     let heroIndex = 0;
     let heroCycleTimer = null;
+    let pageActive = true;
     const heroDescriptionRequests = new Map();
 
     function esc(s) {
@@ -287,14 +287,16 @@
 
     function heroCoverSrc(url) {
       if (!url) return '';
-      if (url.startsWith('/')) return url.replace(/\/$/, '') + '/L';
+      if (/^\/olcover\/\d+(?:\/[SML])?$/.test(url)) return url.replace(/\/[SML]$/, '') + '/L';
+      if (url.startsWith('/')) return url;
       if (url.includes('covers.openlibrary.org/b/id/')) return url.replace(/-[SML]\.jpg(?:\?.*)?$/, '-L.jpg');
       return url.replace(/zoom=\d+/, 'zoom=5');
     }
 
     function heroCoverMediumSrc(url) {
       if (!url) return '';
-      if (url.startsWith('/')) return url.replace(/\/$/, '') + '/M';
+      if (/^\/olcover\/\d+(?:\/[SML])?$/.test(url)) return url.replace(/\/[SML]$/, '') + '/M';
+      if (url.startsWith('/')) return url;
       if (url.includes('covers.openlibrary.org/b/id/')) return url.replace(/-[SML]\.jpg(?:\?.*)?$/, '-M.jpg');
       return url.replace(/zoom=\d+/, 'zoom=3');
     }
@@ -465,12 +467,18 @@
         .then(response => response.json())
         .then(data => {
           book.description = data.success ? (data.description || '') : '';
-          if (heroIndex === index) {
+          if (pageActive && heroIndex === index) {
             const descEl = document.getElementById('heroDesc');
             if (descEl) {
               descEl.textContent = book.description;
               descEl.style.visibility = book.description ? 'visible' : 'hidden';
             }
+          }
+          if (data.refreshing && !book.description && pageActive) {
+            window.setTimeout(() => {
+              heroDescriptionRequests.delete(book.ol_key);
+              hydrateHeroDescription(index);
+            }, 2400);
           }
           return book.description;
         })
@@ -732,6 +740,13 @@
     }, { rootMargin: '120px 0px' });
     document.querySelectorAll('.shelf').forEach(shelf => shelfObserver.observe(shelf));
 
+    window.LibFlixPageCleanup = () => {
+      pageActive = false;
+      if (heroCycleTimer) clearInterval(heroCycleTimer);
+      shelfObserver.disconnect();
+      window.removeEventListener('resize', fitHeroTitle);
+      if (window.fitHeroTitle === fitHeroTitle) delete window.fitHeroTitle;
+    };
   </script>
 </body>
 </html>

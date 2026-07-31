@@ -11,6 +11,7 @@ Concrete implementations live alongside this file (e.g. ``libgen.py``).
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, asdict, field
 from typing import Iterable, Iterator, List, Optional, Tuple
@@ -24,7 +25,10 @@ from requests.adapters import HTTPAdapter
 SESSION = requests.Session()
 SESSION.mount("https://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
 SESSION.mount("http://", HTTPAdapter(pool_connections=10, pool_maxsize=20))
-SESSION.headers.update({"User-Agent": "Mozilla/5.0"})
+SESSION.headers.update({
+    "User-Agent": "LibFlix/1.0 "
+    f"({os.environ.get('LIBFLIX_CONTACT', 'https://github.com/ianchadson/LibFlix')})"
+})
 
 # A small in-memory TTL cache shared across all downloaders; callers can use
 # it via ``cache_get`` / ``cache_set``.

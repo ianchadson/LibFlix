@@ -4,8 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Search: {{ query }} - LibFlix</title>
-  <link rel="preconnect" href="https://covers.openlibrary.org" crossorigin>
-  <style>
+  <style data-page-style>
     * { box-sizing: border-box; }
     body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
     .navbar { background: linear-gradient(180deg, rgba(20,20,20,.9) 0, rgba(20,20,20,.5) 80%, transparent); z-index: 10; min-height: 48px; }
@@ -78,7 +77,7 @@
     </div>
   </main>
 
-  <script>
+  <script data-page-script>
     const QUERY = {{ query | tojson }};
     const MODE = {{ mode | tojson if mode else 'nonfiction' | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
@@ -86,6 +85,8 @@
     let totalPages = {{ total_pages | int }};
     let loading = false;
     let finished = currentPage >= totalPages;
+    let observer = null;
+    let fillTimer = null;
     const scrollSentinel = document.getElementById('scrollSentinel');
     const infLoading = document.getElementById('infLoading');
 
@@ -171,7 +172,7 @@
     }
 
     if ('IntersectionObserver' in window && scrollSentinel) {
-      const observer = new IntersectionObserver(entries => {
+      observer = new IntersectionObserver(entries => {
         if (entries.some(entry => entry.isIntersecting)) loadMore();
       }, { rootMargin: '700px 0px' });
       observer.observe(scrollSentinel);
@@ -179,7 +180,13 @@
 
     window.addEventListener('scroll', maybeLoadMore, { passive: true });
     window.addEventListener('resize', fillViewportIfNeeded);
-    setTimeout(fillViewportIfNeeded, 250);
+    fillTimer = window.setTimeout(fillViewportIfNeeded, 250);
+    window.LibFlixPageCleanup = () => {
+      observer?.disconnect();
+      if (fillTimer) window.clearTimeout(fillTimer);
+      window.removeEventListener('scroll', maybeLoadMore);
+      window.removeEventListener('resize', fillViewportIfNeeded);
+    };
   </script>
 </body>
 </html>
