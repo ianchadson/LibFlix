@@ -206,6 +206,35 @@ the status connection remains unavailable, the UI keeps the job id and offers
 `Check status`; it does not start a duplicate delivery or claim that the
 background send failed.
 
+Source-file downloads use identity encoding and verify the completed byte count
+against `Content-Length` or `Content-Range`. An interrupted response makes up to
+three bounded continuation attempts with `Range`, validates the returned start
+offset, and appends only when the offset matches. A source that ignores ranges
+restarts the temporary file cleanly. The progress panel reports
+`Resuming book download` while this happens.
+
+### Attachment preparation
+
+After the selected file downloads and before SMTP starts, the worker prepares a
+Kindle-friendly attachment:
+
+| Format | Safe preparation |
+|---|---|
+| EPUB | Canonical title; missing author, language, publisher, date, description, Open Library identifier, and cover |
+| PDF | Canonical title; missing author and subject/description |
+| MOBI/AZW/AZW3 | Canonical filename only; proprietary internals are preserved |
+
+EPUB repair edits only the package metadata inside the existing archive. It
+preserves book content, keeps `mimetype` first and uncompressed, reuses an
+existing cover, and loads a canonical cover only when one is absent. The worker
+reuses the largest locally cached cover variant already displayed by LibFlix;
+the network is used only when no cached variant exists. PDF metadata is written
+with `pypdf`; no page is inserted or removed.
+
+Preparation is fail-open. A malformed, encrypted, or unusual container logs a
+diagnostic and continues with the original bytes under the clean filename. This
+keeps metadata cleanup from becoming a new delivery failure mode.
+
 ### Security and lifecycle
 
 - SMTP credentials are validated and kept only in process memory.

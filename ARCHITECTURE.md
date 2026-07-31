@@ -377,6 +377,11 @@ and returns immediately:
 The supplied SMTP credentials remain only in process memory. They are not
 stored in the SQLite job or event rows.
 
+The request also carries the canonical Open Library title, author, work key,
+description, language, and cover path plus the selected edition's publisher and
+year. The worker passes these non-secret fields to `book_preparation.py` only
+after the source download completes.
+
 ### `GET /api/kindle/jobs/<job_id>`
 
 Returns the current status and events after an optional integer `cursor`:
@@ -443,6 +448,12 @@ Shared frontend assets:
 |---|---|
 | `static/libflix.css` | App tokens, responsive layout, navigation, cards, preview, filters, editions, modal, focus and reduced-motion states |
 | `static/download-ui.js` | Edition rendering, format-aware actions, pagination, notifications, and friendly error mapping |
+
+Backend attachment preparation:
+
+| Module | Responsibility |
+|---|---|
+| `book_preparation.py` | Canonical filename cleanup, EPUB package metadata/cover repair, PDF metadata repair, and safe original-file fallback |
 
 ## Frontend Interaction Details
 
@@ -559,6 +570,10 @@ The renderer also:
 
 - uses Unicode-safe filenames and format-aware action labels
 - starts a background Kindle job without adding another full-page loader
+- sends the canonical book identity and selected edition metadata to the
+  pre-upload preparation stage
+- resumes interrupted source downloads from a validated HTTP byte range and
+  rejects incomplete final byte counts
 - polls incremental job events into a progress panel inside the selected edition
   row, using real byte progress for the file download and named states for
   attachment, authentication, and SMTP delivery
@@ -569,6 +584,14 @@ The renderer also:
 - keeps edition actions inside the viewport on compact screens
 - maps timeouts and network errors to user-facing recovery messages
 - leaves raw counts out of the visible interface
+
+Before SMTP upload, `book_preparation.py` applies a clean canonical filename.
+For EPUB it edits only the OPF package: title is canonicalized, absent metadata
+is filled, and a JPEG cover is added only if no cover declaration or cover image
+already exists. The archive keeps `mimetype` first and uncompressed. PDF title
+and missing author/description fields are updated through `pypdf`. MOBI/AZW
+internals are not rewritten. Any parsing or encryption problem returns the
+original file, so preparation cannot turn a usable download into a failed send.
 
 ### Rendering Performance
 

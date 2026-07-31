@@ -60,7 +60,7 @@
     const actions = book.md5
       ? '<div class="edition-actions">' +
           '<a class="edition-action edition-download" href="' + downloadHref + '" data-format="' + escapeHtml(format) + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>' + escapeHtml(format.toUpperCase()) + '</span></a>' +
-          '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>' +
+          '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(book.cover_url || '') + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>' +
         '</div>'
       : '<div class="edition-actions"><span class="edition-action edition-kindle" aria-disabled="true">Unavailable</span></div>';
 
@@ -117,7 +117,19 @@
         return;
       }
       if (typeof window.sendToKindle !== 'function') return;
-      window.sendToKindle(kindle.dataset.md5, kindle.dataset.title, kindle.dataset.format, kindle);
+      window.sendToKindle(
+        kindle.dataset.md5,
+        kindle.dataset.title,
+        kindle.dataset.format,
+        kindle,
+        {
+          author: kindle.dataset.author || '',
+          publisher: kindle.dataset.publisher || '',
+          year: kindle.dataset.year || '',
+          language: kindle.dataset.language || '',
+          coverUrl: kindle.dataset.coverUrl || '',
+        },
+      );
     });
   }
 

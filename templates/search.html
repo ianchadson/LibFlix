@@ -141,7 +141,7 @@
     document.getElementById('downloadRetry').addEventListener('click', () => fetchResults(currentPage));
 
     let sendingMd5 = null;
-    window.sendToKindle = function (md5, title, extension, button) {
+    window.sendToKindle = function (md5, title, extension, button, edition = {}) {
       const settings = window.getKindleSettings?.();
       if (!settings) {
         window.openKindleModal?.();
@@ -155,6 +155,12 @@
         payload: {
           md5,
           title,
+          canonical_title: title,
+          author: edition.author || '',
+          publisher: edition.publisher || '',
+          year: edition.year || '',
+          language: edition.language || (BOOK_LANG === 'cn' ? 'zh' : 'en'),
+          cover_url: edition.coverUrl || '',
           ext: extension,
           kindle_email: settings.kindle,
           smtp_host: settings.host,

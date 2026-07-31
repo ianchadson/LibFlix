@@ -93,6 +93,8 @@
   <script data-page-script>
     let bookTitle = {{ title | tojson }};
     let bookAuthor = {{ author | tojson }};
+    let bookDescription = {{ description | default('') | tojson }};
+    let bookCoverUrl = {{ cover_url | default('') | tojson }};
     const olKey = {{ ol_key | tojson }};
     const MODE = {{ mode | default('nonfiction') | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
@@ -195,6 +197,7 @@
         downloadQueries = [downloadTitle];
       }
       if (data.cover_url) {
+        bookCoverUrl = data.cover_url;
         const coverUrl = /^\/olcover\/\d+(?:\/[SML])?$/.test(data.cover_url)
           ? data.cover_url.replace(/\/[SML]$/, '') + '/L'
           : data.cover_url.replace(/-[SML]\.jpg(?:\?.*)?$/, '-L.jpg');
@@ -241,6 +244,7 @@
           hydrateBookIdentity(data);
           const skeleton = document.getElementById('descSkeleton');
           if (data.success && data.description) {
+            bookDescription = data.description;
             skeleton.style.display = 'none';
             const text = document.getElementById('descText');
             text.textContent = data.description;
@@ -392,7 +396,7 @@
     document.getElementById('downloadRetry').addEventListener('click', () => doSearch(currentPage, activeDownloadQueryIndex));
 
     let sendingMd5 = null;
-    window.sendToKindle = function (md5, title, extension, button) {
+    window.sendToKindle = function (md5, title, extension, button, edition = {}) {
       const settings = window.getKindleSettings?.();
       if (!settings) {
         window.openKindleModal?.();
@@ -406,6 +410,14 @@
         payload: {
           md5,
           title,
+          canonical_title: bookTitle || title,
+          author: bookAuthor || edition.author || '',
+          publisher: edition.publisher || '',
+          year: edition.year || '',
+          language: BOOK_LANG === 'cn' ? 'zh' : 'en',
+          description: bookDescription || '',
+          cover_url: bookCoverUrl || edition.coverUrl || '',
+          ol_key: olKey,
           ext: extension,
           kindle_email: settings.kindle,
           smtp_host: settings.host,

@@ -56,6 +56,20 @@
   implicit TLS support on port 465.
 - Limited concurrent delivery workers and converted stale five-minute jobs into
   explicit interrupted failures instead of permanent progress stalls.
+- Added bounded HTTP range resume for interrupted source transfers, including
+  returned-offset validation, complete-byte verification, and visible resume
+  progress.
+- Added a visible pre-upload book-polishing stage using the canonical Open
+  Library identity and selected edition metadata.
+- Added clean Unicode-safe attachment titles for every supported format.
+- Added non-destructive EPUB package repair for title and missing
+  author/language/publisher/date/description/identifier metadata, including a
+  cached canonical cover only when the EPUB has none. The largest displayed
+  cover variant is reused before any network request.
+- Added PDF title and missing author/description metadata with `pypdf`, while
+  preserving proprietary MOBI/AZW internals.
+- Made metadata preparation fail open so malformed or encrypted containers are
+  still delivered as their original bytes under the clean filename.
 
 ### Better download recommendations
 
@@ -73,7 +87,8 @@
 - Added request and operation `Server-Timing` plus a small
   `/api/metrics/web-vitals` receiver for LCP, CLS, and INP.
 - Added regression coverage for stale metadata, category fallback, local-first
-  book responses, cross-worker job events, and credential non-persistence.
+  book responses, cross-worker job events, credential non-persistence, EPUB
+  package repair, cover preservation, PDF metadata, and malformed-file fallback.
 - Added `docs/PERFORMANCE_AND_RESILIENCE.md` with latency model, cache layers,
   failure behavior, security boundaries, tuning, and headless verification.
 - Documented that the implementation is entirely application code and requires

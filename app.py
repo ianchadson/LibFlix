@@ -1,7 +1,7 @@
 import re, os, io, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3, unicodedata, uuid, ipaddress, socket
 from contextlib import contextmanager
 from difflib import SequenceMatcher
-from urllib.parse import urljoin, quote, urlencode
+from urllib.parse import urljoin, quote, urlencode, urlsplit, parse_qs
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
 
@@ -10,6 +10,8 @@ from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
 from flask import Flask, render_template, request, Response, stream_with_context, jsonify, g, redirect, send_file, has_request_context
 from opencc import OpenCC
+
+from book_preparation import prepare_book_for_kindle
 
 try:
     from PIL import Image, UnidentifiedImageError
@@ -2395,6 +2397,77 @@ def olcover(cover_id, size="M"):
     url = f"https://covers.openlibrary.org/b/id/{cover_id}-{s}.jpg"
     return cached_cover_response("openlibrary", str(cover_id), s, url)
 
+
+def _cover_file_as_jpeg(cache_path):
+    if not cache_path:
+        return b""
+    try:
+        with open(cache_path, "rb") as cover_file:
+            content = cover_file.read()
+        if Image is None:
+            return content if content.startswith(b"\xff\xd8") else b""
+        with Image.open(io.BytesIO(content)) as source:
+            source.thumbnail((1200, 1800), Image.Resampling.LANCZOS)
+            output = io.BytesIO()
+            source.convert("RGB").save(output, format="JPEG", quality=88, optimize=True)
+            return output.getvalue()
+    except (OSError, UnidentifiedImageError):
+        return b""
+
+
+def _cached_cover_variant(namespace, identity):
+    for size in ("L", "M", "S"):
+        expected = cover_cache_path(namespace, identity, size)
+        base, extension = os.path.splitext(expected)
+        candidates = (expected, f"{base}.jpg" if extension != ".jpg" else f"{base}.webp")
+        for candidate in candidates:
+            try:
+                if os.path.getsize(candidate) > 100:
+                    return candidate
+            except OSError:
+                continue
+    return ""
+
+
+def _kindle_cover_bytes(cover_url):
+    parsed = urlsplit(str(cover_url or "").strip())
+    if parsed.scheme or parsed.netloc:
+        return b""
+    open_library_match = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", parsed.path)
+    if open_library_match:
+        cover_id = open_library_match.group(1)
+        cached = _cached_cover_variant("openlibrary", cover_id)
+        if cached:
+            return _cover_file_as_jpeg(cached)
+        source_url = f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
+        cache_path, _ = ensure_cover_cached(
+            "openlibrary",
+            cover_id,
+            "L",
+            source_url,
+        )
+        return _cover_file_as_jpeg(cache_path)
+
+    download_match = re.fullmatch(r"/cover/([a-fA-F0-9]{32})(?:/[SML])?", parsed.path)
+    cover_dir = (parse_qs(parsed.query).get("dir") or [""])[0]
+    if download_match and re.fullmatch(r"[A-Za-z0-9_.-]{1,48}", cover_dir):
+        md5 = download_match.group(1).lower()
+        identity = f"{cover_dir}:{md5}"
+        cached = _cached_cover_variant("downloads", identity)
+        if cached:
+            return _cover_file_as_jpeg(cached)
+        source_url = f"{MIRROR}/covers/{cover_dir}/{md5}.jpg"
+        cache_path, _ = ensure_cover_cached(
+            "downloads",
+            identity,
+            "L",
+            source_url,
+            f"{MIRROR}/",
+        )
+        return _cover_file_as_jpeg(cache_path)
+    return b""
+
+
 def _kindle_progress(stage, progress=None, detail=""):
     event = {"type": "progress", "stage": stage, "progress": progress}
     if detail:
@@ -2403,6 +2476,8 @@ def _kindle_progress(stage, progress=None, detail=""):
 
 
 RESOLVE_HEARTBEAT_SECONDS = 4
+DOWNLOAD_MAX_ATTEMPTS = 4
+DOWNLOAD_READ_TIMEOUT = 60
 
 
 def _resolve_download_progress(md5):
@@ -2423,6 +2498,113 @@ def _format_transfer_size(value):
         if size < 1024 or unit == units[-1]:
             return f"{size:.1f} {unit}" if unit != "B" else f"{int(size)} {unit}"
         size /= 1024
+
+
+def _download_book_progress(url, destination):
+    downloaded = os.path.getsize(destination) if os.path.exists(destination) else 0
+    total_bytes = 0
+    last_reported_progress = 10
+    last_reported_bytes = downloaded
+    last_error = None
+
+    for attempt in range(1, DOWNLOAD_MAX_ATTEMPTS + 1):
+        resume_at = downloaded
+        headers = {"Accept-Encoding": "identity"}
+        if resume_at:
+            headers["Range"] = f"bytes={resume_at}-"
+        response = None
+        try:
+            response = SESSION.get(
+                url,
+                stream=True,
+                timeout=(10, DOWNLOAD_READ_TIMEOUT),
+                allow_redirects=True,
+                headers=headers,
+            )
+            if resume_at and response.status_code == 416:
+                complete_range = re.fullmatch(
+                    r"bytes \*/(\d+)",
+                    response.headers.get("content-range", ""),
+                )
+                complete_size = int(complete_range.group(1)) if complete_range else 0
+                if complete_size and downloaded == complete_size:
+                    return downloaded, complete_size
+                with open(destination, "wb"):
+                    pass
+                downloaded = 0
+                total_bytes = 0
+                raise requests.RequestException("Download range was no longer valid")
+            response.raise_for_status()
+
+            append = False
+            content_range = response.headers.get("content-range", "")
+            range_match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+|\*)", content_range)
+            if resume_at and response.status_code == 206:
+                if not range_match or int(range_match.group(1)) != resume_at:
+                    with open(destination, "wb"):
+                        pass
+                    downloaded = 0
+                    total_bytes = 0
+                    raise requests.RequestException("Download source returned a mismatched byte range")
+                append = True
+            elif resume_at:
+                downloaded = 0
+                resume_at = 0
+
+            if range_match and range_match.group(3).isdigit():
+                total_bytes = int(range_match.group(3))
+            elif not append:
+                try:
+                    total_bytes = int(response.headers.get("content-length", "") or 0)
+                except (TypeError, ValueError):
+                    total_bytes = 0
+
+            mode = "ab" if append else "wb"
+            with open(destination, mode) as output:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if not chunk:
+                        continue
+                    output.write(chunk)
+                    downloaded += len(chunk)
+                    if total_bytes:
+                        current = 10 + int(min(downloaded / total_bytes, 1) * 55)
+                        if current >= last_reported_progress + 2:
+                            last_reported_progress = current
+                            detail = f"{_format_transfer_size(downloaded)} of {_format_transfer_size(total_bytes)}"
+                            yield _kindle_progress("Downloading book", current, detail)
+                    elif downloaded - last_reported_bytes >= 1024 * 1024:
+                        last_reported_bytes = downloaded
+                        yield _kindle_progress(
+                            "Downloading book",
+                            None,
+                            f"{_format_transfer_size(downloaded)} downloaded",
+                        )
+            if total_bytes and downloaded < total_bytes:
+                raise requests.exceptions.ChunkedEncodingError(
+                    f"Download ended at {downloaded} of {total_bytes} bytes"
+                )
+            return downloaded, total_bytes
+        except (requests.RequestException, OSError) as error:
+            last_error = error
+            try:
+                downloaded = os.path.getsize(destination)
+            except OSError:
+                downloaded = 0
+            if attempt >= DOWNLOAD_MAX_ATTEMPTS:
+                break
+            detail = f"Continuing from {_format_transfer_size(downloaded)}"
+            if total_bytes:
+                detail += f" of {_format_transfer_size(total_bytes)}"
+            yield _kindle_progress("Resuming book download", None, detail)
+            time.sleep(min(attempt, 3))
+        finally:
+            if response is not None:
+                try:
+                    response.close()
+                except requests.RequestException:
+                    pass
+
+    raise last_error or RuntimeError("Book download could not be completed")
 
 
 def _open_smtp_connection(host, port, timeout=45):
@@ -2489,7 +2671,6 @@ def _send_to_kindle_events(data):
     from email import encoders
 
     md5 = data.get("md5", "")
-    title = re.sub(r"[\r\n]+", " ", data.get("title", "book")).strip() or "book"
     ext = re.sub(r"[^a-z0-9]", "", data.get("ext", "epub").lower()) or "epub"
     kindle_email = data.get("kindle_email", "").strip()
     smtp_host = data.get("smtp_host", "").strip()
@@ -2498,6 +2679,7 @@ def _send_to_kindle_events(data):
     smtp_pass = data.get("smtp_pass", "")
     sender_email = data.get("sender_email", smtp_user)
     tmp_path = None
+    prepared_path = None
     progress = 3
 
     try:
@@ -2509,71 +2691,98 @@ def _send_to_kindle_events(data):
 
         progress = 10
         yield _kindle_progress("Connecting to book source", progress)
-        r = SESSION.get(dl_url, stream=True, timeout=120, allow_redirects=True)
-        r.raise_for_status()
-        try:
-            total_bytes = int(r.headers.get("content-length", "") or 0)
-        except (TypeError, ValueError):
-            total_bytes = 0
-
-        downloaded = 0
-        last_reported_progress = progress
-        last_reported_bytes = 0
         yield _kindle_progress("Downloading book", progress, "Starting transfer")
         with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
             tmp_path = tmp.name
-            for chunk in r.iter_content(chunk_size=65536):
-                if not chunk:
-                    continue
-                tmp.write(chunk)
-                downloaded += len(chunk)
-                if total_bytes:
-                    current = 10 + int(min(downloaded / total_bytes, 1) * 55)
-                    if current >= last_reported_progress + 2:
-                        last_reported_progress = current
-                        progress = current
-                        detail = f"{_format_transfer_size(downloaded)} of {_format_transfer_size(total_bytes)}"
-                        yield _kindle_progress("Downloading book", progress, detail)
-                elif downloaded - last_reported_bytes >= 1024 * 1024:
-                    last_reported_bytes = downloaded
-                    yield _kindle_progress("Downloading book", None, f"{_format_transfer_size(downloaded)} downloaded")
+        downloaded, total_bytes = yield from _download_book_progress(dl_url, tmp_path)
 
         progress = 68
-        yield _kindle_progress("Building Kindle document", progress, _format_transfer_size(downloaded))
+        yield _kindle_progress("Polishing book details", progress, "Checking title, metadata, and cover")
+        identifier = ""
+        ol_key = str(data.get("ol_key") or "").strip()
+        if re.fullmatch(r"/works/OL\d+W", ol_key):
+            identifier = f"https://openlibrary.org{ol_key}"
+        prepared = prepare_book_for_kindle(
+            tmp_path,
+            ext,
+            {
+                "canonical_title": data.get("canonical_title") or data.get("title"),
+                "title": data.get("title"),
+                "author": data.get("author"),
+                "language": data.get("language"),
+                "publisher": data.get("publisher"),
+                "year": data.get("year"),
+                "description": data.get("description"),
+                "identifier": identifier,
+            },
+            cover_loader=lambda: _kindle_cover_bytes(data.get("cover_url")),
+        )
+        if prepared.temporary:
+            prepared_path = prepared.path
+        if prepared.warning:
+            app.logger.info("Kindle preparation kept original %s: %s", ext, prepared.warning)
+        title = prepared.title
+        attachment_path = prepared.path
+        attachment_size = os.path.getsize(attachment_path)
+        updates = [field for field in prepared.updated_fields if field != "cover"]
+        detail_parts = []
+        if updates:
+            detail_parts.append("Updated " + ", ".join(updates))
+        if prepared.cover_added:
+            detail_parts.append("Added cover")
+        if not detail_parts:
+            detail_parts.append("Clean filename ready")
+        progress = 74
+        yield _kindle_progress("Building Kindle delivery", progress, "; ".join(detail_parts))
 
         msg = MIMEMultipart()
         msg["From"] = sender_email
         msg["To"] = kindle_email
         msg["Subject"] = f"Sent by LibFlix: {title}"
 
-        body = MIMEText(f"Book sent from LibFlix.\n\nTitle: {title}\nFormat: {ext}")
+        body_lines = [f"Book sent from LibFlix.\n\nTitle: {title}"]
+        if prepared.author:
+            body_lines.append(f"Author: {prepared.author}")
+        body_lines.append(f"Format: {ext.upper()}")
+        body = MIMEText("\n".join(body_lines))
         msg.attach(body)
 
-        with open(tmp_path, "rb") as f:
-            attachment = MIMEBase("application", "octet-stream")
+        mime_subtype = {
+            "epub": "epub+zip",
+            "pdf": "pdf",
+            "mobi": "x-mobipocket-ebook",
+            "azw": "vnd.amazon.ebook",
+            "azw3": "vnd.amazon.ebook",
+        }.get(ext, "octet-stream")
+        with open(attachment_path, "rb") as f:
+            attachment = MIMEBase("application", mime_subtype)
             attachment.set_payload(f.read())
             encoders.encode_base64(attachment)
-            attachment.add_header("Content-Disposition", f"attachment; filename=\"{title[:80]}.{ext}\"")
+            attachment.add_header(
+                "Content-Disposition",
+                "attachment",
+                filename=("utf-8", "", prepared.filename),
+            )
             msg.attach(attachment)
 
-        progress = 78
+        progress = 80
         yield _kindle_progress("Connecting to email", progress)
         server = _open_smtp_connection(smtp_host, smtp_port)
         try:
-            progress = 84
+            progress = 86
             yield _kindle_progress("Signing in securely", progress)
             server.login(smtp_user, smtp_pass)
             progress = 92
-            yield _kindle_progress("Sending to Kindle", progress, f"Uploading {_format_transfer_size(downloaded)} attachment")
+            yield _kindle_progress("Sending to Kindle", progress, f"Uploading {_format_transfer_size(attachment_size)} attachment")
             try:
-                yield from _send_message_progress(server, msg, downloaded)
+                yield from _send_message_progress(server, msg, attachment_size)
             except (smtplib.SMTPServerDisconnected, TimeoutError, ConnectionError, OSError):
                 _close_smtp_connection(server)
                 server = None
                 yield _kindle_progress("Reconnecting to email", None, "The first upload connection was interrupted")
                 server = _open_smtp_connection(smtp_host, smtp_port)
                 server.login(smtp_user, smtp_pass)
-                yield from _send_message_progress(server, msg, downloaded)
+                yield from _send_message_progress(server, msg, attachment_size)
         finally:
             _close_smtp_connection(server)
 
@@ -2597,9 +2806,11 @@ def _send_to_kindle_events(data):
             "error": _kindle_delivery_error(e),
         }
     finally:
-        if tmp_path:
+        for path in {tmp_path, prepared_path}:
+            if not path:
+                continue
             try:
-                os.unlink(tmp_path)
+                os.unlink(path)
             except OSError:
                 pass
 
@@ -2629,6 +2840,23 @@ def validate_kindle_payload(data):
         ip = ipaddress.ip_address(address)
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
             return "Private or local SMTP servers are not supported"
+    metadata_limits = {
+        "title": 220,
+        "canonical_title": 220,
+        "author": 240,
+        "publisher": 240,
+        "year": 32,
+        "language": 24,
+        "description": 4000,
+        "cover_url": 300,
+        "ol_key": 32,
+    }
+    for field, limit in metadata_limits.items():
+        value = unicodedata.normalize("NFKC", str(data.get(field) or ""))
+        value = re.sub(r"[\x00-\x1f\x7f]+", " ", value)
+        data[field] = re.sub(r"\s+", " ", value).strip()[:limit]
+    if data["ol_key"] and not re.fullmatch(r"/works/OL\d+W", data["ol_key"]):
+        data["ol_key"] = ""
     data["smtp_port"] = port
     data["smtp_host"] = host
     return ""

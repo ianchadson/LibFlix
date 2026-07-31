@@ -156,8 +156,20 @@ No API key is required. Open Library is the only discovery backend.
   responsive progress bar, current delivery stage, transferred file size, and
   clear completion or failure state while LibFlix downloads and emails the file.
   Delivery runs as a background job, survives page navigation, and restores its
-  latest status when the user returns. SMTP credentials stay in process memory
-  and are never written to the job database.
+  latest status when the user returns. Interrupted source transfers resume from
+  their verified byte offset instead of restarting or silently accepting a
+  partial file. SMTP credentials stay in process memory and are never written
+  to the job database.
+- **Kindle-ready book preparation** - immediately before upload, LibFlix applies
+  the clean Open Library title to the attachment. EPUB files also receive
+  missing author, language, publisher, date, description, work identifier, and
+  cover metadata without re-encoding their chapters. A cover already displayed
+  by LibFlix is reused from the server cache instead of downloaded again. PDFs
+  receive a clean title plus missing author/description metadata. Proprietary
+  MOBI/AZW files keep their internal data untouched and receive only the safe
+  canonical filename.
+  Unsupported, malformed, or encrypted files fall back to the unmodified
+  original rather than blocking delivery.
 - **Kindle-aware recommendations** - the best candidate is selected by title,
   author, language, format, file sanity, and metadata quality. The chosen row
   explains its strongest signals, while English mode rejects Chinese
