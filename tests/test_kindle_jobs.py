@@ -78,6 +78,27 @@ class KindleJobTests(unittest.TestCase):
         self.assertRegex(body["job_id"], r"^[a-f0-9]{32}$")
         submit.assert_called_once()
 
+    def test_create_job_rejects_unsupported_mobi_format(self):
+        payload = {
+            "md5": "a" * 32,
+            "title": "Book",
+            "ext": "mobi",
+            "kindle_email": "reader@kindle.com",
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 587,
+            "smtp_user": "sender@example.com",
+            "smtp_pass": "secret",
+        }
+        with (
+            app.app.test_client() as client,
+            patch.object(app.KINDLE_EXECUTOR, "submit") as submit,
+        ):
+            response = client.post("/api/kindle/jobs", json=payload)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("not supported", response.get_json()["error"])
+        submit.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

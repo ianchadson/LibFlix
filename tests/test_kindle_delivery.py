@@ -132,6 +132,8 @@ class KindleDeliveryTests(unittest.TestCase):
         )
         self.assertEqual(attachment.get_filename(), "Test Book.epub")
         self.assertIn("Polishing book details", [event.get("stage") for event in events])
+        self.assertEqual(events[-1]["title"], "Test Book")
+        self.assertGreaterEqual(events[-1]["elapsed_seconds"], 0)
 
     def test_slow_download_resolution_emits_heartbeat(self):
         data = {

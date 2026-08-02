@@ -40,7 +40,7 @@
 
     <section class="download-section" aria-labelledby="downloadHeading">
       <div class="download-heading-row">
-        <h2 class="download-section-title" id="downloadHeading">Download options</h2>
+        <h2 class="download-section-title" id="downloadHeading">Download</h2>
         <button class="filter-toggle" id="filterToggle" type="button" aria-expanded="false" aria-controls="filterPanel">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16"></path><path d="M7 12h10"></path><path d="M10 18h4"></path></svg>
           <span>Filters</span>
@@ -341,11 +341,11 @@
     }
 
     function showDownloadResults(data) {
-      if (!data.books.length) {
+      const renderedCount = window.LibFlixDownloads.renderEditions(resultsBody, data.books);
+      if (!renderedCount) {
         showDownloadState('empty');
         return;
       }
-      window.LibFlixDownloads.renderEditions(resultsBody, data.books);
       showDownloadState('results');
       window.LibFlixDownloads.renderPagination(downloadPagination, data.page, data.total_pages, page => {
         doSearch(page, activeDownloadQueryIndex);
@@ -427,7 +427,6 @@
           sender_email: settings.sender,
         },
       })
-        .then(() => window.LibFlixNotify?.('Sent to Kindle', 'success'))
         .catch(error => window.LibFlixNotify?.('Kindle delivery failed: ' + error.message, 'error'))
         .finally(() => { sendingMd5 = null; });
     };

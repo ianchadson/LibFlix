@@ -82,9 +82,9 @@ No API key is required. Open Library is the only discovery backend.
   while search and browse settings expand from compact controls with lightweight
   animation. The search and settings affordances are icon-only in the collapsed
   state.
-- **App-style route transitions** - internal page navigation fades through a
-  lightweight LibFlix loading overlay instead of exposing a blank wait. Shared
-  navigation and form handling use `window.LibFlixLoading.show()` when present.
+- **Seamless route changes** - internal navigation keeps the current page and
+  navbar visible until the destination is ready, then swaps content atomically.
+  A slim navbar progress cue appears only when a response is genuinely slow.
 - **Clean browsing URLs** - main home, mode, language, category, and discovery
   routes use paths like `/fiction`, `/cn/category/history`, and
   `/fiction/discover?q=dune` instead of exposing mode/language query args.
@@ -100,9 +100,9 @@ No API key is required. Open Library is the only discovery backend.
   pages where possible so rows stay useful without repeating entries.
 - **Horizontal infinite scroll** - homepage shelves automatically load another
   page when the user scrolls near the end of a row.
-- **Intent-aware navigation prefetch** - internal pages are prefetched only
-  after deliberate pointer hover, keyboard focus, or touch intent. The app does
-  not speculatively download every category after page load.
+- **Intent-aware navigation cache** - internal pages are fetched after deliberate
+  pointer hover, keyboard focus, or touch intent and retained briefly in a
+  bounded in-memory cache. Revisiting a recent category avoids another request.
 - **Instant book shells** - every rendered card registers its title, author,
   cover, and work key as a lightweight server hint. Opening that card can
   render the book page immediately while descriptions and secondary metadata
@@ -140,7 +140,8 @@ No API key is required. Open Library is the only discovery backend.
   visible scrollbar.
 - **Inline edition picker** - download candidates appear as responsive edition
   rows with cover, title, author, publisher, format, year, size, pages, and
-  language instead of a dense table.
+  language instead of a dense table. The recommended edition stays visible;
+  alternative editions remain collapsed under `Other options` until requested.
 - **Collapsible download filters** - format, sort, language, page size, and
   dedupe controls share one compact `Filters` panel across preview and direct
   download search pages. `Best match` is the explicit default; selecting year,
@@ -149,12 +150,17 @@ No API key is required. Open Library is the only discovery backend.
   and Kindle actions. `Best match` is assigned only after globally ranking all
   filtered candidates by title and author similarity, language, reading format,
   file sanity, and metadata quality.
+- **Kindle-compatible results only** - MOBI and AZW/AZW3 editions are excluded
+  from download results because Send to Kindle does not accept them. EPUB and
+  PDF remain available.
 - **Send to Kindle settings** - the global Settings menu opens a keyboard-safe
   Kindle sheet with password visibility, local browser storage, a forget
   action, and a visible configured / configure-connection state.
 - **Live Kindle delivery progress** - the selected edition expands to show a
   responsive progress bar, current delivery stage, transferred file size, and
   clear completion or failure state while LibFlix downloads and emails the file.
+  The success notification includes the cleaned attachment title and
+  server-measured delivery time.
   Delivery runs as a background job, survives page navigation, and restores its
   latest status when the user returns. Interrupted source transfers resume from
   their verified byte offset instead of restarting or silently accepting a
@@ -165,9 +171,8 @@ No API key is required. Open Library is the only discovery backend.
   missing author, language, publisher, date, description, work identifier, and
   cover metadata without re-encoding their chapters. A cover already displayed
   by LibFlix is reused from the server cache instead of downloaded again. PDFs
-  receive a clean title plus missing author/description metadata. Proprietary
-  MOBI/AZW files keep their internal data untouched and receive only the safe
-  canonical filename.
+  receive a clean title plus missing author/description metadata. Unsupported
+  MOBI/AZW files are excluded before rendering or delivery.
   Unsupported, malformed, or encrypted files fall back to the unmodified
   original rather than blocking delivery.
 - **Kindle-aware recommendations** - the best candidate is selected by title,
@@ -196,16 +201,17 @@ No API key is required. Open Library is the only discovery backend.
 - **Consistent dark UI system** - navigation, details, filters, edition rows,
   settings, focus states, empty states, and notifications share one restrained
   visual language in `static/libflix.css`.
-- **Single transition loader** - route changes use one shared LibFlix overlay;
-  it appears only after a short delay, avoids flashing on fast navigation, and
-  never waits for covers or download-source results. Local AJAX loaders remain
-  scoped to the content they are updating.
+- **Non-blocking route feedback** - internal route changes never cover or fade
+  the whole interface. A delayed navbar progress line handles slow responses;
+  the full LibFlix overlay remains available only for true document-level
+  operations. Local AJAX loaders stay scoped to the content they update.
 - **Persistent app shell** - same-origin page changes fetch and replace the
   content area while preserving the top navigation. History navigation,
   page-specific styles/scripts, focus, and scroll restoration continue to work,
   with a normal browser navigation as the automatic fallback.
 - **Progressive cover loading** - cover geometry stays stable while images load,
-  with a subtle shimmer and no layout shift.
+  with a subtle shimmer and no layout shift. Covers already loaded during the
+  session retain their visible state across app-shell page swaps.
 - **Persistent optimized covers** - Open Library and download-result covers pass
   through a validated local cache. When Pillow is available, LibFlix stores
   compact size-specific WebP thumbnails; repeat requests are served from disk

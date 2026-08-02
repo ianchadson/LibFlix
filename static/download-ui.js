@@ -5,7 +5,9 @@
     download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>',
     send: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"></path><path d="M22 2 11 13"></path></svg>',
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>',
+    chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>',
   };
+  const hiddenKindleFormats = new Set(['azw', 'azw3', 'mobi']);
 
   function escapeHtml(value) {
     const element = document.createElement('div');
@@ -78,11 +80,28 @@
   }
 
   function renderEditions(container, books) {
-    if (!container) return;
-    container.innerHTML = (books || []).map(renderEdition).join('');
-    container.hidden = !(books || []).length;
+    if (!container) return 0;
+    const visibleBooks = (books || []).filter(book => {
+      const extension = String(book.ext || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      return !hiddenKindleFormats.has(extension);
+    });
+    const bestIndex = Math.max(0, visibleBooks.findIndex(book => book.best_match === true));
+    const bestBook = visibleBooks[bestIndex];
+    const otherBooks = visibleBooks.filter((book, index) => index !== bestIndex);
+    const primary = bestBook
+      ? renderEdition(bestBook.best_match === true ? bestBook : { ...bestBook, best_match: true }, bestIndex)
+      : '';
+    const others = otherBooks.length
+      ? '<details class="edition-more">' +
+          '<summary class="edition-more-summary"><span>Other options</span>' + icons.chevron + '</summary>' +
+          '<div class="edition-more-list">' + otherBooks.map(renderEdition).join('') + '</div>' +
+        '</details>'
+      : '';
+    container.innerHTML = primary + others;
+    container.hidden = !visibleBooks.length;
     wireActions(container);
     resumeKindleJobs(container);
+    return visibleBooks.length;
   }
 
   const wiredContainers = new WeakSet();
@@ -136,6 +155,8 @@
   function createKindleProgress(button) {
     const row = button?.closest('.edition-row');
     if (!row) return null;
+    const disclosure = button.closest('.edition-more');
+    if (disclosure) disclosure.open = true;
     let panel = row.querySelector('.kindle-progress');
     if (!panel) {
       panel = document.createElement('div');
@@ -236,6 +257,15 @@
 
   const wait = duration => new Promise(resolve => window.setTimeout(resolve, duration));
 
+  function formatElapsedTime(value) {
+    const seconds = Math.max(0, Math.round(Number(value) || 0));
+    if (seconds < 1) return 'under a second';
+    if (seconds < 60) return seconds + 's';
+    const minutes = Math.floor(seconds / 60);
+    const remainder = seconds % 60;
+    return minutes + 'm' + (remainder ? ' ' + remainder + 's' : '');
+  }
+
   async function pollKindleJob(jobId, onEvent) {
     let cursor = 0;
     let failures = 0;
@@ -316,6 +346,7 @@
     button.setAttribute('aria-busy', 'true');
     button.setAttribute('aria-label', 'Sending book to Kindle');
     button.innerHTML = icons.send + '<span>Sending</span>';
+    const deliveryStartedAt = performance.now();
 
     try {
       if (!jobId) {
@@ -334,11 +365,19 @@
         updateKindleProgress(panel, { type: 'progress', stage: 'Restoring delivery status', progress: null });
       }
       const completed = await pollKindleJob(jobId, event => updateKindleProgress(panel, event));
+      const cleanedTitle = completed.title || payload.canonical_title || payload.title || button.dataset.title || 'Book';
+      const elapsedSeconds = Number(completed.elapsed_seconds) > 0
+        ? Number(completed.elapsed_seconds)
+        : (performance.now() - deliveryStartedAt) / 1000;
       button.classList.add('sent');
       button.innerHTML = icons.check + '<span>Sent</span>';
       button.setAttribute('aria-label', 'Sent to Kindle');
       window.sessionStorage.removeItem(kindleJobStorageKey(payload.md5));
-      return completed;
+      window.LibFlixNotify?.('Sent to Kindle', 'success', {
+        title: cleanedTitle,
+        detail: 'Completed in ' + formatElapsedTime(elapsedSeconds),
+      });
+      return { ...completed, title: cleanedTitle, elapsed_seconds: elapsedSeconds };
     } catch (error) {
       const failure = error.kindleEvent || {};
       updateKindleProgress(panel, {

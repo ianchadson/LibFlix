@@ -102,11 +102,11 @@
     }
 
     function showResults(data) {
-      if (!data.books.length) {
+      const renderedCount = window.LibFlixDownloads.renderEditions(resultsBody, data.books);
+      if (!renderedCount) {
         showDownloadState('empty');
         return;
       }
-      window.LibFlixDownloads.renderEditions(resultsBody, data.books);
       showDownloadState('results');
       window.LibFlixDownloads.renderPagination(downloadPagination, data.page, data.total_pages, page => {
         fetchResults(page);
@@ -170,7 +170,6 @@
           sender_email: settings.sender,
         },
       })
-        .then(() => window.LibFlixNotify?.('Sent to Kindle', 'success'))
         .catch(error => window.LibFlixNotify?.('Kindle delivery failed: ' + error.message, 'error'))
         .finally(() => { sendingMd5 = null; });
     };

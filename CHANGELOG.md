@@ -22,9 +22,15 @@
 
 - Kept the navbar mounted across same-origin navigation while replacing page
   content, page-specific styles, and page-specific scripts.
-- Added History API back/forward support, View Transition fades where supported,
-  and automatic full-navigation fallback.
-- Delayed the shared LibFlix loader by 180 ms so fast cached routes do not flash.
+- Added History API back/forward support and automatic full-navigation fallback.
+- Removed root-level View Transition and body-entry fades so tab changes no
+  longer dim or flicker the entire page.
+- Kept the current content visible until the destination is ready and replaced
+  the full-screen internal-route loader with a delayed navbar progress line.
+- Added a bounded five-minute HTML cache that reuses completed and in-flight
+  intent fetches across recent category visits.
+- Preserved loaded cover state across page swaps so browser-cached images do not
+  replay their shimmer and opacity animations.
 - Limited intent prefetching to four concurrent documents, retained a bounded
   recent-page memory, and required 260 ms of stable pointer hover, keyboard
   focus, or touch intent.
@@ -44,6 +50,10 @@
 
 ### Reliable Send to Kindle
 
+- Removed MOBI and AZW/AZW3 editions from download results and format controls
+  because Send to Kindle does not accept them.
+- Added matching server-side validation so stale clients and direct job requests
+  cannot start an unsupported delivery.
 - Replaced the UI's long-lived streaming request with background Kindle jobs.
 - Persisted job state and ordered progress events in SQLite so any Gunicorn
   worker can answer browser polls.
@@ -66,13 +76,19 @@
   author/language/publisher/date/description/identifier metadata, including a
   cached canonical cover only when the EPUB has none. The largest displayed
   cover variant is reused before any network request.
-- Added PDF title and missing author/description metadata with `pypdf`, while
-  preserving proprietary MOBI/AZW internals.
+- Added PDF title and missing author/description metadata with `pypdf`.
 - Made metadata preparation fail open so malformed or encrypted containers are
   still delivered as their original bytes under the clean filename.
 
 ### Better download recommendations
 
+- Renamed the book-page section from `Download options` to `Download`.
+- Kept the best-ranked edition visible while collapsing remaining editions
+  behind an `Other options` disclosure without a redundant result count.
+- Added the cleaned attachment title and server-measured delivery duration to
+  the successful Send to Kindle notification.
+- Refined the completion notification with a check-circle status icon, clearer
+  title hierarchy, compact timing text, and restrained success styling.
 - Strengthened English-mode ranking against Chinese title/author metadata and
   demoted Chinese source branding without penalizing Chinese mode.
 - Increased Kindle suitability weighting for EPUB and applied stronger

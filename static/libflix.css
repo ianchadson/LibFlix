@@ -19,26 +19,6 @@
   --app-reading: 1120px;
 }
 
-@view-transition {
-  navigation: auto;
-}
-
-::view-transition-old(root) {
-  animation: libflixPageOut .14s ease both;
-}
-
-::view-transition-new(root) {
-  animation: libflixPageIn .2s ease both;
-}
-
-@keyframes libflixPageOut {
-  to { opacity: 0; transform: translateY(-3px); }
-}
-
-@keyframes libflixPageIn {
-  from { opacity: 0; transform: translateY(4px); }
-}
-
 * {
   box-sizing: border-box;
 }
@@ -114,6 +94,31 @@ select:focus-visible {
   background: rgba(10, 11, 13, .92) !important;
   box-shadow: 0 8px 28px rgba(0, 0, 0, .16);
   backdrop-filter: blur(12px);
+}
+
+.lib-nav::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent 0, var(--app-red) 45%, transparent 100%);
+  opacity: 0;
+  transform: translate3d(-55%, 0, 0) scaleX(.28);
+  transform-origin: center;
+  pointer-events: none;
+}
+
+body.is-navigating .lib-nav::after {
+  opacity: .72;
+  animation: appNavProgress .9s ease-in-out infinite;
+}
+
+@keyframes appNavProgress {
+  0% { transform: translate3d(-55%, 0, 0) scaleX(.28); }
+  55% { transform: translate3d(18%, 0, 0) scaleX(.42); }
+  100% { transform: translate3d(58%, 0, 0) scaleX(.24); }
 }
 
 .lib-nav-shell {
@@ -350,12 +355,16 @@ select:focus-visible {
   bottom: 20px;
   z-index: 11000;
   width: min(360px, calc(100vw - 32px));
-  padding: 12px 14px;
+  min-height: 70px;
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: center;
+  padding: 14px 16px;
   border: 1px solid var(--app-line-strong);
   border-radius: var(--app-radius);
-  background: #1a1c20;
+  background: #191b1f;
   color: #fff;
-  box-shadow: 0 18px 48px rgba(0, 0, 0, .5);
+  box-shadow: 0 20px 54px rgba(0, 0, 0, .56), 0 1px 0 rgba(255, 255, 255, .04) inset;
   opacity: 0;
   transform: translateY(10px);
   pointer-events: none;
@@ -372,7 +381,67 @@ select:focus-visible {
 }
 
 .app-toast.success {
-  border-color: rgba(53, 185, 121, .45);
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  border-color: rgba(53, 185, 121, .34);
+  background: #181c1c;
+  box-shadow: 0 20px 54px rgba(0, 0, 0, .56), 0 0 0 1px rgba(53, 185, 121, .05) inset;
+}
+
+.app-toast-icon {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(93, 211, 151, .25);
+  border-radius: 50%;
+  background: rgba(53, 185, 121, .11);
+  color: #76d9a7;
+}
+
+.app-toast-icon svg {
+  width: 22px;
+  height: 22px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.app-toast-content {
+  min-width: 0;
+}
+
+.app-toast-message {
+  color: #9da19f;
+  font-size: .7rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.app-toast-book {
+  margin-top: 4px;
+  display: -webkit-box;
+  overflow: hidden;
+  color: #fff;
+  font-size: .96rem;
+  font-weight: 770;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.app-toast-detail {
+  margin-top: 5px;
+  color: #6f8d7c;
+  font-size: .68rem;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
 }
 
 .app-transition {
@@ -1039,6 +1108,57 @@ footer {
 
 .edition-list[hidden] {
   display: none !important;
+}
+
+.edition-more {
+  min-width: 0;
+}
+
+.edition-more-summary {
+  width: max-content;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 4px;
+  color: #9b9ea5;
+  cursor: pointer;
+  font-size: .78rem;
+  font-weight: 680;
+  list-style: none;
+  user-select: none;
+}
+
+.edition-more-summary::-webkit-details-marker {
+  display: none;
+}
+
+.edition-more-summary:hover {
+  color: #fff;
+}
+
+.edition-more-summary svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform .16s ease;
+}
+
+.edition-more[open] .edition-more-summary svg {
+  transform: rotate(90deg);
+}
+
+.edition-more-list {
+  display: grid;
+  gap: 8px;
+}
+
+.edition-more:not([open]) > .edition-more-list {
+  display: none;
 }
 
 .edition-row {

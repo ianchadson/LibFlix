@@ -1130,10 +1130,16 @@ def source_metadata_language_penalty(book, preferred_language):
         return -140
     return 0
 
+HIDDEN_KINDLE_FORMATS = frozenset({"azw", "azw3", "mobi"})
+
+def is_visible_kindle_format(extension):
+    extension = re.sub(r"[^a-z0-9]", "", str(extension or "").casefold())
+    return extension not in HIDDEN_KINDLE_FORMATS
+
 def book_score(book, target_title="", target_author="", preferred_language=""):
     score = title_match_score(book.title, target_title)
     score += author_match_score(book.author, target_author)
-    fmt_scores = {"epub": 160, "pdf": 70, "mobi": 25, "azw3": 20, "txt": 12, "djvu": -20, "chm": -30}
+    fmt_scores = {"epub": 160, "pdf": 70, "txt": 12, "djvu": -20, "chm": -30}
     score += fmt_scores.get(book.ext.lower(), 0)
     if preferred_language:
         score += 80 if book_matches_language(book, preferred_language) else -200
@@ -2163,7 +2169,7 @@ def api_search():
     page = int(request.args.get("page", 1)) if request.args.get("page", "1").isdigit() else 1
     page = max(1, min(page, 500))
     fmt = request.args.get("format", "all").lower()
-    if fmt not in ("all", "epub", "pdf", "mobi"):
+    if fmt not in ("all", "epub", "pdf"):
         fmt = "all"
     default_download_lang = "Chinese" if get_book_lang() == "cn" else "English"
     lang = request.args.get("lang", default_download_lang)
@@ -2173,7 +2179,7 @@ def api_search():
     target_title = request.args.get("target_title", "").strip() or q
     target_author = request.args.get("target_author", "").strip()
     result_cache_key = (
-        f"download_search:v4:{q}:{sort}:{order}:{limit}:{page}:"
+        f"download_search:v5:{q}:{sort}:{order}:{limit}:{page}:"
         f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}"
     )
     cached_result = cache_get(result_cache_key, 900)
@@ -2227,6 +2233,8 @@ def api_search():
     fmt_filter = None if fmt == "all" else fmt
     filtered = []
     for b in books:
+        if not is_visible_kindle_format(b.ext):
+            continue
         if lang_filter and not book_matches_language(b, lang_filter):
             continue
         if fmt_filter and b.ext.lower() != fmt_filter.lower():
@@ -2681,6 +2689,7 @@ def _send_to_kindle_events(data):
     tmp_path = None
     prepared_path = None
     progress = 3
+    delivery_started = time.perf_counter()
 
     try:
         yield _kindle_progress("Preparing delivery", progress)
@@ -2787,7 +2796,14 @@ def _send_to_kindle_events(data):
             _close_smtp_connection(server)
 
         progress = 100
-        yield {"type": "complete", "success": True, "stage": "Sent to Kindle", "progress": progress}
+        yield {
+            "type": "complete",
+            "success": True,
+            "stage": "Sent to Kindle",
+            "progress": progress,
+            "title": title,
+            "elapsed_seconds": round(time.perf_counter() - delivery_started, 2),
+        }
     except smtplib.SMTPAuthenticationError:
         yield {
             "type": "error",
@@ -2820,6 +2836,9 @@ def validate_kindle_payload(data):
         return "Missing required fields"
     if not re.fullmatch(r"[a-fA-F0-9]{32}", str(data.get("md5", ""))):
         return "Invalid book identifier"
+    extension = re.sub(r"[^a-z0-9]", "", str(data.get("ext", "epub")).casefold()) or "epub"
+    if not is_visible_kindle_format(extension):
+        return "MOBI and AZW files are not supported by Send to Kindle"
     try:
         port = int(data.get("smtp_port", 587))
     except (TypeError, ValueError):
@@ -2859,6 +2878,7 @@ def validate_kindle_payload(data):
         data["ol_key"] = ""
     data["smtp_port"] = port
     data["smtp_host"] = host
+    data["ext"] = extension
     return ""
 
 def kindle_job_create():

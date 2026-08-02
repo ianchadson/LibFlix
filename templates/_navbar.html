@@ -69,7 +69,6 @@
   .cat-tabs { width:100%; max-width:100% !important; justify-content:flex-start; gap:4px !important; padding:0 0 2px; mask-image:linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent); }
   .lib-nav-main > .cat-tabs { min-width:0; }
   .cat-tab { padding:5px 11px !important; border-radius:999px !important; font-size:.74rem !important; line-height:1; }
-  body { animation: appPageIn .2s ease both; }
   body.is-leaving { cursor: progress; }
   .app-transition { position:fixed; inset:0; z-index:10000; display:flex; align-items:center; justify-content:center; background:rgba(15,15,15,.88); opacity:0; pointer-events:none; transition:opacity .1s ease; }
   body.is-leaving .app-transition { opacity:1; pointer-events:auto; }
@@ -121,9 +120,7 @@
   .quick-peek-loading { margin-top:10px; display:flex; align-items:center; gap:8px; color:rgba(255,255,255,.56); font-size:.74rem; }
   .quick-peek-spinner { width:15px; height:15px; border-radius:999px; border:2px solid rgba(229,9,20,.2); border-top-color:#e50914; animation:appSpin .72s linear infinite; }
   @keyframes appSpin { to { transform:rotate(360deg); } }
-  @keyframes appPageIn { from { opacity:.55; } to { opacity:1; } }
   @media (prefers-reduced-motion: reduce) {
-    body { animation:none; }
     .app-transition, .app-transition-core { transition:none; }
     .app-transition-spinner { animation:none; border-color:rgba(229,9,20,.45); }
   }
@@ -298,8 +295,15 @@
 <script>
   (() => {
     const LOADER_DELAY = 180;
+    const NAVIGATION_PROGRESS_DELAY = 320;
+    const PAGE_CACHE_LIMIT = 16;
+    const PAGE_CACHE_TTL = 5 * 60 * 1000;
     let transitionTimer = null;
+    let navigationProgressTimer = null;
     let navigationController = null;
+    const pageCache = new Map();
+    const pendingPages = new Map();
+    const loadedCoverUrls = new Set();
     const activateTransition = () => {
       const overlay = document.getElementById('appTransition');
       document.body.classList.add('is-leaving');
@@ -320,6 +324,18 @@
       document.body.classList.remove('is-leaving');
       overlay?.setAttribute('aria-hidden', 'true');
     };
+    const showNavigationProgress = () => {
+      if (navigationProgressTimer) window.clearTimeout(navigationProgressTimer);
+      navigationProgressTimer = window.setTimeout(() => {
+        document.body.classList.add('is-navigating');
+        navigationProgressTimer = null;
+      }, NAVIGATION_PROGRESS_DELAY);
+    };
+    const hideNavigationProgress = () => {
+      if (navigationProgressTimer) window.clearTimeout(navigationProgressTimer);
+      navigationProgressTimer = null;
+      document.body.classList.remove('is-navigating');
+    };
     const isInternalNavigation = href => {
       if (!href || href.startsWith('#') || href.startsWith('javascript:') || href.startsWith('mailto:')) return false;
       const url = new URL(href, window.location.href);
@@ -336,33 +352,66 @@
       const connection = navigator.connection || navigator.webkitConnection || navigator.mozConnection;
       return !(connection?.saveData || /(^|-)2g$/.test(connection?.effectiveType || ''));
     };
+    const pageCacheKey = href => {
+      const url = new URL(href, window.location.href);
+      return url.pathname + url.search;
+    };
+    const getCachedPage = href => {
+      const cacheKey = pageCacheKey(href);
+      const cached = pageCache.get(cacheKey);
+      if (!cached) return null;
+      if (Date.now() - cached.storedAt > PAGE_CACHE_TTL) {
+        pageCache.delete(cacheKey);
+        return null;
+      }
+      pageCache.delete(cacheKey);
+      pageCache.set(cacheKey, cached);
+      return cached.html;
+    };
+    const storeCachedPage = (href, html) => {
+      const cacheKey = pageCacheKey(href);
+      pageCache.delete(cacheKey);
+      pageCache.set(cacheKey, { html, storedAt: Date.now() });
+      while (pageCache.size > PAGE_CACHE_LIMIT) {
+        pageCache.delete(pageCache.keys().next().value);
+      }
+      return html;
+    };
+    const fetchPage = href => {
+      const cached = getCachedPage(href);
+      if (cached !== null) return Promise.resolve(cached);
+      const cacheKey = pageCacheKey(href);
+      if (pendingPages.has(cacheKey)) return pendingPages.get(cacheKey);
+      const url = new URL(href, window.location.href);
+      const request = fetch(url.href, {
+        headers: {
+          Accept: 'text/html',
+          'X-LibFlix-Navigation': 'partial',
+        },
+      }).then(async response => {
+        if (!response.ok) throw new Error('Navigation failed');
+        return storeCachedPage(url.href, await response.text());
+      }).finally(() => {
+        pendingPages.delete(cacheKey);
+      });
+      pendingPages.set(cacheKey, request);
+      return request;
+    };
     const prefetchPage = href => {
       if (!canPrefetchPages() || !isInternalNavigation(href)) return;
       const url = new URL(href, window.location.href);
       const cacheKey = url.pathname + url.search;
-      if (prefetchedPages.has(cacheKey) || activePrefetches >= 4) return;
+      if (getCachedPage(url.href) !== null || prefetchedPages.has(cacheKey) || activePrefetches >= 4) return;
       prefetchedPages.add(cacheKey);
       while (prefetchedPages.size > 32) {
         prefetchedPages.delete(prefetchedPages.values().next().value);
       }
       activePrefetches += 1;
-      const link = document.createElement('link');
-      link.rel = 'prefetch';
-      link.as = 'document';
-      link.href = url.href;
-      let settled = false;
-      let settleTimer = null;
-      const settle = () => {
-        if (settled) return;
-        settled = true;
-        if (settleTimer) window.clearTimeout(settleTimer);
+      fetchPage(url.href).catch(() => {
+        prefetchedPages.delete(cacheKey);
+      }).finally(() => {
         activePrefetches = Math.max(0, activePrefetches - 1);
-        link.remove();
-      };
-      link.addEventListener('load', settle, { once: true });
-      link.addEventListener('error', settle, { once: true });
-      document.head.appendChild(link);
-      settleTimer = window.setTimeout(settle, 15000);
+      });
     };
     const prefetchLink = link => {
       if (!link || link.hasAttribute('data-no-prefetch')) return;
@@ -425,6 +474,34 @@
       for (const script of scripts) await ensurePageScript(script);
     };
 
+    const coverUrl = image => {
+      const source = image.currentSrc || image.getAttribute('src');
+      if (!source) return '';
+      try {
+        return new URL(source, window.location.href).href;
+      } catch {
+        return source;
+      }
+    };
+    const rememberLoadedCover = image => {
+      if (!(image instanceof HTMLImageElement) || !image.closest('.book-card, .hero-book, .edition-cover-frame, .detail-cover-wrap')) return;
+      const source = coverUrl(image);
+      if (!source) return;
+      loadedCoverUrls.add(source);
+      while (loadedCoverUrls.size > 400) {
+        loadedCoverUrls.delete(loadedCoverUrls.values().next().value);
+      }
+      image.classList.add('loaded');
+    };
+    const restoreLoadedCovers = root => {
+      root.querySelectorAll('img').forEach(image => {
+        const source = coverUrl(image);
+        if (source && loadedCoverUrls.has(source)) image.classList.add('loaded');
+      });
+    };
+    document.querySelectorAll('img.loaded').forEach(rememberLoadedCover);
+    document.addEventListener('load', event => rememberLoadedCover(event.target), true);
+
     const replacePage = async (nextDocument, url, push) => {
       const nextMain = nextDocument.getElementById('mainContent');
       const currentMain = document.getElementById('mainContent');
@@ -438,7 +515,12 @@
       document.title = nextDocument.title;
       document.documentElement.lang = nextDocument.documentElement.lang || 'en';
       document.body.className = nextDocument.body.className;
-      currentMain.replaceWith(document.importNode(nextMain, true));
+      const importedMain = document.importNode(nextMain, true);
+      restoreLoadedCovers(importedMain);
+      currentMain.replaceWith(importedMain);
+      importedMain.querySelectorAll('img').forEach(image => {
+        if (image.complete && image.naturalWidth > 0) rememberLoadedCover(image);
+      });
       const currentFooter = document.querySelector('body > .app-footer');
       const nextFooter = nextDocument.querySelector('body > .app-footer');
       if (currentFooter && nextFooter) currentFooter.replaceWith(document.importNode(nextFooter, true));
@@ -460,31 +542,19 @@
       if (navigationController) navigationController.abort();
       navigationController = new AbortController();
       const controller = navigationController;
-      showTransition();
+      showNavigationProgress();
       try {
-        const response = await fetch(url.href, {
-          signal: controller.signal,
-          headers: {
-            Accept: 'text/html',
-            'X-LibFlix-Navigation': 'partial',
-          },
-        });
-        if (!response.ok) throw new Error('Navigation failed');
-        const html = await response.text();
+        const html = await fetchPage(url.href);
+        if (controller.signal.aborted) throw new DOMException('Navigation superseded', 'AbortError');
         const nextDocument = new DOMParser().parseFromString(html, 'text/html');
-        const update = () => replacePage(nextDocument, url.href, push);
-        if (document.startViewTransition && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-          await document.startViewTransition(update).finished;
-        } else {
-          await update();
-        }
+        await replacePage(nextDocument, url.href, push);
       } catch (error) {
         if (error.name === 'AbortError') return;
         window.location.assign(url.href);
         return;
       } finally {
         if (navigationController === controller) navigationController = null;
-        hideTransition();
+        hideNavigationProgress();
       }
     };
 
@@ -735,14 +805,41 @@
     });
     const appToast = document.getElementById('appToast');
     let toastTimer = null;
-    window.LibFlixNotify = (message, type = '') => {
+    window.LibFlixNotify = (message, type = '', details = null) => {
       if (!appToast) return;
       if (toastTimer) window.clearTimeout(toastTimer);
-      appToast.textContent = message || '';
+      const metadata = details && typeof details === 'object' ? details : {};
+      appToast.replaceChildren();
+      if (type === 'success') {
+        const iconNode = document.createElement('span');
+        iconNode.className = 'app-toast-icon';
+        iconNode.setAttribute('aria-hidden', 'true');
+        iconNode.innerHTML = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"></circle><path d="m8 12 2.6 2.6L16.5 9"></path></svg>';
+        appToast.appendChild(iconNode);
+      }
+      const contentNode = document.createElement('div');
+      contentNode.className = 'app-toast-content';
+      const messageNode = document.createElement('div');
+      messageNode.className = 'app-toast-message';
+      messageNode.textContent = message || '';
+      contentNode.appendChild(messageNode);
+      if (metadata.title) {
+        const titleNode = document.createElement('div');
+        titleNode.className = 'app-toast-book';
+        titleNode.textContent = metadata.title;
+        contentNode.appendChild(titleNode);
+      }
+      if (metadata.detail) {
+        const detailNode = document.createElement('div');
+        detailNode.className = 'app-toast-detail';
+        detailNode.textContent = metadata.detail;
+        contentNode.appendChild(detailNode);
+      }
+      appToast.appendChild(contentNode);
       appToast.className = 'app-toast visible' + (type ? ' ' + type : '');
       toastTimer = window.setTimeout(() => {
         appToast.classList.remove('visible');
-      }, 3200);
+      }, metadata.title || metadata.detail ? 4800 : 3200);
     };
     document.addEventListener('click', event => {
       const target = event.target;

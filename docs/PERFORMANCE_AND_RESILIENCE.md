@@ -47,19 +47,21 @@ works in Flask and the browser without edge-specific configuration.
 
 The navbar owns a small persistent app shell:
 
-1. Pointer intent starts at most four concurrent same-origin prefetches after a
-   stable hover delay; recently prefetched pages are remembered in a bounded set.
-2. A normal internal click fetches the destination HTML.
+1. Pointer intent starts at most four concurrent same-origin fetches after a
+   stable hover delay; up to 16 completed pages remain in memory for five minutes.
+2. A normal internal click reuses a completed or in-flight page request.
 3. The existing navbar remains mounted while the main content and footer swap.
 4. Page-specific CSS and JavaScript are synchronized.
 5. History and `popstate` use the same path.
 6. Any unsupported response or JavaScript error falls back to normal browser
    navigation.
 
-The route loader waits 180 ms before becoming visible. Fast local transitions
-therefore do not flash a loading overlay, while slower transitions still provide
-feedback. Language changes use a full navigation so the server-selected locale
-and cookie remain authoritative.
+Internal routes do not fade or cover the document. The current screen remains
+visible until the destination is ready, and a slim navbar progress line appears
+only after 320 ms. Loaded cover URLs are remembered so cached images do not
+restart their opacity animation after a content swap. Language changes use a
+full navigation and the shared overlay so the server-selected locale and cookie
+remain authoritative.
 
 ## Open Library Gateway
 
@@ -171,7 +173,7 @@ Ranking is deterministic and evaluates:
 - exact and approximate title agreement;
 - author agreement;
 - active file-language agreement;
-- EPUB, PDF, MOBI, and AZW3 suitability;
+- EPUB and PDF suitability;
 - plausible file size;
 - publisher, page, and cover completeness;
 - a small publication-year tie-breaker.
@@ -182,6 +184,8 @@ Chinese mode does not apply those penalties.
 
 The selected result displays short evidence labels such as `Strong title
 match`, `Author match`, `English`, `Kindle-ready EPUB`, and `Easy to send`.
+Only that selected result is initially expanded; remaining editions stay behind
+the native `Other options` disclosure to reduce initial visual load.
 
 ## Background Send to Kindle
 
@@ -206,6 +210,10 @@ the status connection remains unavailable, the UI keeps the job id and offers
 `Check status`; it does not start a duplicate delivery or claim that the
 background send failed.
 
+The terminal completion event includes the title returned by attachment
+preparation and elapsed seconds measured by the worker. The success toast shows
+that cleaned title and formats the duration as seconds or minutes and seconds.
+
 Source-file downloads use identity encoding and verify the completed byte count
 against `Content-Length` or `Content-Range`. An interrupted response makes up to
 three bounded continuation attempts with `Range`, validates the returned start
@@ -222,7 +230,6 @@ Kindle-friendly attachment:
 |---|---|
 | EPUB | Canonical title; missing author, language, publisher, date, description, Open Library identifier, and cover |
 | PDF | Canonical title; missing author and subject/description |
-| MOBI/AZW/AZW3 | Canonical filename only; proprietary internals are preserved |
 
 EPUB repair edits only the package metadata inside the existing archive. It
 preserves book content, keeps `mimetype` first and uncompressed, reuses an
@@ -230,6 +237,10 @@ existing cover, and loads a canonical cover only when one is absent. The worker
 reuses the largest locally cached cover variant already displayed by LibFlix;
 the network is used only when no cached variant exists. PDF metadata is written
 with `pypdf`; no page is inserted or removed.
+
+MOBI and AZW/AZW3 candidates are filtered before ranking and rendering because
+Send to Kindle does not accept them. The delivery API rejects the same formats
+as a stale-client safeguard.
 
 Preparation is fail-open. A malformed, encrypted, or unusual container logs a
 diagnostic and continues with the original bytes under the clean filename. This

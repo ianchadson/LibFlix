@@ -1,6 +1,8 @@
 import unittest
+from unittest.mock import patch
 
-from app import book_score, rank_download_books, recommendation_reasons
+import app
+from app import book_score, is_visible_kindle_format, rank_download_books, recommendation_reasons
 from downloaders.base import Book
 
 
@@ -77,6 +79,57 @@ class DownloadRankingTests(unittest.TestCase):
         self.assertIn("Author match", reasons)
         self.assertIn("Kindle-ready EPUB", reasons)
         self.assertLessEqual(len(reasons), 4)
+
+    def test_mobi_and_azw_formats_are_hidden(self):
+        self.assertFalse(is_visible_kindle_format("mobi"))
+        self.assertFalse(is_visible_kindle_format("AZW"))
+        self.assertFalse(is_visible_kindle_format("azw3"))
+        self.assertTrue(is_visible_kindle_format("epub"))
+        self.assertTrue(is_visible_kindle_format("pdf"))
+
+    def test_download_search_excludes_unsupported_kindle_formats(self):
+        books = [
+            Book(book_id="a" * 32, title="Book", language="English", ext="epub"),
+            Book(book_id="b" * 32, title="Book", language="English", ext="mobi"),
+            Book(book_id="c" * 32, title="Book", language="English", ext="azw3"),
+            Book(book_id="d" * 32, title="Book", language="English", ext="pdf"),
+        ]
+        with (
+            patch.object(app.DOWNLOADER, "search", return_value=(books, len(books))),
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_cache_get", return_value=None),
+            patch.object(app, "cache_set"),
+            patch.object(app, "disk_cache_set"),
+            app.app.test_client() as client,
+        ):
+            response = client.get(
+                "/api/search?q=unsupported-format-filter-test&lang=all&dedup=0"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {book["ext"] for book in response.get_json()["books"]},
+            {"epub", "pdf"},
+        )
+
+        with (
+            patch.object(app.DOWNLOADER, "search", return_value=(books, len(books))),
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_cache_get", return_value=None),
+            patch.object(app, "cache_set"),
+            patch.object(app, "disk_cache_set"),
+            app.app.test_client() as client,
+        ):
+            legacy_response = client.get(
+                "/api/search?q=legacy-mobi-filter-test&format=mobi&lang=all&dedup=0"
+            )
+
+        self.assertEqual(legacy_response.status_code, 200)
+        self.assertEqual(legacy_response.get_json()["format"], "all")
+        self.assertEqual(
+            {book["ext"] for book in legacy_response.get_json()["books"]},
+            {"epub", "pdf"},
+        )
 
 
 if __name__ == "__main__":

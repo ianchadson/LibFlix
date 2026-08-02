@@ -351,7 +351,7 @@ Params:
 | `sort` | `y`, `id`, `title`, `author`, `filesize`, `extension`, `time_added` |
 | `order` | `ASC`, `DESC` |
 | `limit` | `25`, `50`, `100` |
-| `format` | `epub`, `pdf`, `mobi`, `all` |
+| `format` | `epub`, `pdf`, `all` |
 | `lang` | `English`, `all` |
 | `dedup` | `0`, `1` |
 | `page` | integer |
@@ -475,20 +475,23 @@ window.LibFlixLoading = { show: showTransition, hide: hideTransition };
 
 Same-origin links use a persistent app-shell navigation path. The destination
 document is fetched, the existing navbar stays mounted, and `<main>` plus the
-footer are replaced inside an optional View Transition. Page-specific style and
-script tags are synchronized, body/title/language state is updated, and browser
-history uses the same path on `popstate`. Unsupported responses or runtime
-failures fall back to a normal document navigation.
+footer are replaced atomically after the response is ready. Page-specific style
+and script tags are synchronized, body/title/language state is updated, and
+browser history uses the same path on `popstate`. There is no document-level
+fade: the current screen remains stable until replacement. Unsupported responses
+or runtime failures fall back to a normal document navigation.
 
-The shared loader starts after a 180 ms delay. Fast cached transitions therefore
-do not flash; slower transitions still provide feedback. The prefetcher waits
-for 260 ms of pointer intent, caps concurrent speculative documents at four,
-and also supports keyboard/touch intent. Language changes intentionally use a
-full document request so the server-selected locale remains authoritative.
+The navigation progress line starts after 320 ms and is contained by the mounted
+navbar, so fast cached transitions have no visual loading state and slower
+responses do not cover the current content. Full-document language changes keep
+the shared LibFlix overlay because the server-selected locale remains
+authoritative.
 
-The page-entry animation fades opacity only. It deliberately does not transform
-`body`, because a transformed page changes the containing block for fixed
-overlays and causes modals or quick peek to drift after scrolling.
+Pointer, focus, and touch intent populate a 16-entry, five-minute HTML cache with
+at most four speculative requests at once. Navigation reuses both completed and
+in-flight requests. A bounded set of loaded cover URLs lets imported card markup
+start visible when the browser already has that image, avoiding a second
+opacity/shimmer cycle.
 
 Each page registers a cleanup callback for its observers, event listeners,
 timers, and active requests before the app shell replaces it.
@@ -549,11 +552,18 @@ component. Each row has stable cover geometry, a two-line title allowance,
 author/publisher context, compact format metadata, and explicit Download and
 Kindle actions. The API globally ranks the filtered result set before explicitly
 flagging one row as `best_match`; the renderer does not infer that the source's
-first row is best.
+first row is best. The flagged row renders as the persistent primary option;
+remaining editions live in a closed native `<details>` disclosure and are
+expanded automatically if one contains an active resumed delivery.
+
+MOBI and AZW/AZW3 candidates are removed before deduplication and ranking, so
+unsupported Send to Kindle formats cannot appear as download actions or become
+the recommended edition. The job API independently rejects those formats to
+protect against stale clients or direct requests.
 
 Ranking is dominated by normalized title similarity, including exact,
 containment, token-overlap, and sequence checks. Author agreement is the next
-strongest signal. Language agreement, EPUB/MOBI/AZW3 suitability, plausible file
+strongest signal. Language agreement, EPUB/PDF suitability, plausible file
 size, publisher/pages/cover completeness, and a bounded recency tie-breaker
 follow. In English mode, Han text in title/author metadata receives a decisive
 penalty and Chinese publisher branding receives a smaller source-quality
@@ -580,6 +590,8 @@ The renderer also:
 - restores a running job from `sessionStorage` after page navigation
 - switches to an indeterminate bar only when the source omits content length
 - preserves an explicit success or retryable error state at the end of delivery
+- reports the prepared title and measured elapsed seconds in the completion
+  event so the success toast reflects the file that was actually sent
 - hides pagination when `total_pages <= 1`
 - keeps edition actions inside the viewport on compact screens
 - maps timeouts and network errors to user-facing recovery messages
@@ -589,9 +601,9 @@ Before SMTP upload, `book_preparation.py` applies a clean canonical filename.
 For EPUB it edits only the OPF package: title is canonicalized, absent metadata
 is filled, and a JPEG cover is added only if no cover declaration or cover image
 already exists. The archive keeps `mimetype` first and uncompressed. PDF title
-and missing author/description fields are updated through `pypdf`. MOBI/AZW
-internals are not rewritten. Any parsing or encryption problem returns the
-original file, so preparation cannot turn a usable download into a failed send.
+and missing author/description fields are updated through `pypdf`. Any parsing
+or encryption problem returns the original file, so preparation cannot turn a
+usable download into a failed send.
 
 ### Rendering Performance
 
@@ -601,9 +613,9 @@ download, and local loading surfaces keep bounded animation, while
 `content-visibility` skips work for distant homepage shelves. Fixed dimensions
 prevent async covers and result content from shifting the surrounding layout.
 
-The navbar performs document prefetch only after 260 ms of pointer intent or an
-explicit keyboard/touch interaction, and keeps at most four prefetches active
-with a bounded recent-page memory. There is no idle sweep of category pages.
+The navbar fetches documents only after 260 ms of pointer intent or an explicit
+keyboard/touch interaction, keeps at most four prefetches active, and stores up
+to 16 recent pages for five minutes. There is no idle sweep of category pages.
 Book-card intent may prefetch that one clean book URL. Book cards also populate
 an in-process hint index, so their detail route can render title, author, and
 cover without making an Open Library request. Full descriptions, localized
