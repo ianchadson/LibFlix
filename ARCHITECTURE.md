@@ -90,6 +90,13 @@ Navbar search form submits to /discover
 This route searches Open Library discovery data only. It does not search the
 download source directly.
 
+Discovery uses an explicit Open Library language query first. If it produces
+no usable cards, LibFlix retries without the language clause and applies a
+local language guard. This recovers newly catalogued works whose Open Library
+records do not yet contain language or cover metadata, while rejecting records
+explicitly tagged in another language. Coverless fallback matches use the
+standard placeholder rather than disappearing.
+
 ### Book Preview (`GET /book/<work_id>`)
 
 ```text

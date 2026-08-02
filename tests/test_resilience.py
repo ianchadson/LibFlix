@@ -115,6 +115,88 @@ class CategoryFallbackTests(unittest.TestCase):
         self.assertGreaterEqual(total_pages, 1)
 
 
+class DiscoveryFallbackTests(unittest.TestCase):
+    def setUp(self):
+        app.CACHE.clear()
+
+    def tearDown(self):
+        app.CACHE.clear()
+
+    @staticmethod
+    def energy_game_record(**overrides):
+        record = {
+            "key": "/works/OL45347056W",
+            "title": "The Energy Game",
+            "author_name": ["Amantha Imber"],
+            "language": [],
+            "cover_i": None,
+        }
+        record.update(overrides)
+        return record
+
+    def test_sparse_english_work_is_recovered_without_language_or_cover(self):
+        responses = [
+            {"numFound": 0, "docs": []},
+            {"numFound": 1, "docs": [self.energy_game_record()]},
+        ]
+        with patch.object(app, "ol_get", side_effect=responses) as ol_get:
+            books, total, total_pages = app.fetch_discovery_books(
+                "the energy game amantha imber",
+                page=1,
+                lang="en",
+            )
+
+        self.assertEqual(len(books), 1)
+        self.assertEqual(books[0]["title"], "The Energy Game")
+        self.assertEqual(books[0]["author"], "Amantha Imber")
+        self.assertEqual(books[0]["ol_key"], "/works/OL45347056W")
+        self.assertEqual(books[0]["cover_url"], "")
+        self.assertEqual((total, total_pages), (1, 1))
+        self.assertEqual(ol_get.call_count, 2)
+        self.assertNotIn("language:", ol_get.call_args_list[1].args[1]["q"])
+
+    def test_fallback_rejects_explicit_wrong_language(self):
+        french = self.energy_game_record(
+            key="/works/OL2W",
+            title="The Energy Game French Edition",
+            language=["fre"],
+        )
+        responses = [
+            {"numFound": 0, "docs": []},
+            {"numFound": 2, "docs": [french, self.energy_game_record()]},
+        ]
+        with patch.object(app, "ol_get", side_effect=responses):
+            books, _, _ = app.fetch_discovery_books("energy game", lang="en")
+
+        self.assertEqual([book["ol_key"] for book in books], ["/works/OL45347056W"])
+
+    def test_chinese_mode_does_not_accept_sparse_english_title(self):
+        responses = [
+            {"numFound": 0, "docs": []},
+            {"numFound": 1, "docs": [self.energy_game_record()]},
+        ]
+        with patch.object(app, "ol_get", side_effect=responses):
+            books, total, total_pages = app.fetch_discovery_books(
+                "the energy game amantha imber",
+                lang="cn",
+            )
+
+        self.assertEqual(books, [])
+        self.assertEqual((total, total_pages), (1, 1))
+
+    def test_usable_strict_results_do_not_trigger_second_request(self):
+        strict = self.energy_game_record(language=["eng"], cover_i=123)
+        with patch.object(
+            app,
+            "ol_get",
+            return_value={"numFound": 1, "docs": [strict]},
+        ) as ol_get:
+            books, _, _ = app.fetch_discovery_books("energy", lang="en")
+
+        self.assertEqual(len(books), 1)
+        ol_get.assert_called_once()
+
+
 class BookApiFallbackTests(unittest.TestCase):
     def test_book_api_serves_local_fallback_while_refreshing(self):
         fallback = {

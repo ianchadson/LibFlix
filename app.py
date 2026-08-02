@@ -548,6 +548,34 @@ def record_has_lang(record, lang=None):
     languages = record.get("language") or []
     return ol_lang in languages
 
+def search_record_language_codes(record):
+    codes = set()
+    for field in ("language", "languages"):
+        values = record.get(field) or []
+        if not isinstance(values, list):
+            values = [values]
+        for value in values:
+            if isinstance(value, dict):
+                value = value.get("key") or value.get("code") or ""
+            code = str(value or "").strip().lower().rsplit("/", 1)[-1]
+            if code:
+                codes.add(code)
+    return codes
+
+def discovery_fallback_matches_language(record, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    desired = BOOK_LANG_CONFIG[lang]["ol_lang"]
+    records = [record, *((record.get("editions") or {}).get("docs") or [])]
+    known_codes = set()
+    for candidate in records:
+        codes = search_record_language_codes(candidate)
+        known_codes.update(codes)
+        if desired in codes:
+            return True
+    if known_codes:
+        return False
+    return title_matches_lang(record.get("title", ""), lang)
+
 def first_matching_edition(w, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     editions = (w.get("editions") or {}).get("docs", [])
@@ -766,7 +794,7 @@ def resolve_english_title(ol_key):
     disk_cache_set(ckey, result)
     return title
 
-def extract_book(w, lang=None):
+def extract_book(w, lang=None, allow_missing_cover=False):
     lang = lang or DEFAULT_BOOK_LANG
     edition = first_matching_edition(w, lang)
     title = (edition or {}).get("title") or w.get("title", "")
@@ -777,7 +805,7 @@ def extract_book(w, lang=None):
     if lang == "cn" and not (title_matches_lang(title, lang) or record_has_lang(w, lang) or record_has_lang(edition or {}, lang)):
         return None
     cover_id = edition_cover_id(edition or {}) or w.get("cover_i") or w.get("cover_id")
-    if not cover_id and lang != "cn":
+    if not cover_id and lang != "cn" and not allow_missing_cover:
         return None
     author = ""
     authors = w.get("author_name") or w.get("authors", [])
@@ -1008,7 +1036,7 @@ def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
 
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:{lang}:{q}:{page}"
+    ckey = f"discover:v2:{lang}:{q}:{page}"
     cached = cache_get(ckey, 900)
     if cached:
         return cached
@@ -1021,6 +1049,30 @@ def fetch_discovery_books(q, page=1, lang=None):
         b = extract_book(w, lang)
         if b:
             books.append(b)
+            if len(books) >= 30:
+                break
+
+    # New and sparsely catalogued works are often missing Open Library's
+    # language and cover fields. Retry only when the strict search produced no
+    # usable cards, then validate known language metadata or title script
+    # locally before accepting a result.
+    if not books:
+        fallback = ol_get("/search.json", {
+            "q": q,
+            "limit": limit,
+            "page": page,
+            "fields": OL_BOOK_FIELDS,
+        })
+        total = fallback.get("numFound", 0) if fallback else total
+        seen_keys = set()
+        for w in (fallback or {}).get("docs", [])[:limit]:
+            if not discovery_fallback_matches_language(w, lang):
+                continue
+            b = extract_book(w, lang, allow_missing_cover=True)
+            if not b or book_seen(b, seen_keys):
+                continue
+            books.append(b)
+            remember_book(b, seen_keys)
             if len(books) >= 30:
                 break
     total_pages = min(25, max(1, (total + limit - 1) // limit))

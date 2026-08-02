@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-08-02 - Resilient search for newly catalogued books
+
+### Fixed
+
+- Discovery now retries an unqualified Open Library query when the strict
+  language query produces no usable books.
+- Sparse works without language or cover metadata can appear with a cover
+  placeholder instead of being silently dropped.
+- The fallback rejects explicitly mismatched languages and keeps English and
+  Chinese discovery isolated.
+- Versioned the discovery result cache so previously cached empty searches do
+  not mask recovered books.
+
 ## 2026-07-31 - Local-first performance and resilient delivery
 
 ### Faster page and metadata loading
