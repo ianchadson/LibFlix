@@ -90,12 +90,12 @@ Navbar search form submits to /discover
 This route searches Open Library discovery data only. It does not search the
 download source directly.
 
-Discovery uses an explicit Open Library language query first. If it produces
-no usable cards, LibFlix retries without the language clause and applies a
-local language guard. This recovers newly catalogued works whose Open Library
-records do not yet contain language or cover metadata, while rejecting records
-explicitly tagged in another language. Coverless fallback matches use the
-standard placeholder rather than disappearing.
+Discovery uses Open Library's unqualified relevance query, then applies a local
+language guard to every record. This avoids hiding newly catalogued works whose
+Open Library records do not yet contain language or cover metadata, while still
+rejecting records explicitly tagged in another language. Coverless matches use
+the standard placeholder rather than disappearing, and only one upstream search
+is required per discovery page.
 
 ### Book Preview (`GET /book/<work_id>`)
 
@@ -694,7 +694,7 @@ and WebKit scrollbar hiding rules.
 | CN English display title | memory + SQLite | `english_title:v1:<ol_key>` | 30 days |
 | Assembled book detail | memory + SQLite | `book_detail:v3:<lang>:<work>` | 7 days fresh; up to 90 days stale |
 | Similar books | memory + SQLite | `similar:v2:...` | 7 days fresh; up to 30 days stale |
-| Download search results | memory + SQLite | `download_search:v4:...` | 15 minutes fresh; stale fallback |
+| Download search results | memory + SQLite | `download_search:v6:...` | 15 minutes fresh; stale fallback |
 | Homepage shelves | memory | `shelves_{lang}_{mode}` | 1 hour |
 | Homepage shelves | disk | `shelf_cache_{lang}_{mode}.json` | immediate restart hydration; stale after 6 hours |
 | Cover images | disk + browser | `covers/<source>/<hash>-<size>.*` | persistent disk; 30 days in browser |

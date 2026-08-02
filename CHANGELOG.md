@@ -4,14 +4,19 @@
 
 ### Fixed
 
-- Discovery now retries an unqualified Open Library query when the strict
-  language query produces no usable books.
+- Discovery now uses one unqualified Open Library relevance query and validates
+  each result's language locally, so sparse records are not hidden behind a
+  strict upstream language clause.
 - Sparse works without language or cover metadata can appear with a cover
   placeholder instead of being silently dropped.
-- The fallback rejects explicitly mismatched languages and keeps English and
-  Chinese discovery isolated.
+- Local validation rejects explicitly mismatched languages and keeps English
+  and Chinese discovery isolated.
 - Versioned the discovery result cache so previously cached empty searches do
   not mask recovered books.
+- Cold book-detail requests now report that metadata is refreshing, allowing
+  the page to retry instead of treating a first-time work as permanently absent.
+- Download lookup waits for a real work title and author, then rejects unrelated
+  editions below the title and author relevance thresholds.
 
 ## 2026-07-31 - Local-first performance and resilient delivery
 

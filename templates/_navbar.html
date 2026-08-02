@@ -24,7 +24,7 @@
   .search-bar.open, .search-bar:focus-within { width:min(390px, 36vw); max-width:390px; background:rgba(255,255,255,.105); border-color:rgba(255,255,255,.18); box-shadow:0 12px 28px rgba(0,0,0,.18); }
   .search-bar input { height:34px !important; min-width:0; border:0 !important; border-radius:5px !important; background:transparent !important; padding:0 11px !important; font-size:.9rem !important; opacity:0; transform:translateX(-6px); transition:opacity .16s ease, transform .16s ease, flex-basis .16s ease, width .16s ease; }
   .search-bar:not(.open):not(:focus-within) input { width:0 !important; flex:0 0 0 !important; padding:0 !important; }
-  .search-bar.open input, .search-bar:focus-within input { opacity:1; transform:none; }
+  .search-bar.open input, .search-bar:focus-within input { width:0 !important; flex:1 1 0 !important; opacity:1; transform:none; }
   .search-bar input:focus, .search-bar input:focus-visible { outline:0 !important; box-shadow:none !important; background:transparent !important; }
   .search-bar button { height:34px; min-width:34px; border-radius:5px !important; padding:0 !important; margin-left:0 !important; font-size:0 !important; font-weight:700; display:inline-flex; align-items:center; justify-content:center; background:transparent !important; border:0 !important; color:#fff !important; }
   .search-bar.open button, .search-bar:focus-within button { min-width:34px; margin-left:4px !important; font-size:0 !important; }

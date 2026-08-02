@@ -49,10 +49,10 @@ No API key is required. Open Library is the only discovery backend.
 
 - **Open Library discovery** - browsing, shelves, categories, metadata, covers,
   similar books, and discovery search all use Open Library with no API key.
-- **Sparse-record recovery** - when Open Library has a new book but has not yet
-  assigned its language or cover metadata, discovery performs a guarded
-  fallback so the title remains searchable without mixing explicit
-  foreign-language records into EN or CN results.
+- **Sparse-record recovery** - discovery validates language locally so newly
+  catalogued Open Library works remain searchable before language or cover
+  metadata has been assigned, without mixing explicitly foreign-language
+  records into EN or CN results.
 - **Consistent CN title presentation** - CN shelves and hero items use stable
   English edition titles when Open Library provides them. Book pages pair that
   title with a verified Chinese title, while download rows preserve the exact

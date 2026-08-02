@@ -2,7 +2,13 @@ import unittest
 from unittest.mock import patch
 
 import app
-from app import book_score, is_visible_kindle_format, rank_download_books, recommendation_reasons
+from app import (
+    book_score,
+    download_book_is_relevant,
+    is_visible_kindle_format,
+    rank_download_books,
+    recommendation_reasons,
+)
 from downloaders.base import Book
 
 
@@ -103,7 +109,7 @@ class DownloadRankingTests(unittest.TestCase):
             app.app.test_client() as client,
         ):
             response = client.get(
-                "/api/search?q=unsupported-format-filter-test&lang=all&dedup=0"
+                "/api/search?q=unsupported-format-filter-test&target_title=Book&lang=all&dedup=0"
             )
 
         self.assertEqual(response.status_code, 200)
@@ -121,7 +127,7 @@ class DownloadRankingTests(unittest.TestCase):
             app.app.test_client() as client,
         ):
             legacy_response = client.get(
-                "/api/search?q=legacy-mobi-filter-test&format=mobi&lang=all&dedup=0"
+                "/api/search?q=legacy-mobi-filter-test&target_title=Book&format=mobi&lang=all&dedup=0"
             )
 
         self.assertEqual(legacy_response.status_code, 200)
@@ -130,6 +136,56 @@ class DownloadRankingTests(unittest.TestCase):
             {book["ext"] for book in legacy_response.get_json()["books"]},
             {"epub", "pdf"},
         )
+
+    def test_unrelated_book_cannot_be_selected_for_specific_target(self):
+        unrelated = Book(
+            book_id="a" * 32,
+            title="Artemis Fowl Book 1",
+            author="Eoin Colfer",
+            language="English",
+            ext="epub",
+        )
+        correct = Book(
+            book_id="b" * 32,
+            title="The Art of Simple Living",
+            author="Masuno, Shunmyo",
+            language="English",
+            ext="epub",
+        )
+
+        self.assertFalse(
+            download_book_is_relevant(
+                unrelated,
+                "The Art of Simple Living",
+                "Shunmyo Masuno",
+            )
+        )
+        self.assertTrue(
+            download_book_is_relevant(
+                correct,
+                "The Art of Simple Living",
+                "Shunmyo Masuno",
+            )
+        )
+
+        with (
+            patch.object(app.DOWNLOADER, "search", return_value=([unrelated, correct], 2)),
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_cache_get", return_value=None),
+            patch.object(app, "cache_set"),
+            patch.object(app, "disk_cache_set"),
+            app.app.test_client() as client,
+        ):
+            response = client.get(
+                "/api/search?q=The+Art+of+Simple+Living+Shunmyo+Masuno"
+                "&target_title=The+Art+of+Simple+Living"
+                "&target_author=Shunmyo+Masuno&lang=English&dedup=0"
+            )
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([book["title"] for book in payload["books"]], [correct.title])
+        self.assertTrue(payload["books"][0]["best_match"])
 
 
 if __name__ == "__main__":

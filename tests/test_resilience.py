@@ -135,11 +135,11 @@ class DiscoveryFallbackTests(unittest.TestCase):
         return record
 
     def test_sparse_english_work_is_recovered_without_language_or_cover(self):
-        responses = [
-            {"numFound": 0, "docs": []},
-            {"numFound": 1, "docs": [self.energy_game_record()]},
-        ]
-        with patch.object(app, "ol_get", side_effect=responses) as ol_get:
+        with patch.object(
+            app,
+            "ol_get",
+            return_value={"numFound": 1, "docs": [self.energy_game_record()]},
+        ) as ol_get:
             books, total, total_pages = app.fetch_discovery_books(
                 "the energy game amantha imber",
                 page=1,
@@ -152,8 +152,35 @@ class DiscoveryFallbackTests(unittest.TestCase):
         self.assertEqual(books[0]["ol_key"], "/works/OL45347056W")
         self.assertEqual(books[0]["cover_url"], "")
         self.assertEqual((total, total_pages), (1, 1))
-        self.assertEqual(ol_get.call_count, 2)
-        self.assertNotIn("language:", ol_get.call_args_list[1].args[1]["q"])
+        ol_get.assert_called_once()
+        self.assertNotIn("language:", ol_get.call_args.args[1]["q"])
+
+    def test_art_of_simple_living_sparse_work_stays_in_discovery_results(self):
+        records = [
+            self.energy_game_record(
+                key="/works/OL21195178W",
+                title="Zen: The Art of Simple Living",
+                author_name=["Shunmyo Masuno"],
+                language=["eng"],
+                cover_i=123,
+            ),
+            self.energy_game_record(
+                key="/works/OL20153193W",
+                title="The Art of Simple Living",
+                author_name=["Shunmyo Masuno"],
+            ),
+        ]
+        with patch.object(
+            app,
+            "ol_get",
+            return_value={"numFound": len(records), "docs": records},
+        ):
+            books, _, _ = app.fetch_discovery_books(
+                "The Art of Simple Living",
+                lang="en",
+            )
+
+        self.assertIn("/works/OL20153193W", [book["ol_key"] for book in books])
 
     def test_fallback_rejects_explicit_wrong_language(self):
         french = self.energy_game_record(
@@ -161,21 +188,21 @@ class DiscoveryFallbackTests(unittest.TestCase):
             title="The Energy Game French Edition",
             language=["fre"],
         )
-        responses = [
-            {"numFound": 0, "docs": []},
-            {"numFound": 2, "docs": [french, self.energy_game_record()]},
-        ]
-        with patch.object(app, "ol_get", side_effect=responses):
+        with patch.object(
+            app,
+            "ol_get",
+            return_value={"numFound": 2, "docs": [french, self.energy_game_record()]},
+        ):
             books, _, _ = app.fetch_discovery_books("energy game", lang="en")
 
         self.assertEqual([book["ol_key"] for book in books], ["/works/OL45347056W"])
 
     def test_chinese_mode_does_not_accept_sparse_english_title(self):
-        responses = [
-            {"numFound": 0, "docs": []},
-            {"numFound": 1, "docs": [self.energy_game_record()]},
-        ]
-        with patch.object(app, "ol_get", side_effect=responses):
+        with patch.object(
+            app,
+            "ol_get",
+            return_value={"numFound": 1, "docs": [self.energy_game_record()]},
+        ):
             books, total, total_pages = app.fetch_discovery_books(
                 "the energy game amantha imber",
                 lang="cn",
@@ -184,12 +211,12 @@ class DiscoveryFallbackTests(unittest.TestCase):
         self.assertEqual(books, [])
         self.assertEqual((total, total_pages), (1, 1))
 
-    def test_usable_strict_results_do_not_trigger_second_request(self):
-        strict = self.energy_game_record(language=["eng"], cover_i=123)
+    def test_explicit_english_result_is_accepted_in_single_request(self):
+        english = self.energy_game_record(language=["eng"], cover_i=123)
         with patch.object(
             app,
             "ol_get",
-            return_value={"numFound": 1, "docs": [strict]},
+            return_value={"numFound": 1, "docs": [english]},
         ) as ol_get:
             books, _, _ = app.fetch_discovery_books("energy", lang="en")
 
@@ -198,6 +225,21 @@ class DiscoveryFallbackTests(unittest.TestCase):
 
 
 class BookApiFallbackTests(unittest.TestCase):
+    def test_book_api_reports_cold_detail_as_refreshing(self):
+        with (
+            app.app.test_request_context(
+                "/api/book?ol_key=/works/OL20153193W&book_lang=en"
+            ),
+            patch.object(app, "get_book_detail", return_value=(None, "miss")),
+        ):
+            response, status = app.api_book()
+            payload = response.get_json()
+
+        self.assertEqual(status, 202)
+        self.assertFalse(payload["success"])
+        self.assertTrue(payload["refreshing"])
+        self.assertEqual(payload["cache"], "miss")
+
     def test_book_api_serves_local_fallback_while_refreshing(self):
         fallback = {
             "success": True,

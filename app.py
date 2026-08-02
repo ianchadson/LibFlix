@@ -1036,45 +1036,25 @@ def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
 
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v2:{lang}:{q}:{page}"
+    ckey = f"discover:v3:{lang}:{q}:{page}"
     cached = cache_get(ckey, 900)
     if cached:
         return cached
     limit = 60
-    lang_query = f"{q} language:{BOOK_LANG_CONFIG[lang]['ol_lang']}"
-    data = ol_get("/search.json", {"q": lang_query, "limit": limit, "page": page, "fields": OL_BOOK_FIELDS})
+    data = ol_get("/search.json", {"q": q, "limit": limit, "page": page, "fields": OL_BOOK_FIELDS})
     total = data.get("numFound", 0) if data else 0
     books = []
+    seen_keys = set()
     for w in (data or {}).get("docs", [])[:limit]:
-        b = extract_book(w, lang)
-        if b:
-            books.append(b)
-            if len(books) >= 30:
-                break
-
-    # New and sparsely catalogued works are often missing Open Library's
-    # language and cover fields. Retry only when the strict search produced no
-    # usable cards, then validate known language metadata or title script
-    # locally before accepting a result.
-    if not books:
-        fallback = ol_get("/search.json", {
-            "q": q,
-            "limit": limit,
-            "page": page,
-            "fields": OL_BOOK_FIELDS,
-        })
-        total = fallback.get("numFound", 0) if fallback else total
-        seen_keys = set()
-        for w in (fallback or {}).get("docs", [])[:limit]:
-            if not discovery_fallback_matches_language(w, lang):
-                continue
-            b = extract_book(w, lang, allow_missing_cover=True)
-            if not b or book_seen(b, seen_keys):
-                continue
-            books.append(b)
-            remember_book(b, seen_keys)
-            if len(books) >= 30:
-                break
+        if not discovery_fallback_matches_language(w, lang):
+            continue
+        b = extract_book(w, lang, allow_missing_cover=True)
+        if not b or book_seen(b, seen_keys):
+            continue
+        books.append(b)
+        remember_book(b, seen_keys)
+        if len(books) >= 30:
+            break
     total_pages = min(25, max(1, (total + limit - 1) // limit))
     result = (books, total, total_pages)
     cache_set(ckey, result)
@@ -1270,6 +1250,13 @@ def rank_download_books(books, target_title="", target_author="", preferred_lang
             reverse=True,
         )
     ], scorer
+
+def download_book_is_relevant(book, target_title="", target_author=""):
+    if not target_title or title_match_score(book.title, target_title) < 600:
+        return False
+    if target_author and book.author.strip() and author_match_score(book.author, target_author) < 70:
+        return False
+    return True
 
 def book_matches_language(book, language):
     if not language or language == "all":
@@ -2162,7 +2149,13 @@ def api_book():
     work_id = work_id_from_ol_key(ol_key)
     detail, cache_state = get_book_detail(work_id, get_book_lang())
     if not detail:
-        return jsonify({"success": False, "error": "Book not found"})
+        status = 202 if cache_state == "miss" else 404
+        return jsonify({
+            "success": False,
+            "error": "Book details are loading" if status == 202 else "Book not found",
+            "refreshing": status == 202,
+            "cache": cache_state,
+        }), status
     response_payload = dict(detail)
     response_payload["refreshing"] = cache_state in ("stale", "fallback", "miss") or not detail.get("complete")
     response_payload["cache"] = cache_state
@@ -2231,7 +2224,7 @@ def api_search():
     target_title = request.args.get("target_title", "").strip() or q
     target_author = request.args.get("target_author", "").strip()
     result_cache_key = (
-        f"download_search:v5:{q}:{sort}:{order}:{limit}:{page}:"
+        f"download_search:v6:{q}:{sort}:{order}:{limit}:{page}:"
         f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}"
     )
     cached_result = cache_get(result_cache_key, 900)
@@ -2290,6 +2283,8 @@ def api_search():
         if lang_filter and not book_matches_language(b, lang_filter):
             continue
         if fmt_filter and b.ext.lower() != fmt_filter.lower():
+            continue
+        if not download_book_is_relevant(b, target_title, target_author):
             continue
         filtered.append(b)
     books = filtered
