@@ -47,6 +47,7 @@ API_SQLITE_CACHE = os.path.join(DATA_DIR, "api_cache.sqlite3")
 COVER_CACHE_DIR = os.path.join(DATA_DIR, "covers")
 SHELF_REFRESH_TTL = 21600
 OL_BOOK_FIELDS = "key,title,author_name,cover_i,cover_id,language,editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id"
+OL_LIST_FIELDS = "key,title,author_name,cover_i,cover_id,language"
 SHELF_BOOK_TARGET = 40
 SHELF_SEARCH_LIMIT = 100
 SHELF_MAX_OPEN_LIBRARY_PAGES = 25
@@ -1147,9 +1148,13 @@ def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
 
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v5:{lang}:{q}:{page}"
+    ckey = f"discover:v6:{lang}:{q}:{page}"
     cached = cache_get(ckey, 900)
-    if cached:
+    if cached is None:
+        cached = disk_cache_get(ckey, 900)
+        if cached is not None:
+            cache_set(ckey, cached)
+    if cached is not None:
         return cached
 
     covered_query = (
@@ -1162,10 +1167,10 @@ def fetch_discovery_books(q, page=1, lang=None):
                 "q": query,
                 "limit": limit,
                 "page": page,
-                "fields": OL_BOOK_FIELDS,
-            }) or {}
+                "fields": OL_BOOK_FIELDS if lang == "cn" else OL_LIST_FIELDS,
+            })
         except Exception:
-            return {}
+            return None
 
     # Preserve exact sparse matches while fetching a cover-rich result set in
     # parallel so cover quality does not add a second origin wait.
@@ -1178,6 +1183,12 @@ def fetch_discovery_books(q, page=1, lang=None):
         )
         raw_data = raw_future.result()
         covered_data = covered_future.result()
+
+    if raw_data is None and covered_data is None:
+        return [], None, 1
+
+    raw_data = raw_data or {}
+    covered_data = covered_data or {}
 
     books = []
     seen_keys = set()
@@ -1239,6 +1250,7 @@ def fetch_discovery_books(q, page=1, lang=None):
     )
     result = (books, total, total_pages)
     cache_set(ckey, result)
+    disk_cache_set(ckey, result)
     return result
 
 def fetch_shelves(mode="nonfiction", lang=None):
@@ -2320,13 +2332,17 @@ def discover(clean_mode, clean_lang):
 
     page = int(request.args.get("page", 1))
     books, total, total_pages = fetch_discovery_books(q, page, lang)
+    search_unavailable = total is None
+    if search_unavailable:
+        g.cache_control_override = "no-store"
     return render_template(
         "discover.html",
         query=q,
         books=books,
-        total=total,
+        total=total or 0,
         page=page,
         total_pages=total_pages,
+        search_unavailable=search_unavailable,
         mode=mode,
         search_value=q,
     )
@@ -2339,6 +2355,13 @@ def api_discover():
     page = int(request.args.get("page", 1))
     lang = get_book_lang()
     books, total, total_pages = fetch_discovery_books(q, page, lang)
+    if total is None:
+        g.cache_control_override = "no-store"
+        return jsonify({
+            "success": False,
+            "error": "Book search is temporarily unavailable.",
+            "code": "source_unavailable",
+        }), 503
     return jsonify({
         "success": True,
         "query": q,

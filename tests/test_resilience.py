@@ -141,12 +141,12 @@ class CategoryFallbackTests(unittest.TestCase):
         self.assertGreaterEqual(total_pages, 1)
 
 
-class DiscoveryFallbackTests(unittest.TestCase):
+class DiscoveryFallbackTests(TemporaryCacheTest):
     def setUp(self):
-        app.CACHE.clear()
+        super().setUp()
 
     def tearDown(self):
-        app.CACHE.clear()
+        super().tearDown()
 
     @staticmethod
     def energy_game_record(**overrides):
@@ -359,6 +359,64 @@ class DiscoveryFallbackTests(unittest.TestCase):
             books, _, _ = app.fetch_discovery_books("energy game", lang="en")
 
         self.assertEqual([book["ol_key"] for book in books], ["/works/OL45347056W"])
+
+    def test_discovery_upstream_failure_is_not_cached_as_no_results(self):
+        with (
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_cache_get", return_value=None),
+            patch.object(app, "cache_set") as memory_set,
+            patch.object(app, "disk_cache_set") as disk_set,
+            patch.object(app, "ol_get", return_value=None),
+        ):
+            books, total, total_pages = app.fetch_discovery_books(
+                "temporarily unavailable",
+                lang="en",
+            )
+
+        self.assertEqual(books, [])
+        self.assertIsNone(total)
+        self.assertEqual(total_pages, 1)
+        memory_set.assert_not_called()
+        disk_set.assert_not_called()
+
+    def test_english_discovery_uses_fast_list_fields(self):
+        with patch.object(
+            app,
+            "ol_get",
+            return_value={"numFound": 0, "docs": []},
+        ) as ol_get:
+            app.fetch_discovery_books("fast fields", lang="en")
+
+        self.assertEqual(ol_get.call_count, 2)
+        self.assertTrue(all(
+            call.args[1]["fields"] == app.OL_LIST_FIELDS
+            for call in ol_get.call_args_list
+        ))
+
+    def test_discovery_api_reports_provider_outage_instead_of_no_books(self):
+        with patch.object(
+            app,
+            "fetch_discovery_books",
+            return_value=([], None, 1),
+        ):
+            response = app.app.test_client().get("/api/discover?q=outage")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(response.get_json()["code"], "source_unavailable")
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_discovery_page_shows_retry_for_provider_outage(self):
+        with patch.object(
+            app,
+            "fetch_discovery_books",
+            return_value=([], None, 1),
+        ):
+            response = app.app.test_client().get("/discover?q=outage")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"temporarily unavailable", response.data)
+        self.assertIn(b"Try again", response.data)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
 
 
 class CoverSelectionTests(unittest.TestCase):

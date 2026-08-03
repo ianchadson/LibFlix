@@ -457,6 +457,14 @@
       });
     }
 
+    function searchNextDownloadAlias(queryIndex, maximumAttempts = downloadQueries.length) {
+      const queryLimit = Math.min(downloadQueries.length, maximumAttempts);
+      if (currentPage !== 1 || queryIndex + 1 >= queryLimit) return false;
+      activeSearch = null;
+      doSearch(1, queryIndex + 1);
+      return true;
+    }
+
     function doSearch(page, queryIndex) {
       queryIndex = Number(queryIndex) || 0;
       if (!hasResolvedBookIdentity() || !buildSearchQuery(queryIndex)) {
@@ -473,21 +481,23 @@
         .then(response => response.json())
         .then(data => {
           if (activeSearch !== controller) return;
-          if (data.success && !data.books.length && currentPage === 1 && queryIndex + 1 < downloadQueries.length) {
-            if (activeSearch === controller) activeSearch = null;
-            doSearch(1, queryIndex + 1);
+          if (data.success && !data.books.length && searchNextDownloadAlias(queryIndex)) {
             return;
           }
           if (data.success) {
             activeDownloadQueryIndex = queryIndex;
             showDownloadResults(data);
+          } else if (searchNextDownloadAlias(queryIndex, 4)) {
+            return;
           } else {
             showDownloadState('error', window.LibFlixDownloads.friendlyError(data.error));
           }
         })
         .catch(error => {
           if (activeSearch === controller && error.name !== 'AbortError') {
-            showDownloadState('error', window.LibFlixDownloads.friendlyError(error.message));
+            if (!searchNextDownloadAlias(queryIndex, 4)) {
+              showDownloadState('error', window.LibFlixDownloads.friendlyError(error.message));
+            }
           }
         })
         .finally(() => {
