@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import time
+import requests
 from dataclasses import dataclass
 from typing import Iterator, List, Optional, Tuple
 from urllib.parse import urljoin
@@ -19,6 +20,7 @@ from downloaders.base import (
     Book,
     Downloader,
     SESSION,
+    cache_delete,
     cache_get,
     cache_set,
     CACHE_TTL_LG,
@@ -55,7 +57,12 @@ class LibgenDownloader(Downloader):
     ) -> Tuple[List[Book], int]:
         html = self._fetch_search(query, sort, order, page, limit)
         books = self._parse_results(html)
-        total = self._total_results(html)
+        total = self._total_results(
+            html,
+            page_size=limit,
+            current_page=page,
+            result_count=len(books),
+        )
         return books, total
 
     def _fetch_search(self, query, sort, order, page, res):
@@ -76,6 +83,9 @@ class LibgenDownloader(Downloader):
         }
         r = SESSION.get(f"{MIRROR}/index.php", params=params, timeout=(3, 12))
         r.raise_for_status()
+        text = BeautifulSoup(r.text, "html.parser").get_text(" ", strip=True)
+        if 'id="tablelibgen"' not in r.text and not re.search(r"\bFiles\s+0\b", text):
+            raise requests.RequestException("Unexpected download search response")
         cache_set(key, r.text)
         return r.text
 
@@ -97,6 +107,8 @@ class LibgenDownloader(Downloader):
                 m = re.search(r"md5=([a-f0-9]{32})", mlink["href"])
                 if m:
                     md5 = m.group(1)
+            if not md5:
+                continue
             link_a = tds[0].find("a")
             title = (
                 link_a.get_text(strip=True) if link_a else tds[0].get_text(strip=True)
@@ -134,17 +146,29 @@ class LibgenDownloader(Downloader):
         return books
 
     @staticmethod
-    def _total_results(html_text: str) -> int:
-        soup = BeautifulSoup(html_text, "html.parser")
-        paginator = soup.find("div", class_="paginator")
-        if paginator:
-            m = re.search(r'Paginator\("(\w+)",\s*(\d+)', str(paginator))
-            if m:
-                return int(m.group(2))
-        return 0
+    def _total_results(
+        html_text: str,
+        *,
+        page_size: int = 25,
+        current_page: int = 1,
+        result_count: int = 0,
+    ) -> int:
+        match = re.search(
+            r'new\s+Paginator\("[^"]+",\s*(\d+),\s*\d+,\s*\d+',
+            html_text,
+        )
+        if not match:
+            return max(0, (current_page - 1) * page_size + result_count)
+        page_count = max(1, int(match.group(1)))
+        if current_page >= page_count:
+            return (page_count - 1) * page_size + result_count
+        return page_count * page_size
 
     # ------------------------------------------------------- resolve + fetch
     def resolve_download(self, book_id: str) -> str:
+        if not re.fullmatch(r"[a-fA-F0-9]{32}", book_id or ""):
+            return ""
+        book_id = book_id.lower()
         cache_key = f"lg-download:{book_id}"
         cached = cache_get(cache_key, 600)
         if cached:
@@ -178,14 +202,13 @@ class LibgenDownloader(Downloader):
                 resolved = m.group(0)
                 cache_set(cache_key, resolved)
                 return resolved
-            m = re.search(r'(?:href|HREF)=["\']([^"\']+)["\']', txt)
-            if m:
-                resolved = urljoin(r.url, m.group(1))
-                cache_set(cache_key, resolved)
-                return resolved
         except Exception:
             return ""
         return ""
+
+    def invalidate_download(self, book_id: str) -> None:
+        if re.fullmatch(r"[a-fA-F0-9]{32}", book_id or ""):
+            cache_delete(f"lg-download:{book_id.lower()}")
 
     # ---------------------------------------------------------------- cover
     def cover_url(self, book: Book) -> Optional[str]:

@@ -31,6 +31,8 @@ CACHE = {}
 CACHE_TTL_OL = 3600
 API_DISK_CACHE_TTL = 21600
 CHINESE_TITLE_CACHE_TTL = 2592000
+EXTERNAL_METADATA_TTL = 2592000
+EXTERNAL_METADATA_FAILURE_TTL = 120
 API_CACHE_RETENTION_TTL = 7776000
 OL_STALE_TTL = 7776000
 BOOK_DETAIL_FRESH_TTL = 604800
@@ -49,9 +51,10 @@ SHELF_BOOK_TARGET = 40
 SHELF_SEARCH_LIMIT = 100
 SHELF_MAX_OPEN_LIBRARY_PAGES = 25
 SHELF_REFILL_OPEN_LIBRARY_PAGES = 4
-DISCOVERY_SEARCH_LIMIT = 60
 DISCOVERY_PAGE_SIZE = 30
+DISCOVERY_SEARCH_LIMIT = DISCOVERY_PAGE_SIZE
 DISCOVERY_RAW_PREFIX_LIMIT = 5
+DISCOVERY_COVER_PAGE_SIZE = DISCOVERY_PAGE_SIZE - DISCOVERY_RAW_PREFIX_LIMIT
 
 BOOK_LANGS = {"en", "cn"}
 BOOK_LANG_CONFIG = {
@@ -210,9 +213,15 @@ BOOK_DETAIL_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="boo
 SIMILAR_REFRESHING = set()
 SIMILAR_REFRESH_LOCK = threading.Lock()
 SIMILAR_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="similar-books")
-COVER_LOCKS = {}
-COVER_LOCKS_LOCK = threading.Lock()
+COVER_LOCK_STRIPES = tuple(threading.Lock() for _ in range(64))
+COVER_STATE_LOCK = threading.Lock()
+COVER_FAILURES = {}
+COVER_NEGATIVE_TTL = 300
+COVER_FAILURE_LIMIT = 4096
+COVER_ORIGIN_SEMAPHORE = threading.BoundedSemaphore(4)
 COVER_WARM_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="cover-warm")
+ARCHIVE_DESCRIPTION_LOCKS = tuple(threading.Lock() for _ in range(32))
+ARCHIVE_DESCRIPTION_MAX_IDENTIFIERS = 2
 KINDLE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="kindle-delivery")
 
 def disk_cache_key(key):
@@ -582,37 +591,78 @@ def discovery_fallback_matches_language(record, lang=None):
 def first_matching_edition(w, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     editions = (w.get("editions") or {}).get("docs", [])
+
+    def best(candidates):
+        candidates = list(candidates)
+        return next(
+            (edition for edition in candidates if edition_cover_id(edition)),
+            candidates[0] if candidates else None,
+        )
+
     if lang == "cn":
-        for ed in editions:
-            if record_has_lang(ed, lang) and is_chinese_title(ed.get("title", "")):
-                return ed
-        for ed in editions:
-            if is_chinese_title(ed.get("title", "")):
-                return ed
-    for ed in editions:
-        if record_has_lang(ed, lang):
-            return ed
-    for ed in editions:
-        title = ed.get("title", "")
-        if title_matches_lang(title, lang):
-            return ed
+        matched = best(
+            ed for ed in editions
+            if record_has_lang(ed, lang) and is_chinese_title(ed.get("title", ""))
+        )
+        if matched:
+            return matched
+        matched = best(ed for ed in editions if is_chinese_title(ed.get("title", "")))
+        if matched:
+            return matched
+    matched = best(ed for ed in editions if record_has_lang(ed, lang))
+    if matched:
+        return matched
+    matched = best(ed for ed in editions if title_matches_lang(ed.get("title", ""), lang))
+    if matched:
+        return matched
     return None
+
+def valid_cover_id(value):
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 def edition_cover_id(ed):
     covers = ed.get("covers")
-    if isinstance(covers, list) and covers:
-        return covers[0]
-    return ed.get("cover_i") or ed.get("cover_id")
+    if isinstance(covers, list):
+        for cover in covers:
+            cover_id = valid_cover_id(cover)
+            if cover_id:
+                return cover_id
+    return valid_cover_id(ed.get("cover_i")) or valid_cover_id(ed.get("cover_id"))
 
 def open_library_cover_url(cover_id, size="M"):
+    cover_id = valid_cover_id(cover_id)
     if not cover_id:
         return ""
     size = size if size in ("S", "M", "L") else "M"
     return f"/olcover/{cover_id}/{size}"
 
+def edition_archive_identifier(edition):
+    values = edition.get("ocaid") or []
+    if not isinstance(values, list):
+        values = [values]
+    for value in values:
+        identifier = str(value or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", identifier):
+            return identifier
+    return ""
+
+def archive_cover_url(identifier, size="M"):
+    identifier = str(identifier or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", identifier):
+        return ""
+    size = size if size in ("S", "M", "L") else "M"
+    return f"/iacover/{identifier}/{size}"
+
 def localize_cover_url(url, size="M"):
     url = str(url or "")
     local = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", url)
+    archive = re.fullmatch(r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML])?", url)
+    if archive:
+        return archive_cover_url(archive.group(1), size)
     remote = re.search(r"covers\.openlibrary\.org/b/id/(\d+)-[SML]\.jpg", url)
     match = local or remote
     return open_library_cover_url(match.group(1), size) if match else url
@@ -627,6 +677,37 @@ def edition_language_codes(edition):
         elif language:
             codes.add(str(language).lower())
     return codes
+
+def preferred_work_editions(entries, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    desired = BOOK_LANG_CONFIG[lang]["ol_lang"]
+
+    def rank(item):
+        index, edition = item
+        codes = edition_language_codes(edition)
+        title = str(edition.get("title") or "")
+        return (
+            desired in codes,
+            title_matches_lang(title, lang),
+            bool(edition_cover_id(edition)),
+            bool(edition_archive_identifier(edition)),
+            -index,
+        )
+
+    return [
+        edition for _, edition in sorted(
+            enumerate(entries or []),
+            key=rank,
+            reverse=True,
+        )
+    ]
+
+def work_cover_id(work):
+    for value in (work or {}).get("covers") or []:
+        cover_id = valid_cover_id(value)
+        if cover_id:
+            return cover_id
+    return ""
 
 def chinese_download_queries(ol_key, metadata=None):
     ckey = f"chinese_download_queries:v1:{ol_key}"
@@ -684,6 +765,29 @@ def chinese_download_queries(ol_key, metadata=None):
 
     add(metadata.get("title", ""))
     return queries[:10]
+
+def english_download_queries(metadata=None):
+    metadata = metadata or {}
+    title = str(
+        metadata.get("download_title") or metadata.get("title") or ""
+    ).strip()
+    author = str(metadata.get("author") or "").strip()
+    queries = []
+
+    def add(value):
+        value = re.sub(r"\s+", " ", str(value or "")).strip(" /|｜-–—")
+        if value and value not in queries:
+            queries.append(value)
+
+    add(f"{title} {author}" if author else title)
+    add(title)
+    cleaned = re.sub(r"\s*[\(\[].*?[\)\]]\s*", " ", title).strip()
+    add(f"{cleaned} {author}" if author and cleaned != title else cleaned)
+    base_title = re.split(r"\s*[:–—]\s*", cleaned, maxsplit=1)[0].strip()
+    if len(base_title) >= 4 and base_title != cleaned:
+        add(f"{base_title} {author}" if author else base_title)
+        add(base_title)
+    return queries[:6]
 
 def similar_subject_candidates(subjects):
     subjects = [
@@ -807,7 +911,11 @@ def extract_book(w, lang=None, allow_missing_cover=False):
         return None
     if lang == "cn" and not (title_matches_lang(title, lang) or record_has_lang(w, lang) or record_has_lang(edition or {}, lang)):
         return None
-    cover_id = edition_cover_id(edition or {}) or w.get("cover_i") or w.get("cover_id")
+    cover_id = (
+        edition_cover_id(edition or {})
+        or valid_cover_id(w.get("cover_i"))
+        or valid_cover_id(w.get("cover_id"))
+    )
     if not cover_id and lang != "cn" and not allow_missing_cover:
         return None
     author = ""
@@ -1039,31 +1147,35 @@ def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
 
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v4:{lang}:{q}:{page}"
+    ckey = f"discover:v5:{lang}:{q}:{page}"
     cached = cache_get(ckey, 900)
     if cached:
         return cached
 
-    search_params = {
-        "limit": DISCOVERY_SEARCH_LIMIT,
-        "page": page,
-        "fields": OL_BOOK_FIELDS,
-    }
     covered_query = (
         f"{q} cover_i:* language:{BOOK_LANG_CONFIG[lang]['ol_lang']}"
     )
 
-    def fetch_search(query):
+    def fetch_search(query, limit):
         try:
-            return ol_get("/search.json", {**search_params, "q": query}) or {}
+            return ol_get("/search.json", {
+                "q": query,
+                "limit": limit,
+                "page": page,
+                "fields": OL_BOOK_FIELDS,
+            }) or {}
         except Exception:
             return {}
 
     # Preserve exact sparse matches while fetching a cover-rich result set in
     # parallel so cover quality does not add a second origin wait.
     with ThreadPoolExecutor(max_workers=2) as pool:
-        raw_future = pool.submit(fetch_search, q)
-        covered_future = pool.submit(fetch_search, covered_query)
+        raw_future = pool.submit(fetch_search, q, DISCOVERY_SEARCH_LIMIT)
+        covered_future = pool.submit(
+            fetch_search,
+            covered_query,
+            DISCOVERY_COVER_PAGE_SIZE,
+        )
         raw_data = raw_future.result()
         covered_data = covered_future.result()
 
@@ -1104,25 +1216,26 @@ def fetch_discovery_books(q, page=1, lang=None):
         return added
 
     raw_records = raw_data.get("docs", [])[:DISCOVERY_SEARCH_LIMIT]
-    covered_records = covered_data.get("docs", [])[:DISCOVERY_SEARCH_LIMIT]
+    covered_records = covered_data.get("docs", [])[:DISCOVERY_COVER_PAGE_SIZE]
     if page == 1:
         append_records(
             raw_records,
             allow_missing_cover=True,
             maximum=DISCOVERY_RAW_PREFIX_LIMIT,
         )
-    append_records(covered_records, allow_missing_cover=False)
+    covered_added = append_records(covered_records, allow_missing_cover=False)
 
     # If Open Library has no covered matches, retain the sparse-result
     # fallback rather than making an exact but coverless book undiscoverable.
-    if not covered_records and len(books) < DISCOVERY_PAGE_SIZE:
+    if covered_added == 0 and len(books) < DISCOVERY_PAGE_SIZE:
         append_records(raw_records, allow_missing_cover=True)
 
-    result_data = covered_data if covered_records else raw_data
+    result_data = covered_data if covered_added else raw_data
+    result_limit = DISCOVERY_COVER_PAGE_SIZE if covered_added else DISCOVERY_SEARCH_LIMIT
     total = result_data.get("numFound", 0)
     total_pages = min(
         25,
-        max(1, (total + DISCOVERY_SEARCH_LIMIT - 1) // DISCOVERY_SEARCH_LIMIT),
+        max(1, (total + result_limit - 1) // result_limit),
     )
     result = (books, total, total_pages)
     cache_set(ckey, result)
@@ -1231,10 +1344,15 @@ def source_metadata_language_penalty(book, preferred_language):
     return 0
 
 HIDDEN_KINDLE_FORMATS = frozenset({"azw", "azw3", "mobi"})
+KINDLE_DELIVERY_FORMATS = frozenset({"epub", "pdf"})
 
 def is_visible_kindle_format(extension):
     extension = re.sub(r"[^a-z0-9]", "", str(extension or "").casefold())
     return extension not in HIDDEN_KINDLE_FORMATS
+
+def is_kindle_delivery_format(extension):
+    extension = re.sub(r"[^a-z0-9]", "", str(extension or "").casefold())
+    return extension in KINDLE_DELIVERY_FORMATS
 
 def book_score(book, target_title="", target_author="", preferred_language=""):
     score = title_match_score(book.title, target_title)
@@ -1320,9 +1438,24 @@ def rank_download_books(books, target_title="", target_author="", preferred_lang
     ], scorer
 
 def download_book_is_relevant(book, target_title="", target_author=""):
-    if not target_title or title_match_score(book.title, target_title) < 600:
+    title_score = title_match_score(book.title, target_title)
+    if not target_title or title_score < 600:
         return False
-    if target_author and book.author.strip() and author_match_score(book.author, target_author) < 70:
+    candidate_title = normalize_match_text(book.title)
+    normalized_target = normalize_match_text(target_title)
+    author_score = author_match_score(book.author, target_author)
+    if (
+        candidate_title
+        and candidate_title != normalized_target
+        and candidate_title in normalized_target
+        and len(candidate_title.replace(" ", ""))
+            < len(normalized_target.replace(" ", "")) * 0.55
+        and author_score < 180
+    ):
+        return False
+    if target_author and book.author.strip() and author_score < 70:
+        return False
+    if target_author and not book.author.strip() and title_score < 950:
         return False
     return True
 
@@ -1345,41 +1478,142 @@ def strip_html(text):
 
 def extract_desc(work):
     desc = work.get("description", "")
-    if isinstance(desc, dict):
-        desc = desc.get("value", "")
-    desc = strip_html(desc)
-    desc = re.sub(r"\[([^\]]+)\]\((?:https?://)?[^)]+\)", "", desc)
-    desc = re.sub(r"(?:\*\*|__|`)", "", desc)
-    desc = re.sub(r"\[source\]\[\d+\]", "", desc, flags=re.I)
-    desc = re.sub(r"\[\d+\]:\s*\S+", "", desc)
-    desc = re.sub(r"\s+", " ", desc).strip()
-    return desc
+    values = desc if isinstance(desc, list) else [desc]
+    cleaned = []
+    for value in values:
+        if isinstance(value, dict):
+            value = value.get("value", "")
+        if not isinstance(value, str):
+            continue
+        value = strip_html(value)
+        value = re.sub(r"\[([^\]]+)\]\((?:https?://)?[^)]+\)", "", value)
+        value = re.sub(r"(?:\*\*|__|`)", "", value)
+        value = re.sub(r"\[source\]\[\d+\]", "", value, flags=re.I)
+        value = re.sub(r"\[\d+\]:\s*\S+", "", value)
+        value = re.sub(r"\s+", " ", value).strip().strip('"').strip()
+        if value:
+            cleaned.append(value)
+    return max(cleaned, key=len, default="")
 
-def english_description_for_work(ol_key, work=None):
+def description_rank(candidate):
+    word_count = len(candidate.split())
+    awkward_lead = candidate.startswith(("'",)) or bool(
+        re.match(r"^[A-Z][A-Z !'-]{12,}", candidate)
+    )
+    return awkward_lead, not 40 <= word_count <= 350, abs(word_count - 120)
+
+def archive_description_candidate(value):
+    if isinstance(value, dict):
+        value = value.get("value", "")
+    if not isinstance(value, str):
+        return ""
+    candidate = strip_html(value).strip().strip('"').strip()
+    candidate = re.sub(r"\s+", " ", candidate)
+    lower = candidate.casefold()
+    if (
+        len(candidate.split()) < 12
+        or lower in {"print version record", "electronic reproduction"}
+        or lower.startswith((
+            "includes bibliographical references",
+            "cover; half title;",
+            "contents;",
+        ))
+        or re.match(r"^(?:[ivxlcdm]+,?\s+)?\d+\s+pages?\b", lower)
+    ):
+        return ""
+    return candidate if is_english_text(candidate) else ""
+
+def archive_description_lock(identifier):
+    digest = hashlib.sha256(identifier.encode("utf-8")).digest()
+    return ARCHIVE_DESCRIPTION_LOCKS[int.from_bytes(digest[:2], "big") % len(ARCHIVE_DESCRIPTION_LOCKS)]
+
+def archive_cache_get(key, ttl):
+    cached = cache_get(key, ttl)
+    if cached is None:
+        cached = disk_cache_get(key, ttl)
+        if cached is not None:
+            cache_set(key, cached)
+    return cached
+
+def archive_description(identifier):
+    identifier = str(identifier or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", identifier):
+        return "", True
+    ckey = f"archive_description:v1:{identifier}"
+    failure_key = f"archive_description_failure:v1:{identifier}"
+    cached = archive_cache_get(ckey, EXTERNAL_METADATA_TTL)
+    if cached is not None:
+        return cached.get("description", ""), True
+    if archive_cache_get(failure_key, EXTERNAL_METADATA_FAILURE_TTL) is not None:
+        return "", False
+
+    with archive_description_lock(identifier):
+        cached = archive_cache_get(ckey, EXTERNAL_METADATA_TTL)
+        if cached is not None:
+            return cached.get("description", ""), True
+        if archive_cache_get(failure_key, EXTERNAL_METADATA_FAILURE_TTL) is not None:
+            return "", False
+        try:
+            response = SESSION.get(
+                f"https://archive.org/metadata/{identifier}",
+                timeout=(2, 5),
+            )
+            response.raise_for_status()
+            metadata = (response.json() or {}).get("metadata") or {}
+        except (requests.RequestException, ValueError):
+            failure = {"failed_at": time.time()}
+            cache_set(failure_key, failure)
+            disk_cache_set(failure_key, failure)
+            return "", False
+        raw_descriptions = metadata.get("description") or []
+        if not isinstance(raw_descriptions, list):
+            raw_descriptions = [raw_descriptions]
+        candidates = [
+            candidate
+            for candidate in map(archive_description_candidate, raw_descriptions)
+            if candidate
+        ]
+        description = min(candidates, key=description_rank) if candidates else ""
+        payload = {"description": description}
+        cache_set(ckey, payload)
+        disk_cache_set(ckey, payload)
+        return description, True
+
+def english_description_result(ol_key, work=None):
     work = work or ol_get_work(ol_key) or {}
     description = extract_desc(work)
     if is_english_text(description):
-        return description
+        return description, True
 
-    editions_data = ol_get(f"{ol_key}/editions.json", {"limit": 100}) or {}
+    editions_data = ol_get(f"{ol_key}/editions.json", {"limit": 100})
+    if editions_data is None:
+        return "", False
     candidates = []
+    archive_identifiers = []
     for edition in editions_data.get("entries", []):
-        if "eng" not in edition_language_codes(edition):
-            continue
+        archive_id = edition_archive_identifier(edition)
+        if archive_id and archive_id not in archive_identifiers:
+            archive_identifiers.append(archive_id)
+        language_codes = edition_language_codes(edition)
         candidate = extract_desc(edition)
-        if is_english_text(candidate):
+        if candidate and (
+            "eng" in language_codes
+            or (not language_codes and is_english_text(candidate))
+        ):
             candidates.append(candidate)
-    if not candidates:
-        return ""
+    if candidates:
+        return min(candidates, key=description_rank), True
 
-    def description_rank(candidate):
-        word_count = len(candidate.split())
-        awkward_lead = candidate.startswith(('"', "'")) or bool(
-            re.match(r"^[A-Z][A-Z !'-]{12,}", candidate)
-        )
-        return awkward_lead, not 40 <= word_count <= 350, abs(word_count - 120)
+    archive_complete = True
+    for identifier in archive_identifiers[:ARCHIVE_DESCRIPTION_MAX_IDENTIFIERS]:
+        candidate, complete = archive_description(identifier)
+        archive_complete = archive_complete and complete
+        if candidate:
+            return candidate, True
+    return "", archive_complete
 
-    return min(candidates, key=description_rank)
+def english_description_for_work(ol_key, work=None):
+    return english_description_result(ol_key, work)[0]
 
 def first_work_author(work):
     authors = work.get("authors") or []
@@ -1427,7 +1661,7 @@ def known_book_metadata(work_id, lang=None):
 
 def book_metadata_from_work(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    ckey = f"book_meta:{lang}:{work_id}"
+    ckey = f"book_meta:v2:{lang}:{work_id}"
     cached = cache_get(ckey, API_DISK_CACHE_TTL)
     if cached is None:
         cached = disk_cache_get(ckey, API_DISK_CACHE_TTL)
@@ -1443,13 +1677,36 @@ def book_metadata_from_work(work_id, lang=None):
     if not work and not search_record:
         result = known_book_metadata(work_id, lang)
         if result:
-            cache_set(ckey, result)
-            disk_cache_set(ckey, result)
+            result["_complete"] = False
             remember_book_hint(result, lang)
         return result
     edition = first_matching_edition(search_record, lang)
-    covers = (work or {}).get("covers") or []
-    cover_id = edition_cover_id(edition or {}) or search_record.get("cover_i") or (covers[0] if covers else "")
+    cover_id = (
+        edition_cover_id(edition or {})
+        or valid_cover_id(search_record.get("cover_i"))
+        or valid_cover_id(search_record.get("cover_id"))
+        or work_cover_id(work)
+    )
+    archive_id = edition_archive_identifier(edition or {})
+    editions_checked = False
+    if not cover_id and not archive_id:
+        editions_data = ol_get(f"{ol_key}/editions.json", {"limit": 100})
+        editions_checked = editions_data is not None
+        if editions_data is not None:
+            preferred_editions = preferred_work_editions(
+                editions_data.get("entries", []),
+                lang,
+            )
+            cover_edition = next(
+                (candidate for candidate in preferred_editions if edition_cover_id(candidate)),
+                None,
+            )
+            archive_edition = next(
+                (candidate for candidate in preferred_editions if edition_archive_identifier(candidate)),
+                None,
+            )
+            cover_id = edition_cover_id(cover_edition or {})
+            archive_id = edition_archive_identifier(archive_edition or {})
     authors = search_record.get("author_name") or []
     selected_title = (edition or {}).get("title") or search_record.get("title") or (work or {}).get("title", "")
     title = selected_title
@@ -1466,17 +1723,19 @@ def book_metadata_from_work(work_id, lang=None):
         "localized_title": localized_title,
         "download_title": download_title,
         "author": (authors[0] if authors else "") or first_work_author(work or {}),
-        "cover_url": open_library_cover_url(cover_id),
+        "cover_url": open_library_cover_url(cover_id) or archive_cover_url(archive_id),
         "ol_key": ol_key,
+        "_complete": bool(work) and (bool(search_record) or editions_checked),
     }
-    cache_set(ckey, result)
-    disk_cache_set(ckey, result)
+    if result["_complete"]:
+        cache_set(ckey, result)
+        disk_cache_set(ckey, result)
     remember_book_hint(result, lang)
     return result
 
 def book_detail_cache_key(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    return f"book_detail:v3:{lang}:{work_id}"
+    return f"book_detail:v4:{lang}:{work_id}"
 
 def cached_book_detail(work_id, lang=None, allow_stale=True):
     key = book_detail_cache_key(work_id, lang)
@@ -1491,11 +1750,50 @@ def cached_book_detail(work_id, lang=None, allow_stale=True):
         stale = disk_cache_get_stale(key, BOOK_DETAIL_STALE_TTL)
         if stale is not None:
             return stale, "stale"
+        legacy_key = f"book_detail:v3:{normalize_book_lang(lang) or DEFAULT_BOOK_LANG}:{work_id}"
+        legacy = (
+            cache_get(legacy_key, BOOK_DETAIL_STALE_TTL)
+            or disk_cache_get_stale(legacy_key, BOOK_DETAIL_STALE_TTL)
+        )
+        if legacy is not None:
+            legacy = {**legacy, "complete": False}
+            return legacy, "stale"
     return None, "miss"
+
+def alternate_canonical_book_detail(work_id, lang=None):
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    other_lang = "cn" if lang == "en" else "en"
+    candidates = []
+    for version in ("v4", "v3"):
+        key = f"book_detail:{version}:{other_lang}:{work_id}"
+        detail = (
+            cache_get(key, BOOK_DETAIL_STALE_TTL)
+            or disk_cache_get_stale(key, BOOK_DETAIL_STALE_TTL)
+        )
+        if detail:
+            candidates.append(detail)
+    return max(
+        candidates,
+        key=lambda detail: (
+            bool(detail.get("description")),
+            bool(detail.get("cover_url")),
+            len(detail.get("subjects") or []),
+        ),
+        default={},
+    )
+
+def merge_canonical_book_detail(detail, canonical):
+    if not detail or not canonical:
+        return detail
+    merged = dict(detail)
+    for field in ("description", "cover_url", "subjects", "similar_subjects"):
+        if not merged.get(field) and canonical.get(field):
+            merged[field] = canonical[field]
+    return merged
 
 def fallback_book_detail(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    metadata_key = f"book_meta:{lang}:{work_id}"
+    metadata_key = f"book_meta:v2:{lang}:{work_id}"
     metadata = (
         cache_get(metadata_key, BOOK_DETAIL_STALE_TTL)
         or disk_cache_get_stale(metadata_key, BOOK_DETAIL_STALE_TTL)
@@ -1503,6 +1801,9 @@ def fallback_book_detail(work_id, lang=None):
         or known_book_metadata(work_id, lang)
         or {}
     )
+    canonical = alternate_canonical_book_detail(work_id, lang)
+    if not metadata and canonical:
+        metadata = canonical
     if not metadata:
         return None
     return {
@@ -1511,11 +1812,13 @@ def fallback_book_detail(work_id, lang=None):
         "localized_title": metadata.get("localized_title", ""),
         "download_title": metadata.get("download_title") or metadata.get("title", ""),
         "author": metadata.get("author", ""),
-        "cover_url": localize_cover_url(metadata.get("cover_url", "")),
+        "cover_url": localize_cover_url(
+            metadata.get("cover_url", "") or canonical.get("cover_url", "")
+        ),
         "download_queries": [],
-        "description": "",
-        "subjects": [],
-        "similar_subjects": [],
+        "description": canonical.get("description", ""),
+        "subjects": canonical.get("subjects", []),
+        "similar_subjects": canonical.get("similar_subjects", []),
         "complete": False,
     }
 
@@ -1529,11 +1832,11 @@ def build_book_detail(work_id, lang=None):
     if metadata.get("success"):
         metadata = {
             key: value for key, value in metadata.items()
-            if key in {"title", "localized_title", "download_title", "author", "cover_url"}
+            if key in {"title", "localized_title", "download_title", "author", "cover_url", "_complete"}
         }
     if not work and not metadata:
         return None
-    description = english_description_for_work(ol_key, work) if work else ""
+    description, description_complete = english_description_result(ol_key, work)
     subjects = work.get("subjects", [])[:20]
     detail = {
         "success": True,
@@ -1542,11 +1845,19 @@ def build_book_detail(work_id, lang=None):
         "download_title": metadata.get("download_title") or metadata.get("title") or work.get("title", ""),
         "author": metadata.get("author", ""),
         "cover_url": localize_cover_url(metadata.get("cover_url", "")),
-        "download_queries": chinese_download_queries(ol_key, metadata) if lang == "cn" else [],
+        "download_queries": (
+            chinese_download_queries(ol_key, metadata)
+            if lang == "cn"
+            else english_download_queries(metadata)
+        ),
         "description": description,
         "subjects": subjects,
         "similar_subjects": similar_subject_candidates(subjects),
-        "complete": bool(work),
+        "complete": (
+            bool(work)
+            and description_complete
+            and metadata.get("_complete", bool(work))
+        ),
     }
     if detail["title"] or detail["author"]:
         key = book_detail_cache_key(work_id, lang)
@@ -1578,7 +1889,11 @@ def get_book_detail(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
     detail, cache_state = cached_book_detail(work_id, lang)
     if detail is not None:
-        if cache_state == "stale":
+        detail = merge_canonical_book_detail(
+            detail,
+            alternate_canonical_book_detail(work_id, lang),
+        )
+        if cache_state == "stale" or not detail.get("complete"):
             schedule_book_detail_refresh(work_id, lang)
         return detail, cache_state
     fallback = fallback_book_detail(work_id, lang)
@@ -1733,6 +2048,12 @@ def size_url(url, size="M"):
     local_cover = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", url)
     if local_cover:
         return f"/olcover/{local_cover.group(1)}/{size}"
+    archive_cover = re.fullmatch(
+        r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML])?",
+        url,
+    )
+    if archive_cover:
+        return f"/iacover/{archive_cover.group(1)}/{size}"
     remote_cover = re.search(r"covers\.openlibrary\.org/b/id/(\d+)-[SML]\.jpg", url)
     if remote_cover:
         return f"/olcover/{remote_cover.group(1)}/{size}"
@@ -2218,6 +2539,8 @@ def api_book():
     detail, cache_state = get_book_detail(work_id, get_book_lang())
     if not detail:
         status = 202 if cache_state == "miss" else 404
+        if status == 202:
+            g.cache_control_override = "no-store"
         return jsonify({
             "success": False,
             "error": "Book details are loading" if status == 202 else "Book not found",
@@ -2228,7 +2551,7 @@ def api_book():
     response_payload["refreshing"] = cache_state in ("stale", "fallback", "miss") or not detail.get("complete")
     response_payload["cache"] = cache_state
     if response_payload["refreshing"]:
-        g.cache_control_override = "private, max-age=2"
+        g.cache_control_override = "no-store"
     if request.args.get("description_only") == "1":
         response_payload = {
             "success": True,
@@ -2292,7 +2615,7 @@ def api_search():
     target_title = request.args.get("target_title", "").strip() or q
     target_author = request.args.get("target_author", "").strip()
     result_cache_key = (
-        f"download_search:v6:{q}:{sort}:{order}:{limit}:{page}:"
+        f"download_search:v7:{q}:{sort}:{order}:{limit}:{page}:"
         f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}"
     )
     cached_result = cache_get(result_cache_key, 900)
@@ -2385,6 +2708,7 @@ def api_search():
             target_author=target_author,
             preferred_language=lang_filter or "",
         )
+        d["kindle_compatible"] = is_kindle_delivery_format(b.ext)
         d["best_match"] = b is best_book
         result_books.append(d)
     result = {
@@ -2408,26 +2732,77 @@ def api_search():
 
 @app.route("/download/<md5>")
 def download(md5):
-    url = DOWNLOADER.resolve_download(md5)
-    if not url:
-        return jsonify({"success": False, "error": "The download source did not return a file link."}), 502
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", md5 or ""):
+        return jsonify({"success": False, "error": "Invalid download identifier."}), 404
+    md5 = md5.lower()
     filename = request.args.get("filename", f"{md5}.epub")
     filename = re.sub(r'[\r\n\\/\"<>|:*?]+', ' ', filename)
     filename = re.sub(r'\s+', ' ', filename).strip()[:140] or f"{md5}.epub"
     ascii_filename = filename.encode("ascii", "ignore").decode().strip()
     ascii_filename = re.sub(r'[^A-Za-z0-9._ -]+', '', ascii_filename) or f"{md5}.epub"
+    upstream = None
+    chunks = None
+    first_chunk = b""
+    range_header = request.headers.get("Range", "")
+    if not re.fullmatch(r"bytes=\d*-\d*", range_header):
+        range_header = ""
+    for attempt in range(2):
+        url = DOWNLOADER.resolve_download(md5)
+        if not url:
+            DOWNLOADER.invalidate_download(md5)
+            continue
+        try:
+            upstream = DL_SESSION.get(
+                url,
+                stream=True,
+                timeout=(5, 60),
+                allow_redirects=True,
+                headers={"Range": range_header} if range_header else None,
+            )
+            upstream.raise_for_status()
+            chunks = upstream.iter_content(chunk_size=65536)
+            first_chunk = next(chunks, b"")
+            content_type = upstream.headers.get("Content-Type", "").lower()
+            leading = first_chunk.lstrip()[:64].lower()
+            if (
+                not first_chunk
+                or "text/html" in content_type
+                or leading.startswith((b"<!doctype html", b"<html"))
+            ):
+                raise requests.RequestException("Download source returned a web page")
+            break
+        except (requests.RequestException, OSError):
+            if upstream is not None:
+                upstream.close()
+            upstream = None
+            chunks = None
+            first_chunk = b""
+            DOWNLOADER.invalidate_download(md5)
+            if attempt == 0:
+                continue
+    if upstream is None or chunks is None or not first_chunk:
+        return jsonify({
+            "success": False,
+            "error": "The download source did not return a working file link.",
+        }), 502
+
     def generate():
         try:
-            r = SESSION.get(url, stream=True, timeout=120, allow_redirects=True)
-            r.raise_for_status()
-            yield from r.iter_content(chunk_size=65536)
-        except:
-            yield b""
+            yield first_chunk
+            yield from chunks
+        finally:
+            upstream.close()
+
     resp = Response(stream_with_context(generate()),
-                    mimetype="application/octet-stream")
+                    status=upstream.status_code,
+                    mimetype=(upstream.headers.get("Content-Type") or "application/octet-stream").split(";", 1)[0])
     resp.headers["Content-Disposition"] = (
         f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{quote(filename)}'
     )
+    for header in ("Content-Length", "Content-Range", "Accept-Ranges"):
+        value = upstream.headers.get(header)
+        if value:
+            resp.headers[header] = value
     return resp
 
 def cover_dimensions(size):
@@ -2443,12 +2818,57 @@ def cover_cache_path(namespace, identity, size):
     return os.path.join(COVER_CACHE_DIR, namespace, digest[:2], f"{digest}.{extension}")
 
 def cover_lock(cache_path):
-    with COVER_LOCKS_LOCK:
-        lock = COVER_LOCKS.get(cache_path)
-        if lock is None:
-            lock = threading.Lock()
-            COVER_LOCKS[cache_path] = lock
-        return lock
+    digest = hashlib.sha256(cache_path.encode("utf-8")).digest()
+    return COVER_LOCK_STRIPES[int.from_bytes(digest[:2], "big") % len(COVER_LOCK_STRIPES)]
+
+def _prune_cover_failures_locked(now):
+    for path, failed_at in list(COVER_FAILURES.items()):
+        if now - failed_at >= COVER_NEGATIVE_TTL:
+            COVER_FAILURES.pop(path, None)
+    overflow = len(COVER_FAILURES) - COVER_FAILURE_LIMIT
+    if overflow > 0:
+        oldest = sorted(COVER_FAILURES, key=COVER_FAILURES.get)[:overflow]
+        for path in oldest:
+            COVER_FAILURES.pop(path, None)
+
+def recent_cover_failure(cache_path):
+    now = time.time()
+    with COVER_STATE_LOCK:
+        _prune_cover_failures_locked(now)
+        failed_at = COVER_FAILURES.get(cache_path, 0)
+        return bool(failed_at and now - failed_at < COVER_NEGATIVE_TTL)
+
+def remember_cover_failure(cache_path):
+    now = time.time()
+    with COVER_STATE_LOCK:
+        _prune_cover_failures_locked(now)
+        if cache_path not in COVER_FAILURES and len(COVER_FAILURES) >= COVER_FAILURE_LIMIT:
+            oldest = min(COVER_FAILURES, key=COVER_FAILURES.get, default=None)
+            if oldest is not None:
+                COVER_FAILURES.pop(oldest, None)
+        COVER_FAILURES[cache_path] = now
+
+def clear_cover_failure(cache_path):
+    with COVER_STATE_LOCK:
+        COVER_FAILURES.pop(cache_path, None)
+
+def cover_cache_file_is_valid(cache_path):
+    try:
+        if os.path.getsize(cache_path) <= 100:
+            return False
+        if Image is None:
+            return True
+        with Image.open(cache_path) as source:
+            source.verify()
+        with Image.open(cache_path) as source:
+            return (
+                source.width >= 40
+                and source.height >= 60
+                and source.width <= source.height * 1.5
+                and source.height <= source.width * 3.5
+            )
+    except (OSError, UnidentifiedImageError):
+        return False
 
 def write_optimized_cover(content, cache_path, size):
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
@@ -2458,6 +2878,13 @@ def write_optimized_cover(content, cache_path, size):
             output.write(content)
     else:
         with Image.open(io.BytesIO(content)) as source:
+            if (
+                source.width < 40
+                or source.height < 60
+                or source.width > source.height * 1.5
+                or source.height > source.width * 3.5
+            ):
+                raise UnidentifiedImageError("Cover image has invalid dimensions")
             source.thumbnail(cover_dimensions(size), Image.Resampling.LANCZOS)
             converted = source.convert("RGB")
             converted.save(temporary, format="WEBP", quality=82, method=4)
@@ -2466,12 +2893,27 @@ def write_optimized_cover(content, cache_path, size):
 def ensure_cover_cached(namespace, identity, size, source_url, referer=""):
     size = size if size in ("S", "M", "L") else "M"
     cache_path = cover_cache_path(namespace, identity, size)
-    hit = os.path.exists(cache_path) and os.path.getsize(cache_path) > 100
+    hit = cover_cache_file_is_valid(cache_path)
+    if hit:
+        clear_cover_failure(cache_path)
+        return cache_path, True
+    if recent_cover_failure(cache_path):
+        return None, False
     if not hit:
         with cover_lock(cache_path):
-            hit = os.path.exists(cache_path) and os.path.getsize(cache_path) > 100
+            hit = cover_cache_file_is_valid(cache_path)
             if not hit:
+                if recent_cover_failure(cache_path):
+                    return None, False
+                try:
+                    if os.path.exists(cache_path):
+                        os.unlink(cache_path)
+                except OSError:
+                    pass
                 headers = {"Referer": referer} if referer else {}
+                origin_slot = COVER_ORIGIN_SEMAPHORE.acquire(timeout=2)
+                if not origin_slot:
+                    return None, False
                 try:
                     response = SESSION.get(
                         source_url,
@@ -2479,11 +2921,19 @@ def ensure_cover_cached(namespace, identity, size, source_url, referer=""):
                         headers=headers,
                     )
                     response.raise_for_status()
-                    if len(response.content) <= 100:
-                        return None, hit
+                    if (
+                        len(response.content) <= 100
+                        or not response.headers.get("Content-Type", "").lower().startswith("image/")
+                        or urlsplit(response.url).path.endswith("/images/notfound.png")
+                    ):
+                        raise UnidentifiedImageError("Cover source returned no usable image")
                     write_optimized_cover(response.content, cache_path, size)
                 except (requests.RequestException, OSError, UnidentifiedImageError):
+                    remember_cover_failure(cache_path)
                     return None, hit
+                finally:
+                    COVER_ORIGIN_SEMAPHORE.release()
+    clear_cover_failure(cache_path)
     return cache_path, hit
 
 def cached_cover_response(namespace, identity, size, source_url, referer=""):
@@ -2516,9 +2966,20 @@ def cover(md5, size):
 @app.route("/olcover/<int:cover_id>")
 @app.route("/olcover/<int:cover_id>/<size>")
 def olcover(cover_id, size="M"):
+    if cover_id <= 0 or cover_id > 100_000_000:
+        return "", 404
     s = size.upper() if size.upper() in ("S", "M", "L") else "M"
     url = f"https://covers.openlibrary.org/b/id/{cover_id}-{s}.jpg"
     return cached_cover_response("openlibrary", str(cover_id), s, url)
+
+@app.route("/iacover/<identifier>")
+@app.route("/iacover/<identifier>/<size>")
+def iacover(identifier, size="M"):
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", identifier):
+        return "", 404
+    s = size.upper() if size.upper() in ("S", "M", "L") else "M"
+    url = f"https://archive.org/services/img/{identifier}"
+    return cached_cover_response("internetarchive", identifier, s, url)
 
 
 def _cover_file_as_jpeg(cache_path):
@@ -2568,6 +3029,23 @@ def _kindle_cover_bytes(cover_url):
             cover_id,
             "L",
             source_url,
+        )
+        return _cover_file_as_jpeg(cache_path)
+
+    archive_match = re.fullmatch(
+        r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML])?",
+        parsed.path,
+    )
+    if archive_match:
+        identifier = archive_match.group(1)
+        cached = _cached_cover_variant("internetarchive", identifier)
+        if cached:
+            return _cover_file_as_jpeg(cached)
+        cache_path, _ = ensure_cover_cached(
+            "internetarchive",
+            identifier,
+            "L",
+            f"https://archive.org/services/img/{identifier}",
         )
         return _cover_file_as_jpeg(cache_path)
 
@@ -2952,8 +3430,8 @@ def validate_kindle_payload(data):
     if not re.fullmatch(r"[a-fA-F0-9]{32}", str(data.get("md5", ""))):
         return "Invalid book identifier"
     extension = re.sub(r"[^a-z0-9]", "", str(data.get("ext", "epub")).casefold()) or "epub"
-    if not is_visible_kindle_format(extension):
-        return "MOBI and AZW files are not supported by Send to Kindle"
+    if not is_kindle_delivery_format(extension):
+        return "This file type is not supported by Send to Kindle; use EPUB or PDF"
     try:
         port = int(data.get("smtp_port", 587))
     except (TypeError, ValueError):

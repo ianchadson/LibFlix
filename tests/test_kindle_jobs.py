@@ -99,6 +99,27 @@ class KindleJobTests(unittest.TestCase):
         self.assertIn("not supported", response.get_json()["error"])
         submit.assert_not_called()
 
+    def test_create_job_rejects_visible_but_undeliverable_fb2_format(self):
+        payload = {
+            "md5": "a" * 32,
+            "title": "Book",
+            "ext": "fb2",
+            "kindle_email": "reader@kindle.com",
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 587,
+            "smtp_user": "sender@example.com",
+            "smtp_pass": "secret",
+        }
+        with (
+            app.app.test_client() as client,
+            patch.object(app.KINDLE_EXECUTOR, "submit") as submit,
+        ):
+            response = client.post("/api/kindle/jobs", json=payload)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("EPUB or PDF", response.get_json()["error"])
+        submit.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

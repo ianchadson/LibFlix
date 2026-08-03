@@ -31,6 +31,10 @@ jobs:
       - name: Check syntax
         run: |
           python -m py_compile app.py downloaders/*.py
+          node --check static/download-ui.js
+
+      - name: Run regression suite
+        run: python -m unittest discover -s tests -v
 
       - name: Package release
         run: |

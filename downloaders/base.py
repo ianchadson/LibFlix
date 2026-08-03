@@ -47,6 +47,10 @@ def cache_set(key: str, data) -> None:
     _CACHE[key] = {"d": data, "t": time.time()}
 
 
+def cache_delete(key: str) -> None:
+    _CACHE.pop(key, None)
+
+
 @dataclass
 class Book:
     """A normalized book entry returned by any downloader."""
@@ -94,6 +98,9 @@ class Downloader:
     def resolve_download(self, book_id: str) -> str:
         """Resolve ``book_id`` (typically an md5) to a fetchable URL."""
         raise NotImplementedError
+
+    def invalidate_download(self, book_id: str) -> None:
+        """Forget a cached file URL after an upstream transfer failure."""
 
     def stream_file(self, url: str) -> Iterator[bytes]:
         """Stream bytes from ``url``.  Default impl uses ``SESSION`` + chunked reads."""

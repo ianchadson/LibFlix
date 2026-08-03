@@ -187,6 +187,98 @@ class DownloadRankingTests(unittest.TestCase):
         self.assertEqual([book["title"] for book in payload["books"]], [correct.title])
         self.assertTrue(payload["books"][0]["best_match"])
 
+    def test_generic_title_fragment_without_author_is_rejected(self):
+        generic = Book(
+            book_id="a" * 32,
+            title="AI",
+            author="",
+            language="English",
+            ext="epub",
+        )
+
+        self.assertFalse(
+            download_book_is_relevant(
+                generic,
+                "The Age of AI",
+                "Henry Kissinger",
+            )
+        )
+
+    def test_kindle_compatibility_is_separate_from_direct_download_visibility(self):
+        self.assertTrue(app.is_visible_kindle_format("fb2"))
+        self.assertFalse(app.is_kindle_delivery_format("fb2"))
+        self.assertTrue(app.is_kindle_delivery_format("epub"))
+        self.assertTrue(app.is_kindle_delivery_format("pdf"))
+
+
+class DirectDownloadTests(unittest.TestCase):
+    class Downloader:
+        def __init__(self):
+            self.invalidations = 0
+
+        @staticmethod
+        def resolve_download(_book_id):
+            return "https://files.example.test/book.epub"
+
+        def invalidate_download(self, _book_id):
+            self.invalidations += 1
+
+    class Upstream:
+        def __init__(self, content, content_type="application/epub+zip"):
+            self.content = content
+            self.status_code = 200
+            self.headers = {
+                "Content-Type": content_type,
+                "Content-Length": str(len(content)),
+                "Accept-Ranges": "bytes",
+            }
+            self.url = "https://files.example.test/book.epub"
+            self.closed = False
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        def iter_content(self, chunk_size=65536):
+            del chunk_size
+            yield self.content
+
+        def close(self):
+            self.closed = True
+
+    def test_broken_cached_file_url_is_invalidated_and_retried(self):
+        downloader = self.Downloader()
+        html = self.Upstream(b"<html>expired link</html>", "text/html")
+        valid = self.Upstream(b"EPUB-CONTENT")
+        with (
+            patch.object(app, "DOWNLOADER", downloader),
+            patch.object(app.DL_SESSION, "get", side_effect=[html, valid]) as get,
+        ):
+            response = app.app.test_client().get("/download/" + "a" * 32)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, b"EPUB-CONTENT")
+        self.assertEqual(downloader.invalidations, 1)
+        self.assertEqual(get.call_count, 2)
+        self.assertTrue(html.closed)
+        self.assertTrue(valid.closed)
+
+    def test_broken_file_never_returns_empty_success(self):
+        downloader = self.Downloader()
+        failures = [
+            self.Upstream(b"<html>failure one</html>", "text/html"),
+            self.Upstream(b"<html>failure two</html>", "text/html"),
+        ]
+        with (
+            patch.object(app, "DOWNLOADER", downloader),
+            patch.object(app.DL_SESSION, "get", side_effect=failures),
+        ):
+            response = app.app.test_client().get("/download/" + "b" * 32)
+
+        self.assertEqual(response.status_code, 502)
+        self.assertFalse(response.get_json()["success"])
+        self.assertEqual(downloader.invalidations, 2)
+
 
 if __name__ == "__main__":
     unittest.main()

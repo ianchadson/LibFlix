@@ -41,6 +41,7 @@
     const publisher = shorten(book.publisher || '', 90);
     const extension = String(book.ext || '').toLowerCase();
     const format = extension || 'file';
+    const kindleCompatible = book.kindle_compatible === true || ['epub', 'pdf'].includes(extension);
     const recommended = book.best_match === true;
     const reasons = Array.isArray(book.recommendation_reasons)
       ? book.recommendation_reasons.filter(Boolean).slice(0, 4)
@@ -62,7 +63,9 @@
     const actions = book.md5
       ? '<div class="edition-actions">' +
           '<a class="edition-action edition-download" href="' + downloadHref + '" data-format="' + escapeHtml(format) + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>' + escapeHtml(format.toUpperCase()) + '</span></a>' +
-          '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(book.cover_url || '') + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>' +
+          (kindleCompatible
+            ? '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(book.cover_url || '') + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>'
+            : '') +
         '</div>'
       : '<div class="edition-actions"><span class="edition-action edition-kindle" aria-disabled="true">Unavailable</span></div>';
 
@@ -421,7 +424,7 @@
 
     const pages = visiblePages(current, total);
     let last = 0;
-    let html = '<button class="download-page-button' + (current <= 1 ? ' disabled' : '') + '" type="button" data-page="' + (current - 1) + '">Previous</button>';
+    let html = '<button class="download-page-button' + (current <= 1 ? ' disabled' : '') + '" type="button" data-page="' + (current - 1) + '"' + (current <= 1 ? ' disabled aria-disabled="true"' : '') + '>Previous</button>';
     for (const value of pages) {
       if (last && value - last > 1) html += '<span class="download-page-button disabled" aria-hidden="true">…</span>';
       html += value === current
@@ -429,7 +432,7 @@
         : '<button class="download-page-button" type="button" data-page="' + value + '">' + value + '</button>';
       last = value;
     }
-    html += '<button class="download-page-button' + (current >= total ? ' disabled' : '') + '" type="button" data-page="' + (current + 1) + '">Next</button>';
+    html += '<button class="download-page-button' + (current >= total ? ' disabled' : '') + '" type="button" data-page="' + (current + 1) + '"' + (current >= total ? ' disabled aria-disabled="true"' : '') + '>Next</button>';
     container.innerHTML = html;
     container.hidden = false;
     container.querySelectorAll('button[data-page]').forEach(button => {

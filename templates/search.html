@@ -105,6 +105,10 @@
       const renderedCount = window.LibFlixDownloads.renderEditions(resultsBody, data.books);
       if (!renderedCount) {
         showDownloadState('empty');
+        window.LibFlixDownloads.renderPagination(downloadPagination, data.page, data.total_pages, page => {
+          fetchResults(page);
+          document.querySelector('.download-search-head').scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
         return;
       }
       showDownloadState('results');
@@ -117,20 +121,26 @@
     function fetchResults(page) {
       currentPage = page || 1;
       if (activeSearch) activeSearch.abort();
-      activeSearch = new AbortController();
+      const controller = new AbortController();
+      activeSearch = controller;
       showDownloadState('loading');
       const params = getParams(currentPage);
       history.replaceState(null, '', '/search?q=' + encodeURIComponent(QUERY));
-      fetch('/api/search?' + new URLSearchParams(params), { signal: activeSearch.signal })
+      fetch('/api/search?' + new URLSearchParams(params), { signal: controller.signal })
         .then(response => response.json())
         .then(data => {
+          if (activeSearch !== controller) return;
           if (data.success) showResults(data);
           else showDownloadState('error', window.LibFlixDownloads.friendlyError(data.error));
         })
         .catch(error => {
-          if (error.name !== 'AbortError') showDownloadState('error', window.LibFlixDownloads.friendlyError(error.message));
+          if (activeSearch === controller && error.name !== 'AbortError') {
+            showDownloadState('error', window.LibFlixDownloads.friendlyError(error.message));
+          }
         })
-        .finally(() => { activeSearch = null; });
+        .finally(() => {
+          if (activeSearch === controller) activeSearch = null;
+        });
     }
 
     document.getElementById('filterForm').addEventListener('submit', event => {
