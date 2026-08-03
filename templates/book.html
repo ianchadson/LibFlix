@@ -229,7 +229,10 @@
 
     function requestDownloadsIfReady() {
       if (downloadRequested) return;
-      if (!hasResolvedBookIdentity()) return;
+      if (!hasResolvedBookIdentity()) {
+        showDownloadState('empty');
+        return;
+      }
       if (buildSearchQuery(0)) {
         doSearch(1, 0);
       } else {
@@ -255,7 +258,7 @@
           if (!data.success) {
             showNoDescription();
             renderSimilarEmpty('No similar books are available.');
-            showDownloadState('empty');
+            requestDownloadsIfReady();
             return;
           }
           hydrateBookIdentity(data);

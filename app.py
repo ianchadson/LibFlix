@@ -49,6 +49,9 @@ SHELF_BOOK_TARGET = 40
 SHELF_SEARCH_LIMIT = 100
 SHELF_MAX_OPEN_LIBRARY_PAGES = 25
 SHELF_REFILL_OPEN_LIBRARY_PAGES = 4
+DISCOVERY_SEARCH_LIMIT = 60
+DISCOVERY_PAGE_SIZE = 30
+DISCOVERY_RAW_PREFIX_LIMIT = 5
 
 BOOK_LANGS = {"en", "cn"}
 BOOK_LANG_CONFIG = {
@@ -1036,26 +1039,91 @@ def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
 
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v3:{lang}:{q}:{page}"
+    ckey = f"discover:v4:{lang}:{q}:{page}"
     cached = cache_get(ckey, 900)
     if cached:
         return cached
-    limit = 60
-    data = ol_get("/search.json", {"q": q, "limit": limit, "page": page, "fields": OL_BOOK_FIELDS})
-    total = data.get("numFound", 0) if data else 0
+
+    search_params = {
+        "limit": DISCOVERY_SEARCH_LIMIT,
+        "page": page,
+        "fields": OL_BOOK_FIELDS,
+    }
+    covered_query = (
+        f"{q} cover_i:* language:{BOOK_LANG_CONFIG[lang]['ol_lang']}"
+    )
+
+    def fetch_search(query):
+        try:
+            return ol_get("/search.json", {**search_params, "q": query}) or {}
+        except Exception:
+            return {}
+
+    # Preserve exact sparse matches while fetching a cover-rich result set in
+    # parallel so cover quality does not add a second origin wait.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        raw_future = pool.submit(fetch_search, q)
+        covered_future = pool.submit(fetch_search, covered_query)
+        raw_data = raw_future.result()
+        covered_data = covered_future.result()
+
     books = []
     seen_keys = set()
-    for w in (data or {}).get("docs", [])[:limit]:
-        if not discovery_fallback_matches_language(w, lang):
-            continue
-        b = extract_book(w, lang, allow_missing_cover=True)
-        if not b or book_seen(b, seen_keys):
-            continue
-        books.append(b)
-        remember_book(b, seen_keys)
-        if len(books) >= 30:
-            break
-    total_pages = min(25, max(1, (total + limit - 1) // limit))
+
+    def append_records(records, *, allow_missing_cover, maximum=None):
+        added = 0
+        for record in records:
+            if not discovery_fallback_matches_language(record, lang):
+                continue
+            book = extract_book(
+                record,
+                lang,
+                allow_missing_cover=allow_missing_cover,
+            )
+            if not book:
+                continue
+            if book_seen(book, seen_keys):
+                if book.get("cover_url"):
+                    existing = next(
+                        (
+                            candidate for candidate in books
+                            if candidate.get("ol_key") == book.get("ol_key")
+                        ),
+                        None,
+                    )
+                    if existing and not existing.get("cover_url"):
+                        existing["cover_url"] = book["cover_url"]
+                continue
+            books.append(book)
+            remember_book(book, seen_keys)
+            added += 1
+            if len(books) >= DISCOVERY_PAGE_SIZE or (
+                maximum is not None and added >= maximum
+            ):
+                break
+        return added
+
+    raw_records = raw_data.get("docs", [])[:DISCOVERY_SEARCH_LIMIT]
+    covered_records = covered_data.get("docs", [])[:DISCOVERY_SEARCH_LIMIT]
+    if page == 1:
+        append_records(
+            raw_records,
+            allow_missing_cover=True,
+            maximum=DISCOVERY_RAW_PREFIX_LIMIT,
+        )
+    append_records(covered_records, allow_missing_cover=False)
+
+    # If Open Library has no covered matches, retain the sparse-result
+    # fallback rather than making an exact but coverless book undiscoverable.
+    if not covered_records and len(books) < DISCOVERY_PAGE_SIZE:
+        append_records(raw_records, allow_missing_cover=True)
+
+    result_data = covered_data if covered_records else raw_data
+    total = result_data.get("numFound", 0)
+    total_pages = min(
+        25,
+        max(1, (total + DISCOVERY_SEARCH_LIMIT - 1) // DISCOVERY_SEARCH_LIMIT),
+    )
     result = (books, total, total_pages)
     cache_set(ckey, result)
     return result

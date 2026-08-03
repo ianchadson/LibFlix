@@ -152,8 +152,13 @@ class DiscoveryFallbackTests(unittest.TestCase):
         self.assertEqual(books[0]["ol_key"], "/works/OL45347056W")
         self.assertEqual(books[0]["cover_url"], "")
         self.assertEqual((total, total_pages), (1, 1))
-        ol_get.assert_called_once()
-        self.assertNotIn("language:", ol_get.call_args.args[1]["q"])
+        self.assertEqual(ol_get.call_count, 2)
+        queries = {call.args[1]["q"] for call in ol_get.call_args_list}
+        self.assertIn("the energy game amantha imber", queries)
+        self.assertIn(
+            "the energy game amantha imber cover_i:* language:eng",
+            queries,
+        )
 
     def test_art_of_simple_living_sparse_work_stays_in_discovery_results(self):
         records = [
@@ -221,7 +226,54 @@ class DiscoveryFallbackTests(unittest.TestCase):
             books, _, _ = app.fetch_discovery_books("energy", lang="en")
 
         self.assertEqual(len(books), 1)
-        ol_get.assert_called_once()
+        self.assertEqual(ol_get.call_count, 2)
+
+    def test_discovery_keeps_exact_sparse_results_then_fills_with_covers(self):
+        sparse = [
+            self.energy_game_record(
+                key=f"/works/OL{i}W",
+                title=f"The Age of AI Volume {i}",
+                author_name=[f"Author {i}"],
+                language=["eng"],
+            )
+            for i in range(1, 7)
+        ]
+        covered = [
+            self.energy_game_record(
+                key=f"/works/OL{i}W",
+                title=f"The Age of AI Volume {i}",
+                author_name=[f"Author {i}"],
+                language=["eng"],
+                cover_i=1000 + i,
+            )
+            for i in range(4, 40)
+        ]
+
+        def search_response(_path, params):
+            if "cover_i:*" in params["q"]:
+                return {"numFound": len(covered), "docs": covered}
+            return {"numFound": len(sparse), "docs": sparse}
+
+        with patch.object(app, "ol_get", side_effect=search_response):
+            books, total, total_pages = app.fetch_discovery_books(
+                "the age of ai",
+                lang="en",
+            )
+
+        self.assertEqual(len(books), 30)
+        self.assertEqual([book["ol_key"] for book in books[:5]], [
+            "/works/OL1W",
+            "/works/OL2W",
+            "/works/OL3W",
+            "/works/OL4W",
+            "/works/OL5W",
+        ])
+        self.assertGreaterEqual(
+            sum(bool(book["cover_url"]) for book in books),
+            27,
+        )
+        self.assertEqual(len({book["ol_key"] for book in books}), len(books))
+        self.assertEqual((total, total_pages), (len(covered), 1))
 
 
 class BookApiFallbackTests(unittest.TestCase):
