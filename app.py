@@ -1033,7 +1033,7 @@ def similar_subject_candidates(subjects):
     candidates = []
     catalog_qualified = []
     seen = set()
-    for subject in subjects:
+    for index, subject in enumerate(subjects):
         normalized = subject.casefold()
         if (
             not subject
@@ -1044,7 +1044,7 @@ def similar_subject_candidates(subjects):
         ):
             continue
         seen.add(normalized)
-        target = catalog_qualified if any(
+        catalog_metadata = normalized.startswith(("united states,", "great britain,")) or any(
             qualifier in normalized
             for qualifier in (
                 "juvenile literature",
@@ -1053,10 +1053,46 @@ def similar_subject_candidates(subjects):
                 ", history",
                 ", personal narratives",
             )
-        ) else candidates
-        target.append(subject)
-    selected = [*candidates, *catalog_qualified]
-    return selected[:2] or subjects[:1]
+        )
+        target = catalog_qualified if catalog_metadata else candidates
+        target.append((index, subject))
+
+    def subject_terms(value):
+        return [
+            term for term in re.findall(r"[a-z0-9]+", value.casefold())
+            if term not in {"and", "of", "the"}
+        ]
+
+    def subject_family(value):
+        aliases = {"crises": "crisis"}
+        family = []
+        for term in subject_terms(value):
+            term = aliases.get(term, term)
+            if len(term) > 5 and term.endswith("s") and not term.endswith("ss"):
+                term = term[:-1]
+            if term not in family:
+                family.append(term)
+        return tuple(family)
+
+    ranked = sorted(
+        candidates,
+        key=lambda item: (len(subject_terms(item[1])) < 2, item[0]),
+    )
+    ranked.extend(sorted(
+        catalog_qualified,
+        key=lambda item: (len(subject_terms(item[1])) < 2, item[0]),
+    ))
+    selected = []
+    seen_families = set()
+    for _, subject in ranked:
+        family = subject_family(subject)
+        if not family or family in seen_families:
+            continue
+        seen_families.add(family)
+        selected.append(subject)
+        if len(selected) == 2:
+            break
+    return selected or subjects[:1]
 
 def resolve_chinese_title(ol_key):
     if not re.fullmatch(r"/works/OL\d+W", ol_key or ""):

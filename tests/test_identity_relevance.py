@@ -383,6 +383,18 @@ class SimilarBookRelevanceTests(unittest.TestCase):
             app.similar_subject_candidates(subjects),
             ["Sporting goods industry", "Nike (Firm)"],
         )
+        self.assertEqual(
+            app.similar_subject_candidates([
+                "New York Times bestseller",
+                "United states, navy, seals",
+                "United states, air force",
+                "Triathlon",
+                "Endurance sports",
+                "Motivation (psychology)",
+                "Self-realization",
+            ]),
+            ["Endurance sports", "Motivation (psychology)"],
+        )
 
     def test_cached_detail_recomputes_recommendation_subjects(self):
         cached = {
@@ -407,7 +419,7 @@ class SimilarBookRelevanceTests(unittest.TestCase):
         self.assertEqual(cache_state, "memory")
         self.assertEqual(
             detail["similar_subjects"],
-            ["United states, navy, seals", "Mental endurance"],
+            ["Mental endurance", "United states, navy, seals"],
         )
 
     def test_similar_books_require_shared_context_or_same_author(self):
