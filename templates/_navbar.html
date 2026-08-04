@@ -174,6 +174,7 @@
       <a href="{{ category_url('literary_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'literary_fiction' %}active{% endif %}">Literary</a>
       {% else %}
       <a href="{{ home_url('nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'home' %}active{% endif %}">Home</a>
+      <a href="{{ topics_url('nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'topics' %}active{% endif %}">Topics</a>
       <a href="{{ category_url('trending', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'trending' %}active{% endif %}">Trending</a>
       <a href="{{ category_url('self_help', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'self_help' %}active{% endif %}">Self Dev</a>
       <a href="{{ category_url('business', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'business' %}active{% endif %}">Business</a>
@@ -249,10 +250,10 @@
     </div>
   </div>
 </nav>
-<section class="mobile-browse-sheet" id="mobileBrowseSheet" aria-label="Browse categories" hidden>
+<section class="mobile-browse-sheet" id="mobileBrowseSheet" aria-label="Browse books" hidden>
   <div class="mobile-browse-head">
     <h2>Browse</h2>
-    <button class="mobile-browse-close" id="mobileBrowseClose" type="button" aria-label="Close category browser">×</button>
+    <button class="mobile-browse-close" id="mobileBrowseClose" type="button" aria-label="Close book browser">×</button>
   </div>
   <div class="mobile-browse-links" id="mobileBrowseLinks"></div>
 </section>
@@ -265,7 +266,7 @@
     <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
     <span>Search</span>
   </button>
-  <button class="mobile-app-nav-item" id="mobileNavBrowse" type="button" aria-label="Browse categories" aria-expanded="false" aria-controls="mobileBrowseSheet">
+  <button class="mobile-app-nav-item" id="mobileNavBrowse" type="button" aria-label="Browse books" aria-expanded="false" aria-controls="mobileBrowseSheet">
     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"></path></svg>
     <span>Browse</span>
   </button>

@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-08-05 - Browseable topic catalog
+
+- Added a dedicated `/topics` surface with featured starting points, six
+  compact groups, and an explicit freeform topic search.
+- Added an `Explore by topic` rail to the nonfiction homepage and a `Topics`
+  entry to desktop and mobile browse navigation.
+- Kept topic browsing zero-fetch until a topic is selected: the catalog loads
+  no provider results or covers and every link enters `/discover` explicitly as
+  a nonfiction topic query.
+- Made the 30 public topics the source of truth for the weekly production
+  quality benchmark, preventing the browse catalog and monitored queries from
+  drifting apart.
+
 ## 2026-08-04 - Relevance-first topic discovery
 
 ### Topic intent and source safety

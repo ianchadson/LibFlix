@@ -367,7 +367,7 @@ def normalize_metric_route(path_or_rule: str | None) -> str:
         if re.fullmatch(pattern, value):
             return route
     fixed = {
-        "/", "/fiction", "/cn", "/fiction/cn", "/discover",
+        "/", "/fiction", "/cn", "/fiction/cn", "/topics", "/cn/topics", "/discover",
         "/fiction/discover", "/cn/discover", "/fiction/cn/discover",
         "/search", "/preview", "/api/search", "/api/discover",
         "/api/book", "/api/similar", "/api/kindle/jobs",

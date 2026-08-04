@@ -30,6 +30,21 @@ class PartialNavigationTests(unittest.TestCase):
         self.assertNotIn("Function(script.textContent)", navbar)
         self.assertIn("replacement.textContent = `(() => {", navbar)
 
+    def test_topics_supports_lightweight_partial_navigation(self):
+        client = app.app.test_client()
+        full = client.get("/topics")
+        partial = client.get(
+            "/topics",
+            headers={"X-LibFlix-Navigation": "partial"},
+        )
+
+        self.assertEqual((full.status_code, partial.status_code), (200, 200))
+        self.assertEqual(partial.headers["X-LibFlix-Partial"], "1")
+        self.assertIn(b'id="mainContent"', partial.data)
+        self.assertIn(b"Explore topics", partial.data)
+        self.assertNotIn(b"const LOADER_DELAY", partial.data)
+        self.assertLess(len(partial.data), len(full.data) * 0.75)
+
 
 class DiscoveryShellTests(unittest.TestCase):
     def test_cold_discovery_document_never_waits_for_provider(self):

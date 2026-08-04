@@ -68,7 +68,7 @@ jobs:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
 
-      - name: Verify production topic surface
+      - name: Verify production topic surfaces
         run: |
           for attempt in 1 2 3 4 5; do
             if curl --fail --silent --show-error --max-time 15 \
@@ -81,3 +81,6 @@ jobs:
           curl --fail --silent --show-error --max-time 15 \
             'https://libflix.fomalhaut.app/discover?q=focus&intent=topic' \
             | grep -q 'Books about focus'
+          curl --fail --silent --show-error --max-time 15 \
+            'https://libflix.fomalhaut.app/topics' \
+            | grep -q 'Explore topics'

@@ -158,7 +158,7 @@
       const path = location.pathname.replace(/\/+$/, '') || '/';
       const homePaths = new Set(['/', '/fiction', '/cn', '/fiction/cn']);
       const isSearch = /\/(?:discover|search)$/.test(path);
-      const isBrowse = /\/category\//.test(path);
+      const isBrowse = /\/category\//.test(path) || /\/topics$/.test(path);
       const currentHome = document.querySelector('.navbar-brand')?.href;
       if (currentHome) home.href = currentHome;
       [home, search, browse].forEach(item => {

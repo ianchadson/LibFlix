@@ -60,6 +60,10 @@ Inventaire supplements broad-topic searches with public semantic metadata.
   Library ids, quoted titles, and `Title by Author` queries stay on the strict
   identity path. The visible `About` / `Title or author` switch always lets the
   user override the automatic choice.
+- **Browseable topic catalog** - `/topics` groups 30 quality-monitored starting
+  points and the nonfiction homepage exposes a compact featured-topic rail.
+  Topic links open the same ranked discovery pipeline explicitly, without
+  fetching providers or covers merely to render the catalog.
 - **Deterministic topic expansion** - a versioned corpus covers more than 30
   common topics and expands each request to at most three bounded search terms.
   Prefixes such as `books about` also opt an otherwise unknown query into topic
@@ -315,6 +319,7 @@ Inventaire supplements broad-topic searches with public semantic metadata.
 | Route | Purpose |
 |---|---|
 | `/` | Homepage with hero and horizontal shelves |
+| `/topics` | Grouped nonfiction topic catalog with direct ranked-discovery links |
 | `/category/<topic>` | Category grid with vertical infinite scroll |
 | `/discover?q=...` | Auto-detected topic or Open Library identity discovery |
 | `/book/OL...W` | Book detail, similar books, download search |

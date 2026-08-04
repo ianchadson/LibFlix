@@ -69,6 +69,94 @@ TOPIC_EXPANSIONS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Public browse taxonomy. These are discovery starting points rather than
+# curated result lists, and every query is exercised by the weekly benchmark.
+BROWSE_TOPIC_GROUPS = (
+    {
+        "name": "Focus & wellbeing",
+        "description": "Direct attention, protect energy, and work with intention.",
+        "topics": (
+            {"name": "Focus", "query": "focus", "description": "Attention, concentration, and deep work"},
+            {"name": "Meditation", "query": "meditation", "description": "Practice, awareness, and calm"},
+            {"name": "Productivity", "query": "productivity", "description": "Do meaningful work with less friction"},
+            {"name": "Habits", "query": "habits", "description": "Build patterns that last"},
+            {"name": "Sleep", "query": "sleep", "description": "Rest, recovery, and sleep science"},
+        ),
+    },
+    {
+        "name": "Mind & relationships",
+        "description": "Understand yourself and relate to other people more clearly.",
+        "topics": (
+            {"name": "Anxiety", "query": "anxiety", "description": "Understand worry and regain agency"},
+            {"name": "Depression", "query": "depression", "description": "Research, experience, and recovery"},
+            {"name": "Mental health", "query": "mental health", "description": "Emotional health and resilience"},
+            {"name": "Psychology", "query": "psychology", "description": "Behavior, cognition, and motivation"},
+            {"name": "Relationships", "query": "relationships", "description": "Connection, conflict, and intimacy"},
+        ),
+    },
+    {
+        "name": "Build & lead",
+        "description": "Create companies, lead teams, and make ideas travel.",
+        "topics": (
+            {"name": "Startups", "query": "startups", "description": "From early insight to durable company"},
+            {"name": "Leadership", "query": "leadership", "description": "Direction, judgment, and responsibility"},
+            {"name": "Management", "query": "management", "description": "Teams, systems, and execution"},
+            {"name": "Marketing", "query": "marketing", "description": "Positioning, brands, and demand"},
+            {"name": "Sales", "query": "sales", "description": "Trust, negotiation, and closing"},
+        ),
+    },
+    {
+        "name": "Money & work",
+        "description": "Make clearer decisions about capital, craft, and communication.",
+        "topics": (
+            {"name": "Investing", "query": "investing", "description": "Long-term thinking and capital"},
+            {"name": "Finance", "query": "finance", "description": "Money, markets, and financial literacy"},
+            {"name": "Economics", "query": "economics", "description": "Incentives, systems, and trade-offs"},
+            {"name": "Communication", "query": "communication", "description": "Speak, listen, and persuade clearly"},
+            {"name": "Writing", "query": "writing", "description": "Craft, clarity, and creative practice"},
+        ),
+    },
+    {
+        "name": "Health & life",
+        "description": "Care for the body, family, and a more creative life.",
+        "topics": (
+            {"name": "Parenting", "query": "parenting", "description": "Raising children with perspective"},
+            {"name": "Health", "query": "health", "description": "Evidence, prevention, and wellbeing"},
+            {"name": "Fitness", "query": "fitness", "description": "Strength, movement, and exercise"},
+            {"name": "Nutrition", "query": "nutrition", "description": "Food, health, and useful evidence"},
+            {"name": "Creativity", "query": "creativity", "description": "Generate and develop better ideas"},
+        ),
+    },
+    {
+        "name": "Science & ideas",
+        "description": "Understand progress, nature, and possible futures.",
+        "topics": (
+            {"name": "Technology", "query": "technology", "description": "Innovation and technological change"},
+            {"name": "Artificial intelligence", "query": "artificial intelligence", "description": "AI, machine learning, and society"},
+            {"name": "Climate change", "query": "climate change", "description": "Climate science and possible futures"},
+            {"name": "Science", "query": "science", "description": "Discovery and the natural world"},
+            {"name": "Philosophy", "query": "philosophy", "description": "Meaning, ethics, and how to live"},
+        ),
+    },
+)
+
+BROWSE_TOPIC_QUERIES = tuple(
+    topic["query"]
+    for group in BROWSE_TOPIC_GROUPS
+    for topic in group["topics"]
+)
+FEATURED_TOPIC_QUERIES = (
+    "focus",
+    "meditation",
+    "startups",
+    "artificial intelligence",
+    "psychology",
+    "investing",
+    "habits",
+    "creativity",
+)
+
+
 # Inventaire can search semantic Wikidata subject claims.  Unknown topics simply
 # skip this path; text search remains an optional, tightly gated supplement.
 INVENTAIRE_SUBJECT_CLAIMS: dict[str, tuple[str, ...]] = {

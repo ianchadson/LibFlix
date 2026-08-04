@@ -86,6 +86,16 @@ Important behavior:
 - The loading spinner appears only while a page is being fetched.
 - Category pages do not show total count labels.
 
+### Topic Catalog (`GET /topics`)
+
+`/topics` and `/cn/topics` render a zero-provider-fetch catalog of 30 canonical
+nonfiction topics. The same catalog drives the weekly quality benchmark, so a
+public browse entry cannot drift away from monitored queries. Featured links
+also appear on the nonfiction homepage and `Topics` appears in desktop and
+mobile browse navigation. Every link targets `/discover` with explicit
+`intent=topic&type=nonfiction`; the catalog itself performs no API fanout and
+loads no covers.
+
 ### Discovery Search (`GET /discover`)
 
 ```text
@@ -606,10 +616,11 @@ and store it under `LIBFLIX_DATA_DIR/covers`. Responses expose
 
 | Template | Responsibility |
 |---|---|
-| `_navbar.html` | Shared nav, category tabs, expandable discovery search/settings, Kindle sheet, transition overlay, toast, quick peek |
+| `_navbar.html` | Shared nav, topic/category tabs, expandable discovery search/settings, Kindle sheet, transition overlay, toast, quick peek |
 | `_book_card.html` | Shared card link, cover, placeholder, hover/focus metadata |
 | `_download_filters.html` | Shared collapsible download filter form |
-| `index.html` | Fixed-height hero, cover-stack carousel, homepage shelves, horizontal shelf infinite scroll |
+| `index.html` | Fixed-height hero, cover-stack carousel, featured topic rail, homepage shelves, horizontal shelf infinite scroll |
+| `topics.html` | Zero-fetch featured and grouped topic catalog with an explicit topic-search form |
 | `category.html` | Category grid and vertical infinite scroll |
 | `discover.html` | Intent switch, topic Start here / Explore layout, reason chips, compact topic filters, identity cards, partial-source status, and vertical infinite scroll |
 | `book.html` | Preview spotlight, async description, similar shelf, inline edition results |

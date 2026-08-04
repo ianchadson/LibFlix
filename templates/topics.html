@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="{{ 'zh' if book_lang == 'cn' else 'en' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Explore topics - LibFlix</title>
+  <style data-page-style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background:
+        radial-gradient(circle at 12% 4%, rgba(229, 9, 20, .075), transparent 26rem),
+        #141414;
+      color: #fff;
+      font-family: 'Helvetica Neue', Arial, sans-serif;
+    }
+    .navbar {
+      min-height: 48px;
+      z-index: 10;
+      background: linear-gradient(180deg, rgba(20,20,20,.94) 0, rgba(20,20,20,.7) 78%, transparent);
+    }
+    .navbar-brand { color: #e50914 !important; font-size: 1.3rem; font-weight: 700; letter-spacing: -1px; }
+    .topics-shell { width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 48px 0 72px; }
+    .topics-intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, .68fr); gap: 64px; align-items: end; padding: 18px 0 50px; }
+    .topics-kicker { margin: 0 0 12px; color: #e50914; font-size: .7rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .topics-title { max-width: 680px; margin: 0; font-size: clamp(2.5rem, 6vw, 5.25rem); font-weight: 760; letter-spacing: -.065em; line-height: .93; }
+    .topics-lede { max-width: 590px; margin: 20px 0 0; color: rgba(255,255,255,.59); font-size: 1rem; line-height: 1.55; }
+    .topic-search { display: flex; align-items: center; gap: 8px; padding: 7px; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; background: rgba(8,9,11,.7); box-shadow: 0 18px 50px rgba(0,0,0,.2); }
+    .topic-search:focus-within { border-color: rgba(229,9,20,.75); box-shadow: 0 0 0 3px rgba(229,9,20,.11), 0 18px 50px rgba(0,0,0,.25); }
+    .topic-search input[type="search"] { min-width: 0; height: 42px; flex: 1; border: 0; outline: 0; background: transparent; color: #fff; padding: 0 10px; font: inherit; font-size: .94rem; }
+    .topic-search input[type="search"]::placeholder { color: rgba(255,255,255,.35); }
+    .topic-search button { height: 38px; flex: 0 0 auto; border: 0; border-radius: 5px; background: #e50914; color: #fff; padding: 0 16px; font-size: .8rem; font-weight: 750; cursor: pointer; }
+    .topic-search button:hover { background: #f40612; }
+    .topic-search button:focus-visible, .topic-link:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+    .topics-section { padding: 36px 0; border-top: 1px solid rgba(255,255,255,.09); }
+    .topics-section-head { display: grid; grid-template-columns: minmax(180px, .34fr) minmax(0, 1fr); gap: 28px; align-items: baseline; margin-bottom: 22px; }
+    .topics-section-title { margin: 0; font-size: 1.05rem; font-weight: 740; letter-spacing: -.015em; }
+    .topics-section-copy { max-width: 620px; margin: 0; color: rgba(255,255,255,.43); font-size: .8rem; line-height: 1.5; }
+    .featured-row { display: flex; gap: 10px; overflow-x: auto; padding: 2px 2px 8px; scroll-snap-type: x proximity; scrollbar-width: none; }
+    .featured-row::-webkit-scrollbar { display: none; }
+    .featured-topic { position: relative; min-width: min(330px, 78vw); min-height: 152px; flex: 1 0 0; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; padding: 22px; border: 1px solid rgba(255,255,255,.1); border-radius: 7px; background: #1b1c1f; color: inherit; text-decoration: none; scroll-snap-align: start; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
+    .featured-topic::after { content: ''; position: absolute; inset: auto 22px 0; height: 2px; background: #e50914; transform: scaleX(0); transform-origin: left; transition: transform .18s ease; }
+    .featured-topic:hover { border-color: rgba(255,255,255,.2); background: #202125; transform: translateY(-2px); }
+    .featured-topic:hover::after { transform: scaleX(1); }
+    .featured-index { color: rgba(255,255,255,.28); font-size: .68rem; font-variant-numeric: tabular-nums; letter-spacing: .08em; }
+    .featured-name { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-top: 26px; }
+    .featured-name strong { font-size: 1.35rem; line-height: 1.08; letter-spacing: -.025em; }
+    .topic-arrow { color: rgba(255,255,255,.43); font-size: 1.25rem; line-height: 1; transition: color .16s ease, transform .16s ease; }
+    .featured-topic:hover .topic-arrow, .topic-card:hover .topic-arrow { color: #fff; transform: translateX(3px); }
+    .topic-group + .topic-group { margin-top: 20px; }
+    .topic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid rgba(255,255,255,.075); }
+    .topic-card { min-width: 0; min-height: 126px; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto 1fr; column-gap: 18px; padding: 20px 18px 19px 0; border-bottom: 1px solid rgba(255,255,255,.075); color: inherit; text-decoration: none; transition: color .16s ease, padding-left .16s ease, background .16s ease; }
+    .topic-card:not(:nth-child(3n + 1)) { padding-left: 18px; border-left: 1px solid rgba(255,255,255,.075); }
+    .topic-card:hover { padding-left: 12px; background: rgba(255,255,255,.025); }
+    .topic-card:not(:nth-child(3n + 1)):hover { padding-left: 30px; }
+    .topic-card-name { min-width: 0; overflow: hidden; font-size: .97rem; font-weight: 720; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
+    .topic-card .topic-arrow { grid-column: 2; grid-row: 1; font-size: 1rem; }
+    .topic-card-description { grid-column: 1 / -1; align-self: end; margin: 11px 34px 0 0; color: rgba(255,255,255,.43); font-size: .76rem; line-height: 1.42; display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .topics-empty { padding: 28px 0; color: rgba(255,255,255,.45); font-size: .85rem; }
+    @media (max-width: 900px) {
+      .topics-shell { width: min(100% - 36px, 760px); padding-top: 28px; }
+      .topics-intro { grid-template-columns: 1fr; gap: 30px; padding-bottom: 42px; }
+      .topics-lede { margin-top: 16px; }
+      .topic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .topic-card:not(:nth-child(3n + 1)) { padding-left: 0; border-left: 0; }
+      .topic-card:nth-child(even) { padding-left: 18px; border-left: 1px solid rgba(255,255,255,.075); }
+      .topic-card:hover { padding-left: 10px; }
+      .topic-card:nth-child(even):hover { padding-left: 28px; }
+    }
+    @media (max-width: 600px) {
+      .topics-shell { width: calc(100% - 28px); padding: 18px 0 48px; }
+      .topics-intro { gap: 26px; padding: 16px 0 36px; }
+      .topics-title { font-size: clamp(2.65rem, 15vw, 4rem); }
+      .topics-lede { font-size: .9rem; }
+      .topic-search { padding: 5px; }
+      .topic-search input[type="search"] { height: 40px; font-size: .87rem; }
+      .topic-search button { height: 36px; padding: 0 13px; }
+      .topics-section { padding: 28px 0; }
+      .topics-section-head { grid-template-columns: 1fr; gap: 7px; margin-bottom: 17px; }
+      .featured-topic { min-width: 78vw; min-height: 138px; padding: 19px; }
+      .topic-grid { grid-template-columns: 1fr; }
+      .topic-card, .topic-card:nth-child(even) { min-height: 106px; padding: 17px 0; border-left: 0; }
+      .topic-card:hover, .topic-card:nth-child(even):hover { padding-left: 9px; }
+      .topic-card-description { margin-top: 8px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .featured-topic, .featured-topic::after, .topic-card, .topic-arrow { transition: none; }
+    }
+  </style>
+  <link href="{{ url_for('static', filename='libflix.css', v=asset_version) }}" rel="stylesheet">
+</head>
+<body class="page-topics">
+  {% set active_tab = 'topics' %}
+  {% include "_navbar.html" %}
+
+  <main id="mainContent">
+    <div class="topics-shell">
+      <header class="topics-intro">
+        <div>
+          <p class="topics-kicker">Browse LibFlix</p>
+          <h1 class="topics-title">Explore topics</h1>
+          <p class="topics-lede">Start with an idea, interest, or problem. We’ll surface the books most worth opening first.</p>
+        </div>
+        <form class="topic-search" action="{{ discover_url(mode, book_lang) }}" method="get" role="search">
+          <input type="hidden" name="intent" value="topic">
+          <input type="hidden" name="type" value="nonfiction">
+          <input type="search" name="q" placeholder="Try focus, meditation, startups…" aria-label="Search by topic" autocomplete="off" required>
+          <button type="submit">Find books</button>
+        </form>
+      </header>
+
+      {% if featured_topics %}
+      <section class="topics-section" aria-labelledby="featuredTopicsTitle">
+        <div class="topics-section-head">
+          <h2 class="topics-section-title" id="featuredTopicsTitle">Featured</h2>
+          <p class="topics-section-copy">A few useful places to begin.</p>
+        </div>
+        <div class="featured-row">
+          {% for topic in featured_topics %}
+          <a class="featured-topic topic-link" href="{{ topic_url(topic.query, mode, book_lang) }}">
+            <span class="featured-index">{{ '%02d' | format(loop.index) }}</span>
+            <span class="featured-name">
+              <strong>{{ topic.name }}</strong>
+              <span class="topic-arrow" aria-hidden="true">→</span>
+            </span>
+          </a>
+          {% endfor %}
+        </div>
+      </section>
+      {% endif %}
+
+      {% for group in topic_groups %}
+      <section class="topics-section topic-group" aria-labelledby="topicGroup{{ loop.index }}">
+        <div class="topics-section-head">
+          <h2 class="topics-section-title" id="topicGroup{{ loop.index }}">{{ group.name }}</h2>
+          {% if group.description %}<p class="topics-section-copy">{{ group.description }}</p>{% endif %}
+        </div>
+        <div class="topic-grid">
+          {% for topic in group.topics %}
+          <a class="topic-card topic-link" href="{{ topic_url(topic.query, mode, book_lang) }}">
+            <span class="topic-card-name">{{ topic.name }}</span>
+            <span class="topic-arrow" aria-hidden="true">→</span>
+            {% if topic.description %}<span class="topic-card-description">{{ topic.description }}</span>{% endif %}
+          </a>
+          {% endfor %}
+        </div>
+      </section>
+      {% else %}
+        {% if not featured_topics %}<p class="topics-empty">No topics are available yet.</p>{% endif %}
+      {% endfor %}
+    </div>
+  </main>
+
+  <footer class="app-footer">Powered by Open Library &amp; libgen.li</footer>
+</body>
+</html>

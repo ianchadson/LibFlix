@@ -12,15 +12,14 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-TOPICS = (
-    "focus", "meditation", "startups", "productivity", "habits", "sleep",
-    "anxiety", "depression", "mental health", "leadership", "management",
-    "marketing", "sales", "investing", "finance", "economics", "psychology",
-    "philosophy", "creativity", "writing", "communication", "relationships",
-    "parenting", "health", "fitness", "nutrition", "technology",
-    "artificial intelligence", "climate change", "science",
-)
+from topic_discovery import BROWSE_TOPIC_QUERIES
+
+
+TOPICS = BROWSE_TOPIC_QUERIES
 
 GOLDEN_TITLES = {
     "focus": ("deep work", "stolen focus", "indistractable", "hyperfocus"),

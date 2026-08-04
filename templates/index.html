@@ -84,6 +84,21 @@
 
     .shelf { margin-bottom: 2rem; content-visibility:auto; contain-intrinsic-size: 270px; }
     .home-shelves { padding-top: 30px; }
+    .home-topics { width:min(1560px, 100%); margin:0 auto; padding:34px 24px 4px; }
+    .home-topics-head { display:flex; align-items:end; justify-content:space-between; gap:20px; margin-bottom:13px; }
+    .home-topics-kicker { margin:0 0 5px; color:#777b83; font-size:.68rem; font-weight:720; letter-spacing:.09em; text-transform:uppercase; }
+    .home-topics-title { margin:0; color:#f4f4f5; font-size:1.3rem; font-weight:750; letter-spacing:-.02em; }
+    .home-topics-all { color:#aeb0b5; font-size:.76rem; font-weight:650; text-decoration:none; white-space:nowrap; }
+    .home-topics-all:hover { color:#fff; }
+    .home-topic-row { display:grid; grid-auto-flow:column; grid-auto-columns:minmax(190px, 1fr); gap:9px; overflow-x:auto; padding:2px 2px 13px; scroll-snap-type:x proximity; scrollbar-width:none; }
+    .home-topic-row::-webkit-scrollbar { display:none; }
+    .home-topic-card { min-height:112px; display:grid; grid-template-columns:minmax(0, 1fr) auto; grid-template-rows:auto 1fr auto; gap:5px 14px; padding:15px; border:1px solid rgba(255,255,255,.09); border-radius:7px; background:#1a1c20; color:inherit; text-decoration:none; scroll-snap-align:start; transition:transform .16s ease, border-color .16s ease, background .16s ease; }
+    .home-topic-card:hover { transform:translateY(-2px); border-color:rgba(255,255,255,.18); background:#202226; }
+    .home-topic-index { color:#676a72; font-size:.62rem; font-variant-numeric:tabular-nums; letter-spacing:.08em; }
+    .home-topic-arrow { grid-column:2; grid-row:1; color:#767980; line-height:1; transition:color .16s ease, transform .16s ease; }
+    .home-topic-card:hover .home-topic-arrow { color:#fff; transform:translateX(2px); }
+    .home-topic-name { grid-column:1 / -1; align-self:end; font-size:1rem; font-weight:730; letter-spacing:-.015em; }
+    .home-topic-desc { grid-column:1 / -1; overflow:hidden; color:#83868d; font-size:.7rem; line-height:1.3; text-overflow:ellipsis; white-space:nowrap; }
     .shelf-head { display:flex; align-items:center; gap:12px; margin-bottom:.6rem; }
     .shelf-title { font-size: 1.3rem; font-weight: 600; padding-left: 4px; }
     .shelf-row { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0 10px; scrollbar-width: none; -ms-overflow-style: none; }
@@ -160,6 +175,9 @@
       .hero-book.side-3 { right: 24%; transform: rotate(4deg) translateY(20px); }
       .hero-book.side-4 { right: 7%; transform: rotate(9deg) translateY(8px); }
       .home-shelves { padding-top: 22px; }
+      .home-topics { padding:24px 16px 0; }
+      .home-topic-row { grid-auto-columns:minmax(176px, 68vw); }
+      .home-topic-card { min-height:106px; }
       .book-card, .book-card img { width: 120px; }
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
@@ -238,6 +256,28 @@
         <h1>Unlock Knowledge</h1>
         <div class="hero-sub">Curated fiction and non-fiction from Open Library.</div>
       </div>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if mode != 'fiction' and featured_topics %}
+  <section class="home-topics" aria-labelledby="homeTopicsTitle">
+    <div class="home-topics-head">
+      <div>
+        <p class="home-topics-kicker">Start with an idea</p>
+        <h2 class="home-topics-title" id="homeTopicsTitle">Explore by topic</h2>
+      </div>
+      <a class="home-topics-all" href="{{ topics_url('nonfiction', book_lang) }}">Browse all topics →</a>
+    </div>
+    <div class="home-topic-row">
+      {% for topic in featured_topics %}
+      <a class="home-topic-card" href="{{ topic_url(topic.query, 'nonfiction', book_lang) }}">
+        <span class="home-topic-index">{{ '%02d' | format(loop.index) }}</span>
+        <span class="home-topic-arrow" aria-hidden="true">→</span>
+        <span class="home-topic-name">{{ topic.name }}</span>
+        <span class="home-topic-desc">{{ topic.description }}</span>
+      </a>
+      {% endfor %}
     </div>
   </section>
   {% endif %}

@@ -35,7 +35,9 @@ from security_runtime import (
     request_client_identity,
 )
 from topic_discovery import (
+    BROWSE_TOPIC_GROUPS as TOPIC_BROWSE_GROUPS,
     EXPANSION_VERSION as TOPIC_EXPANSION_VERSION,
+    FEATURED_TOPIC_QUERIES,
     RANKER_VERSION as TOPIC_RANKER_VERSION,
     build_inventaire_request,
     build_openlibrary_request,
@@ -228,8 +230,18 @@ def clean_home_url(mode=None, lang=None):
 def clean_category_url(topic, mode=None, lang=None):
     return f"{clean_prefix(mode, lang)}/category/{topic}"
 
+def clean_topics_url(mode=None, lang=None):
+    return f"{clean_prefix('nonfiction', lang)}/topics"
+
 def clean_discover_url(mode=None, lang=None):
     return f"{clean_prefix(mode, lang)}/discover"
+
+def topic_discover_url(query, mode=None, lang=None):
+    return clean_discover_url("nonfiction", lang) + "?" + urlencode({
+        "q": str(query or "").strip(),
+        "intent": "topic",
+        "type": "nonfiction",
+    })
 
 def work_id_from_ol_key(ol_key):
     ol_key = (ol_key or "").strip()
@@ -272,6 +284,8 @@ def lang_url(lang):
     topic = (request.view_args or {}).get("topic")
     if endpoint == "category_page" and topic:
         return clean_category_url(topic, mode, lang)
+    if endpoint == "topics_page":
+        return clean_topics_url(mode, lang)
     if endpoint == "discover":
         path = clean_discover_url(mode, lang)
         args = request.args.to_dict(flat=True)
@@ -952,6 +966,16 @@ FICTION_SHELVES_DEF = [
     ("Literary Fiction", "literary_fiction"),
     ("Contemporary Fiction", "contemporary_fiction"),
 ]
+
+TOPIC_BROWSE_INDEX = {
+    topic["query"]: topic
+    for group in TOPIC_BROWSE_GROUPS
+    for topic in group["topics"]
+}
+TOPIC_FEATURED = tuple(
+    TOPIC_BROWSE_INDEX[query]
+    for query in FEATURED_TOPIC_QUERIES
+)
 
 def get_shelves_def(mode="nonfiction"):
     return FICTION_SHELVES_DEF if mode == "fiction" else SHELVES_DEF
@@ -3678,6 +3702,8 @@ def inject_book_context():
         "lang_url": lang_url,
         "home_url": clean_home_url,
         "category_url": clean_category_url,
+        "topics_url": clean_topics_url,
+        "topic_url": topic_discover_url,
         "discover_url": clean_discover_url,
         "book_url": book_url,
         "asset_version": asset_version,
@@ -3888,7 +3914,16 @@ def render_home(mode="nonfiction", lang=None, error=None):
                     detail, _ = cached_book_detail(work_id, lang) if work_id else (None, "miss")
                     hero_items.append(dict(book, description=(detail or {}).get("description", "")))
                 hero = hero_items[0]
-    return render_template("index.html", shelves=shelves, hero=hero, hero_books=hero_books, hero_items=hero_items, mode=mode, error=error)
+    return render_template(
+        "index.html",
+        shelves=shelves,
+        hero=hero,
+        hero_books=hero_books,
+        hero_items=hero_items,
+        featured_topics=TOPIC_FEATURED,
+        mode=mode,
+        error=error,
+    )
 
 @app.route("/", defaults={"clean_mode": None, "clean_lang": None})
 @app.route("/fiction", defaults={"clean_mode": "fiction", "clean_lang": None})
@@ -3902,6 +3937,22 @@ def index(clean_mode, clean_lang):
     if clean_mode is None and ("mode" in request.args or "book_lang" in request.args):
         return preserve_query_redirect(clean_home_url(mode, lang))
     return render_home(mode, lang)
+
+@app.route("/topics", defaults={"clean_mode": None, "clean_lang": None})
+@app.route("/cn/topics", defaults={"clean_mode": "nonfiction", "clean_lang": "cn"})
+def topics_page(clean_mode, clean_lang):
+    mode = "nonfiction"
+    lang = clean_lang or get_book_lang()
+    g.mode_override = mode
+    g.book_lang_override = lang
+    if clean_mode is None and ("mode" in request.args or "book_lang" in request.args):
+        return preserve_query_redirect(clean_topics_url(mode, lang))
+    return render_template(
+        "topics.html",
+        topic_groups=TOPIC_BROWSE_GROUPS,
+        featured_topics=TOPIC_FEATURED,
+        mode=mode,
+    )
 
 @app.route("/category/<topic>", defaults={"clean_mode": None, "clean_lang": None})
 @app.route("/fiction/category/<topic>", defaults={"clean_mode": "fiction", "clean_lang": None})

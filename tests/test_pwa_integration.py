@@ -60,6 +60,23 @@ class PwaIntegrationTests(unittest.TestCase):
         self.assertEqual(panel.get("aria-hidden"), "true")
         self.assertTrue(panel.has_attr("inert"))
 
+    def test_topics_are_cloned_into_mobile_browse_and_activate_browse(self):
+        pwa = (ROOT / "static/libflix-pwa.js").read_text()
+        with app.app.test_request_context("/topics"):
+            html = app.render_template(
+                "_navbar.html",
+                mode="nonfiction",
+                active_tab="topics",
+                **app.inject_book_context(),
+            )
+
+        page = BeautifulSoup(html, "html.parser")
+        topic_link = page.select_one('.cat-tabs a[href="/topics"]')
+        self.assertIsNotNone(topic_link)
+        self.assertIn("active", topic_link.get("class", []))
+        self.assertIn("document.querySelectorAll('.cat-tabs a')", pwa)
+        self.assertIn(r"/\/topics$/.test(path)", pwa)
+
     def test_worker_is_allowlisted_shell_only(self):
         worker = (ROOT / "static/libflix-sw.js").read_text()
         self.assertIn("SHELL_PATH_SET.has(url.pathname)", worker)

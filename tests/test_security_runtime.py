@@ -175,6 +175,8 @@ class MetricsTests(unittest.TestCase):
     def test_dynamic_paths_are_collapsed(self):
         self.assertEqual(normalize_metric_route("/book/OL24739863W"), "/book/<work_id>")
         self.assertEqual(normalize_metric_route("/category/user-controlled"), "/category/<topic>")
+        self.assertEqual(normalize_metric_route("/topics"), "/topics")
+        self.assertEqual(normalize_metric_route("/cn/topics"), "/cn/topics")
         self.assertEqual(normalize_metric_route("/unknown/arbitrary/path"), "/other")
         self.assertEqual(normalize_metric_route("/<private-token-123>"), "/other")
 
