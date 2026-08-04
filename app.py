@@ -2430,6 +2430,12 @@ def schedule_book_detail_refresh(work_id, lang=None):
     BOOK_DETAIL_EXECUTOR.submit(_refresh_book_detail, work_id, lang)
     return True
 
+def normalize_book_detail_recommendations(detail):
+    if not detail:
+        return detail
+    detail["similar_subjects"] = similar_subject_candidates(detail.get("subjects", []))
+    return detail
+
 def get_book_detail(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
     detail, cache_state = cached_book_detail(work_id, lang)
@@ -2438,11 +2444,13 @@ def get_book_detail(work_id, lang=None):
             detail,
             alternate_canonical_book_detail(work_id, lang),
         )
+        detail = normalize_book_detail_recommendations(detail)
         detail["cover_url"] = localize_cover_url(detail.get("cover_url", ""))
         if cache_state == "stale" or not detail.get("complete"):
             schedule_book_detail_refresh(work_id, lang)
         return detail, cache_state
     fallback = fallback_book_detail(work_id, lang)
+    fallback = normalize_book_detail_recommendations(fallback)
     schedule_book_detail_refresh(work_id, lang)
     return fallback, "fallback" if fallback else "miss"
 

@@ -384,6 +384,32 @@ class SimilarBookRelevanceTests(unittest.TestCase):
             ["Sporting goods industry", "Nike (Firm)"],
         )
 
+    def test_cached_detail_recomputes_recommendation_subjects(self):
+        cached = {
+            "title": "Can't Hurt Me",
+            "author": "David Goggins",
+            "subjects": [
+                "New York Times bestseller",
+                "United states, navy, seals",
+                "Mental endurance",
+            ],
+            "similar_subjects": ["New York Times bestseller"],
+            "cover_url": "",
+            "complete": True,
+        }
+
+        with (
+            patch.object(app, "cached_book_detail", return_value=(cached, "memory")),
+            patch.object(app, "alternate_canonical_book_detail", return_value={}),
+        ):
+            detail, cache_state = app.get_book_detail("OL18108064W", "en")
+
+        self.assertEqual(cache_state, "memory")
+        self.assertEqual(
+            detail["similar_subjects"],
+            ["United states, navy, seals", "Mental endurance"],
+        )
+
     def test_similar_books_require_shared_context_or_same_author(self):
         shared = self.record(
             "/works/OL2W", "The Innovators", "Walter Isaacson", 2
