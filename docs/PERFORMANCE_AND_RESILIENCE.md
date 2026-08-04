@@ -294,8 +294,9 @@ keeps metadata cleanup from becoming a new delivery failure mode.
 - Browser responses restrict scripts, styles, connections, images, manifests,
   workers, forms, and frames to the capabilities the current same-origin UI
   requires. Inline compatibility remains enabled until page scripts are moved
-  out of templates; framing, plugins, base-tag changes, and cross-origin forms
-  are blocked now.
+  out of templates; Cloudflare's injected analytics script host is the sole
+  third-party script source. Framing, plugins, base-tag changes, and
+  cross-origin forms are blocked now.
 - Discovery, similar-book, book-detail, download, Kindle, and metrics endpoints
   use weighted cross-worker SQLite token buckets. Client identities
   are hashed, rows are retained for a bounded period, and a limiter storage

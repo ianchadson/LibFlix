@@ -254,8 +254,9 @@ No API key is required. Open Library is the only discovery backend.
 - **Public-service guardrails** - discovery, recommendation, book-detail,
   download search, file delivery, Kindle, and metric endpoints use weighted
   cross-worker token buckets. Metadata refresh queues, in-memory entries, and
-  the durable metadata cache are hard-capped. Responses include a same-origin
-  CSP, frame/plugin blocking, a restrictive permissions policy, and HTTPS HSTS.
+  the durable metadata cache are hard-capped. Responses include a restrictive
+  CSP (with only Cloudflare's injected analytics host added), frame/plugin
+  blocking, a restrictive permissions policy, and HTTPS HSTS.
 - **Installable mobile app** - LibFlix includes standalone icons/manifest, an
   install action, a safe offline screen, and Home/Search/Browse/Settings bottom
   navigation. The service worker never stores downloads, Kindle traffic,

@@ -17,8 +17,10 @@
 
 ### Public-service protection and observability
 
-- Added same-origin CSP, frame/plugin blocking, permissions policy, HSTS behind
-  the trusted TLS proxy, and other browser security headers.
+- Added a restrictive CSP, frame/plugin blocking, permissions policy, HSTS
+  behind the trusted TLS proxy, and other browser security headers.
+- Allowed Cloudflare's integrity-protected injected analytics beacon while
+  keeping analytics submission on the same origin.
 - Added weighted cross-worker SQLite token-bucket limits for discovery,
   recommendations, book details, download, Kindle, and browser metrics, with
   hashed identities and `Retry-After`.

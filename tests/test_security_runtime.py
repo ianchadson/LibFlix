@@ -33,7 +33,10 @@ class SecurityHeaderTests(unittest.TestCase):
         response = apply_security_headers(DummyResponse(), DummyRequest(secure=True))
 
         csp = response.headers["Content-Security-Policy"]
-        self.assertIn("script-src 'self' 'unsafe-inline'", csp)
+        self.assertIn(
+            "script-src 'self' 'unsafe-inline' https://static.cloudflareinsights.com",
+            csp,
+        )
         self.assertIn("style-src 'self' 'unsafe-inline'", csp)
         self.assertIn("object-src 'none'", csp)
         self.assertIn("frame-ancestors 'none'", csp)
