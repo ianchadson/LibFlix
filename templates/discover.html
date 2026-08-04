@@ -16,10 +16,10 @@
     {% set reason_payload = [book.reason] %}
   {% endif %}
   <a href="{{ book_url(book, mode | default('nonfiction'), book_lang) }}" class="book-card-link topic-book-item" data-topic-book="true" aria-label="{{ book.title | default('Untitled') }}{% if book.author %} by {{ book.author }}{% endif %}. Find an edition.">
-    <div class="book-card" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}" data-quick-peek-action="Find an edition">
+    <div class="book-card{% if not book.cover_url %} no-cover{% endif %}" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}" data-quick-peek-action="Find an edition">
       {% if book.cover_url %}
       <div class="cover-skeleton"></div>
-      <img data-cover-src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';">
+      <img data-cover-src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';this.parentNode.classList.add('no-cover');">
       <div class="placeholder ph-fallback" style="display:none">?</div>
       {% else %}
       <div class="placeholder">?</div>
@@ -96,6 +96,7 @@
     .topic-reason-chip { display: inline-block; max-width: 100%; overflow: hidden; padding: 3px 6px; border: 1px solid rgba(255,255,255,.09); border-radius: 999px; color: #a9abb1; background: rgba(255,255,255,.035); font-size: .62rem; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
     .topic-card-action { color: #e1e2e5; font-size: .69rem; font-weight: 650; opacity: .8; }
     .topic-book-item:hover .topic-card-action, .topic-book-item:focus-visible .topic-card-action { color: #fff; opacity: 1; }
+    .topic-book-item .book-card.no-cover .info { opacity: 1; transform: translateY(0); }
     .topic-explore-head { margin-top: 4px; }
     .book-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 1rem 2rem; justify-content: center; }
     .book-card { width: 150px; cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; position: relative; border-radius: 8px; overflow: hidden; background:#242424; box-shadow: 0 8px 22px rgba(0,0,0,.18); }
@@ -396,9 +397,11 @@
         image.addEventListener('error', () => {
           image.hidden = true;
           fallback.hidden = false;
+          bookCard.classList.add('no-cover');
         });
         bookCard.append(skeleton, image, fallback);
       } else {
+        bookCard.classList.add('no-cover');
         const placeholder = document.createElement('div');
         placeholder.className = 'placeholder';
         placeholder.textContent = '?';

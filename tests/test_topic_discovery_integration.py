@@ -117,6 +117,24 @@ class TopicIntegrationCacheTest(unittest.TestCase):
         self.assertIn(b"const INITIAL_TOPIC_REFRESH = true;", response.data)
         self.assertIn(b"schedulePartialRefresh(initialTopicState);", response.data)
 
+    def test_topic_cards_keep_metadata_visible_when_a_cover_is_missing(self):
+        payload = self.payload(1)
+        payload["all_books"][0]["cover_url"] = ""
+        with patch.object(
+            app,
+            "cached_topic_discovery_payload",
+            return_value=payload,
+        ):
+            response = app.app.test_client().get("/discover?q=focus")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'class="book-card no-cover"', response.data)
+        self.assertIn(
+            b".topic-book-item .book-card.no-cover .info { opacity: 1;",
+            response.data,
+        )
+        self.assertIn(b"bookCard.classList.add('no-cover');", response.data)
+
     def test_stale_complete_beats_fresh_partial_outage(self):
         filters = dict(app.TOPIC_FILTER_DEFAULTS)
         key = app.topic_discovery_cache_key("focus", "en", filters)

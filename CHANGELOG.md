@@ -30,6 +30,8 @@
 - Added up to six `Start here` cards followed by a duplicate-free
   `Explore <topic>` grid, concise factual reason chips, and `Find an edition`
   actions that preserve identity verification before download or Kindle work.
+- Kept titles and authors visible on coverless topic cards, including when a
+  remote cover fails after the card is rendered.
 - Added a compact topic Filters panel for Type, Language, Published, and Best
   match / Newest sorting.
 
