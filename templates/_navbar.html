@@ -174,7 +174,7 @@
       <a href="{{ category_url('literary_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'literary_fiction' %}active{% endif %}">Literary</a>
       {% else %}
       <a href="{{ home_url('nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'home' %}active{% endif %}">Home</a>
-      <a href="{{ topics_url('nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'topics' %}active{% endif %}">Topics</a>
+      <a href="{{ topics_url('nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'topics' %}active{% endif %}"{% if active_tab == 'topics' %} aria-current="page"{% endif %}>Topics</a>
       <a href="{{ category_url('trending', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'trending' %}active{% endif %}">Trending</a>
       <a href="{{ category_url('self_help', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'self_help' %}active{% endif %}">Self Dev</a>
       <a href="{{ category_url('business', 'nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'business' %}active{% endif %}">Business</a>
@@ -366,6 +366,7 @@
     let transitionTimer = null;
     let navigationProgressTimer = null;
     let navigationController = null;
+    let renderedPageKey = window.location.pathname + window.location.search;
     const pageCache = new Map();
     const pendingPages = new Map();
     const loadedCoverUrls = new Set();
@@ -442,6 +443,16 @@
       if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/download/')) return false;
       if (url.pathname === window.location.pathname && url.search === window.location.search) return false;
       return true;
+    };
+    const focusFragmentTarget = target => {
+      if (!target) return;
+      const temporaryTabIndex = !target.hasAttribute('tabindex');
+      if (temporaryTabIndex) target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
+      target.scrollIntoView();
+      if (temporaryTabIndex) {
+        target.addEventListener('blur', () => target.removeAttribute('tabindex'), { once: true });
+      }
     };
     const prefetchedPages = new Set();
     let activePrefetches = 0;
@@ -670,6 +681,8 @@
         ? { x: 0, y: 0 }
         : { x: Number(historyEntry?.scrollX) || 0, y: Number(historyEntry?.scrollY) || 0 };
       if (push) history.pushState({ libflix: true, scrollX: 0, scrollY: 0 }, '', url);
+      const renderedUrl = new URL(url, window.location.href);
+      renderedPageKey = renderedUrl.pathname + renderedUrl.search;
       const restoreScroll = () => {
         if (new URL(window.location.href).href !== new URL(url, window.location.href).href) return;
         window.scrollTo({ top: targetScroll.y, left: targetScroll.x, behavior: 'instant' });
@@ -788,7 +801,23 @@
       if (!link || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       if (link.target && link.target !== '_self') return;
       if (link.hasAttribute('download')) return;
-      if (!isInternalNavigation(link.getAttribute('href'))) return;
+      const rawHref = link.getAttribute('href') || '';
+      if (rawHref.startsWith('#') && link.matches('.topic-jump')) {
+        let hashTarget = null;
+        try {
+          hashTarget = document.getElementById(decodeURIComponent(rawHref.slice(1)));
+        } catch {}
+        if (!hashTarget) return;
+        event.preventDefault();
+        persistScrollPosition();
+        if (window.location.hash !== rawHref) {
+          history.pushState({ libflix: true, scrollX: 0, scrollY: 0 }, '', rawHref);
+        }
+        focusFragmentTarget(hashTarget);
+        persistScrollPosition();
+        return;
+      }
+      if (!isInternalNavigation(rawHref)) return;
       event.preventDefault();
       navigateWithTransition(link.href);
     });
@@ -826,6 +855,25 @@
       submitWithTransition(form);
     });
     window.addEventListener('popstate', event => {
+      const pageKey = window.location.pathname + window.location.search;
+      let hashTarget = null;
+      if (window.location.hash) {
+        try {
+          hashTarget = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+        } catch {}
+      }
+      if (pageKey === renderedPageKey) {
+        if (hashTarget) {
+          focusFragmentTarget(hashTarget);
+        } else {
+          window.scrollTo({
+            top: Number(event.state?.scrollY) || 0,
+            left: Number(event.state?.scrollX) || 0,
+            behavior: 'instant',
+          });
+        }
+        return;
+      }
       navigateWithTransition(window.location.href, { push: false, historyEntry: event.state || null });
     });
 

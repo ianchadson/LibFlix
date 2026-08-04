@@ -6,148 +6,451 @@
   <title>Explore topics - LibFlix</title>
   <style data-page-style>
     * { box-sizing: border-box; }
-    body {
+    body.page-topics {
       margin: 0;
       background:
-        radial-gradient(circle at 12% 4%, rgba(229, 9, 20, .075), transparent 26rem),
-        #141414;
-      color: #fff;
+        radial-gradient(circle at 9% 3%, rgba(229, 9, 20, .075), transparent 27rem),
+        linear-gradient(rgba(255,255,255,.013) 1px, transparent 1px),
+        #0d0e10;
+      background-size: auto, 100% 88px, auto;
+      color: #f7f7f8;
       font-family: 'Helvetica Neue', Arial, sans-serif;
     }
-    .navbar {
+    .page-topics .navbar {
       min-height: 48px;
-      z-index: 10;
-      background: linear-gradient(180deg, rgba(20,20,20,.94) 0, rgba(20,20,20,.7) 78%, transparent);
+      z-index: 20;
+      background: linear-gradient(180deg, rgba(13,14,16,.98) 0, rgba(13,14,16,.84) 78%, transparent);
     }
-    .navbar-brand { color: #e50914 !important; font-size: 1.3rem; font-weight: 700; letter-spacing: -1px; }
-    .topics-shell { width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 48px 0 72px; }
-    .topics-intro { display: grid; grid-template-columns: minmax(0, 1fr) minmax(340px, .68fr); gap: 64px; align-items: end; padding: 18px 0 50px; }
-    .topics-kicker { margin: 0 0 12px; color: #e50914; font-size: .7rem; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
-    .topics-title { max-width: 680px; margin: 0; font-size: clamp(2.5rem, 6vw, 5.25rem); font-weight: 760; letter-spacing: -.065em; line-height: .93; }
-    .topics-lede { max-width: 590px; margin: 20px 0 0; color: rgba(255,255,255,.59); font-size: 1rem; line-height: 1.55; }
-    .topic-search { display: flex; align-items: center; gap: 8px; padding: 7px; border: 1px solid rgba(255,255,255,.14); border-radius: 7px; background: rgba(8,9,11,.7); box-shadow: 0 18px 50px rgba(0,0,0,.2); }
-    .topic-search:focus-within { border-color: rgba(229,9,20,.75); box-shadow: 0 0 0 3px rgba(229,9,20,.11), 0 18px 50px rgba(0,0,0,.25); }
-    .topic-search input[type="search"] { min-width: 0; height: 42px; flex: 1; border: 0; outline: 0; background: transparent; color: #fff; padding: 0 10px; font: inherit; font-size: .94rem; }
-    .topic-search input[type="search"]::placeholder { color: rgba(255,255,255,.35); }
-    .topic-search button { height: 38px; flex: 0 0 auto; border: 0; border-radius: 5px; background: #e50914; color: #fff; padding: 0 16px; font-size: .8rem; font-weight: 750; cursor: pointer; }
+    .page-topics .navbar-brand { color: #e50914 !important; font-size: 1.3rem; font-weight: 700; letter-spacing: -1px; }
+    .topics-shell { width: min(1220px, calc(100% - 48px)); margin: 0 auto; padding: 34px 0 80px; }
+
+    .topics-hero {
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      padding: clamp(34px, 4.6vw, 58px);
+      border: 1px solid rgba(255,255,255,.105);
+      border-radius: 12px;
+      background:
+        radial-gradient(circle at 86% 18%, rgba(229,9,20,.11), transparent 23rem),
+        linear-gradient(130deg, rgba(255,255,255,.035), transparent 44%),
+        #121316;
+      box-shadow: 0 32px 80px rgba(0,0,0,.25);
+    }
+    .topics-hero::before {
+      position: absolute;
+      z-index: -1;
+      width: 430px;
+      height: 430px;
+      right: -205px;
+      top: -220px;
+      border: 1px solid rgba(255,255,255,.075);
+      border-radius: 50%;
+      box-shadow:
+        0 0 0 56px rgba(255,255,255,.018),
+        0 0 0 112px rgba(229,9,20,.018);
+      content: '';
+    }
+    .topics-hero-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(340px, .72fr); gap: clamp(44px, 6vw, 82px); align-items: end; }
+    .topics-kicker, .section-kicker {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      margin: 0 0 14px;
+      color: #a6a8ad;
+      font-size: .69rem;
+      font-weight: 760;
+      letter-spacing: .115em;
+      text-transform: uppercase;
+    }
+    .topics-kicker-mark, .section-kicker-mark { color: #e50914; font-size: 1.05rem; font-weight: 450; line-height: .7; }
+    .topics-title { max-width: 680px; margin: 0; font-size: clamp(3.2rem, 6vw, 5rem); font-weight: 770; letter-spacing: -.067em; line-height: .91; }
+    .topics-title-accent { position: relative; display: inline-block; }
+    .topics-title-accent::after { position: absolute; height: 3px; inset: auto 5% -10px 6%; background: #e50914; content: ''; transform: rotate(-1.5deg); }
+    .topics-lede { max-width: 590px; margin: 24px 0 0; color: rgba(255,255,255,.66); font-size: 1rem; line-height: 1.58; }
+    .topic-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 25px; color: rgba(255,255,255,.48); font-size: .71rem; font-weight: 620; }
+    .topic-meta span { display: inline-flex; align-items: center; gap: 7px; }
+    .topic-meta svg { width: 14px; height: 14px; color: rgba(255,255,255,.6); }
+
+    .topic-search-wrap { position: relative; }
+    .topic-search-label { display: block; margin: 0 0 9px 2px; color: rgba(255,255,255,.53); font-size: .72rem; font-weight: 650; }
+    .topic-search {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      min-height: 60px;
+      padding: 7px;
+      border: 1px solid rgba(255,255,255,.15);
+      border-radius: 8px;
+      background: rgba(5,6,8,.72);
+      box-shadow: 0 18px 50px rgba(0,0,0,.22);
+    }
+    .topic-search:focus-within { border-color: rgba(229,9,20,.8); box-shadow: 0 0 0 3px rgba(229,9,20,.12), 0 18px 50px rgba(0,0,0,.27); }
+    .topic-search-icon { width: 20px; height: 20px; margin-left: 9px; color: rgba(255,255,255,.48); }
+    .topic-search input[type="search"] { min-width: 0; height: 44px; border: 0; outline: 0; background: transparent; color: #fff; padding: 0 4px; font: inherit; font-size: .94rem; }
+    .topic-search input[type="search"]::placeholder { color: rgba(255,255,255,.52); }
+    .topic-search button {
+      min-width: 126px;
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      border: 0;
+      border-radius: 6px;
+      background: #e50914;
+      color: #fff;
+      padding: 0 15px;
+      font-size: .8rem;
+      font-weight: 760;
+      cursor: pointer;
+    }
+    .topic-search button svg { width: 15px; height: 15px; }
     .topic-search button:hover { background: #f40612; }
-    .topic-search button:focus-visible, .topic-link:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
-    .topics-section { padding: 36px 0; border-top: 1px solid rgba(255,255,255,.09); }
-    .topics-section-head { display: grid; grid-template-columns: minmax(180px, .34fr) minmax(0, 1fr); gap: 28px; align-items: baseline; margin-bottom: 22px; }
-    .topics-section-title { margin: 0; font-size: 1.05rem; font-weight: 740; letter-spacing: -.015em; }
-    .topics-section-copy { max-width: 620px; margin: 0; color: rgba(255,255,255,.43); font-size: .8rem; line-height: 1.5; }
-    .featured-row { display: flex; gap: 10px; overflow-x: auto; padding: 2px 2px 8px; scroll-snap-type: x proximity; scrollbar-width: none; }
-    .featured-row::-webkit-scrollbar { display: none; }
-    .featured-topic { position: relative; min-width: min(330px, 78vw); min-height: 152px; flex: 1 0 0; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; padding: 22px; border: 1px solid rgba(255,255,255,.1); border-radius: 7px; background: #1b1c1f; color: inherit; text-decoration: none; scroll-snap-align: start; transition: border-color .16s ease, background .16s ease, transform .16s ease; }
-    .featured-topic::after { content: ''; position: absolute; inset: auto 22px 0; height: 2px; background: #e50914; transform: scaleX(0); transform-origin: left; transition: transform .18s ease; }
-    .featured-topic:hover { border-color: rgba(255,255,255,.2); background: #202125; transform: translateY(-2px); }
-    .featured-topic:hover::after { transform: scaleX(1); }
-    .featured-index { color: rgba(255,255,255,.28); font-size: .68rem; font-variant-numeric: tabular-nums; letter-spacing: .08em; }
-    .featured-name { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-top: 26px; }
-    .featured-name strong { font-size: 1.35rem; line-height: 1.08; letter-spacing: -.025em; }
-    .topic-arrow { color: rgba(255,255,255,.43); font-size: 1.25rem; line-height: 1; transition: color .16s ease, transform .16s ease; }
-    .featured-topic:hover .topic-arrow, .topic-card:hover .topic-arrow { color: #fff; transform: translateX(3px); }
-    .topic-group + .topic-group { margin-top: 20px; }
-    .topic-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid rgba(255,255,255,.075); }
-    .topic-card { min-width: 0; min-height: 126px; display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto 1fr; column-gap: 18px; padding: 20px 18px 19px 0; border-bottom: 1px solid rgba(255,255,255,.075); color: inherit; text-decoration: none; transition: color .16s ease, padding-left .16s ease, background .16s ease; }
-    .topic-card:not(:nth-child(3n + 1)) { padding-left: 18px; border-left: 1px solid rgba(255,255,255,.075); }
-    .topic-card:hover { padding-left: 12px; background: rgba(255,255,255,.025); }
-    .topic-card:not(:nth-child(3n + 1)):hover { padding-left: 30px; }
-    .topic-card-name { min-width: 0; overflow: hidden; font-size: .97rem; font-weight: 720; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
-    .topic-card .topic-arrow { grid-column: 2; grid-row: 1; font-size: 1rem; }
-    .topic-card-description { grid-column: 1 / -1; align-self: end; margin: 11px 34px 0 0; color: rgba(255,255,255,.43); font-size: .76rem; line-height: 1.42; display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-    .topics-empty { padding: 28px 0; color: rgba(255,255,255,.45); font-size: .85rem; }
-    @media (max-width: 900px) {
-      .topics-shell { width: min(100% - 36px, 760px); padding-top: 28px; }
-      .topics-intro { grid-template-columns: 1fr; gap: 30px; padding-bottom: 42px; }
-      .topics-lede { margin-top: 16px; }
-      .topic-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .topic-card:not(:nth-child(3n + 1)) { padding-left: 0; border-left: 0; }
-      .topic-card:nth-child(even) { padding-left: 18px; border-left: 1px solid rgba(255,255,255,.075); }
-      .topic-card:hover { padding-left: 10px; }
-      .topic-card:nth-child(even):hover { padding-left: 28px; }
+
+    .topic-jumps {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      overflow-x: auto;
+      margin-top: 36px;
+      padding: 20px 5px 6px;
+      border-top: 1px solid rgba(255,255,255,.085);
+      scrollbar-width: none;
+    }
+    .topic-jumps::-webkit-scrollbar { display: none; }
+    .topic-jump {
+      min-height: 42px;
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 8px;
+      padding: 0 13px;
+      border: 1px solid rgba(255,255,255,.09);
+      border-radius: 6px;
+      background: rgba(255,255,255,.025);
+      color: rgba(255,255,255,.66);
+      font-size: .72rem;
+      font-weight: 690;
+      text-decoration: none;
+      transition: border-color .16s ease, background .16s ease, color .16s ease;
+    }
+    .topic-jump svg { width: 15px; height: 15px; color: rgba(255,255,255,.46); }
+    .topic-jump:hover { border-color: rgba(255,255,255,.19); background: rgba(255,255,255,.055); color: #fff; }
+
+    .topics-section { padding-top: 54px; }
+    .section-heading { display: grid; grid-template-columns: minmax(0, .7fr) minmax(300px, .45fr); gap: 42px; align-items: end; margin-bottom: 21px; }
+    .section-kicker { margin-bottom: 8px; }
+    .section-title { margin: 0; font-size: clamp(1.55rem, 2.6vw, 2.2rem); font-weight: 740; letter-spacing: -.042em; line-height: 1.05; }
+    .section-copy { max-width: 470px; justify-self: end; margin: 0; color: rgba(255,255,255,.58); font-size: .82rem; line-height: 1.55; }
+
+    .featured-rail { position: relative; }
+    .featured-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 5px; margin: -5px; }
+    .featured-topic {
+      --featured-glow: rgba(229,9,20,.13);
+      position: relative;
+      min-width: 0;
+      min-height: 188px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+      padding: 21px;
+      border: 1px solid rgba(255,255,255,.105);
+      border-radius: 9px;
+      background: radial-gradient(circle at 0 100%, var(--featured-glow), transparent 65%), #18191d;
+      color: inherit;
+      text-decoration: none;
+      transition: border-color .16s ease, background-color .16s ease, transform .16s ease;
+    }
+    .featured-topic:nth-child(2) { --featured-glow: rgba(255,255,255,.075); }
+    .featured-topic:nth-child(3) { --featured-glow: rgba(229,9,20,.085); }
+    .featured-topic:nth-child(4) { --featured-glow: rgba(117,126,155,.12); }
+    .featured-topic::after { position: absolute; width: 56px; height: 2px; left: 21px; bottom: 0; background: #e50914; content: ''; transform: scaleX(.36); transform-origin: left; transition: transform .18s ease; }
+    .featured-topic-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+    .featured-symbol {
+      width: 47px;
+      height: 47px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.105);
+      border-radius: 50%;
+      background: rgba(255,255,255,.035);
+      color: rgba(255,255,255,.73);
+    }
+    .featured-symbol svg { width: 24px; height: 24px; }
+    .featured-arrow, .topic-row-arrow {
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 50%;
+      color: rgba(255,255,255,.48);
+      transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease;
+    }
+    .featured-arrow { width: 32px; height: 32px; }
+    .featured-arrow svg, .topic-row-arrow svg { width: 14px; height: 14px; }
+    .featured-copy { display: grid; gap: 7px; margin-top: 30px; }
+    .featured-name { font-size: 1.2rem; font-weight: 740; letter-spacing: -.025em; line-height: 1.15; }
+    .featured-description { min-height: 2.7em; color: rgba(255,255,255,.57); font-size: .76rem; line-height: 1.42; }
+    .featured-scroll-hint { display: none; }
+
+    .topic-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+    .topic-group {
+      --group-accent: 229, 9, 20;
+      scroll-margin-top: 74px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,.095);
+      border-radius: 10px;
+      background: linear-gradient(150deg, rgba(var(--group-accent), .055), transparent 35%), #141518;
+    }
+    .topic-group:nth-child(2) { --group-accent: 156, 125, 160; }
+    .topic-group:nth-child(3) { --group-accent: 205, 123, 80; }
+    .topic-group:nth-child(4) { --group-accent: 105, 151, 148; }
+    .topic-group:nth-child(5) { --group-accent: 113, 160, 119; }
+    .topic-group:nth-child(6) { --group-accent: 100, 126, 171; }
+    .topic-group-head { min-height: 142px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 17px; align-items: start; padding: 24px 24px 21px; }
+    .topic-group-symbol {
+      width: 47px;
+      height: 47px;
+      display: grid;
+      place-items: center;
+      border: 1px solid rgba(var(--group-accent), .28);
+      border-radius: 8px;
+      background: rgba(var(--group-accent), .09);
+      color: rgb(var(--group-accent));
+    }
+    .topic-group-symbol svg { width: 24px; height: 24px; }
+    .topic-group-meta { display: flex; align-items: center; gap: 9px; margin: 1px 0 8px; color: rgba(255,255,255,.48); font-size: .62rem; font-weight: 720; letter-spacing: .09em; text-transform: uppercase; }
+    .topic-group-meta span + span::before { margin-right: 9px; color: rgba(255,255,255,.2); content: '/'; }
+    .topic-group-title { margin: 0; font-size: 1.22rem; font-weight: 740; letter-spacing: -.025em; line-height: 1.2; }
+    .topic-group-copy { max-width: 420px; margin: 9px 0 0; color: rgba(255,255,255,.58); font-size: .78rem; line-height: 1.48; }
+    .topic-list { margin: 0; padding: 0; border-top: 1px solid rgba(255,255,255,.08); list-style: none; }
+    .topic-list li + li { border-top: 1px solid rgba(255,255,255,.065); }
+    .topic-card {
+      position: relative;
+      min-height: 64px;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 13px;
+      padding: 10px 17px 10px 20px;
+      color: inherit;
+      text-decoration: none;
+      transition: background .16s ease;
+    }
+    .topic-card::before { position: absolute; width: 2px; inset: 13px auto 13px 0; background: rgb(var(--group-accent)); content: ''; transform: scaleY(0); transition: transform .16s ease; }
+    .topic-row-mark { color: rgba(var(--group-accent), .88); font-size: .83rem; font-weight: 620; }
+    .topic-row-copy { min-width: 0; display: grid; grid-template-columns: minmax(118px, .62fr) minmax(0, 1fr); gap: 15px; align-items: center; }
+    .topic-card-name { min-width: 0; color: rgba(255,255,255,.91); font-size: .86rem; font-weight: 690; line-height: 1.25; }
+    .topic-card-description { min-width: 0; overflow: hidden; color: rgba(255,255,255,.6); font-size: .75rem; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+    .topic-row-arrow { width: 29px; height: 29px; }
+    .topics-empty { padding: 28px 0; color: rgba(255,255,255,.58); font-size: .85rem; }
+    .topic-card:focus-visible { outline-offset: -3px !important; }
+
+    .topic-search button:focus-visible,
+    .topic-jump:focus-visible,
+    .topic-link:focus-visible {
+      outline: 2px solid #fff;
+      outline-offset: 3px;
+    }
+    @media (hover: hover) {
+      .featured-topic:hover { border-color: rgba(255,255,255,.21); transform: translateY(-2px); }
+      .featured-topic:hover::after { transform: scaleX(1); }
+      .featured-topic:hover .featured-arrow,
+      .topic-card:hover .topic-row-arrow { border-color: rgba(255,255,255,.22); background: rgba(255,255,255,.07); color: #fff; transform: translateX(2px); }
+      .topic-card:hover { background: rgba(255,255,255,.034); }
+      .topic-card:hover::before { transform: scaleY(1); }
+    }
+    @media (max-width: 980px) {
+      .topics-shell { width: min(100% - 36px, 800px); padding-top: 25px; }
+      .topics-hero-grid { grid-template-columns: 1fr; gap: 30px; }
+      .section-heading { grid-template-columns: 1fr; gap: 10px; }
+      .section-copy { justify-self: start; }
+      .featured-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .topic-groups { grid-template-columns: 1fr; }
     }
     @media (max-width: 600px) {
-      .topics-shell { width: calc(100% - 28px); padding: 18px 0 48px; }
-      .topics-intro { gap: 26px; padding: 16px 0 36px; }
-      .topics-title { font-size: clamp(2.65rem, 15vw, 4rem); }
-      .topics-lede { font-size: .9rem; }
-      .topic-search { padding: 5px; }
-      .topic-search input[type="search"] { height: 40px; font-size: .87rem; }
-      .topic-search button { height: 36px; padding: 0 13px; }
-      .topics-section { padding: 28px 0; }
-      .topics-section-head { grid-template-columns: 1fr; gap: 7px; margin-bottom: 17px; }
-      .featured-topic { min-width: 78vw; min-height: 138px; padding: 19px; }
-      .topic-grid { grid-template-columns: 1fr; }
-      .topic-card, .topic-card:nth-child(even) { min-height: 106px; padding: 17px 0; border-left: 0; }
-      .topic-card:hover, .topic-card:nth-child(even):hover { padding-left: 9px; }
-      .topic-card-description { margin-top: 8px; }
+      .topics-shell { width: calc(100% - 28px); padding: 12px 0 54px; }
+      .topics-hero { padding: 25px 18px 18px; border-radius: 9px; }
+      .topics-hero::before { width: 260px; height: 260px; right: -155px; top: -155px; }
+      .topics-hero-grid { gap: 23px; }
+      .topics-kicker { margin-bottom: 11px; }
+      .topics-title { font-size: clamp(2.55rem, 14.2vw, 3.55rem); line-height: .93; }
+      .topics-title-accent::after { bottom: -6px; height: 2px; }
+      .topics-lede { margin-top: 17px; font-size: .89rem; line-height: 1.5; }
+      .topic-meta { gap: 7px 14px; margin-top: 17px; font-size: .66rem; }
+      .topic-search-label { font-size: .69rem; }
+      .topic-search { min-height: 56px; padding: 5px; gap: 5px; }
+      .topic-search-icon { width: 18px; height: 18px; margin-left: 8px; }
+      .topic-search input[type="search"] { height: 44px; font-size: .84rem; }
+      .topic-search button { min-width: 50px; width: 50px; padding: 0; }
+      .topic-search button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+      .topic-search button svg { width: 18px; height: 18px; }
+      .topic-jumps { gap: 6px; margin-top: 19px; padding: 15px 5px 6px; }
+      .topic-jump { min-height: 44px; padding: 0 12px; }
+      .topics-section { padding-top: 38px; }
+      .section-heading { margin-bottom: 16px; }
+      .section-title { font-size: 1.65rem; }
+      .section-copy { font-size: .77rem; }
+      .featured-rail { margin-right: -14px; }
+      .featured-rail::after { position: absolute; width: 26px; inset: 0 0 25px auto; pointer-events: none; background: linear-gradient(90deg, transparent, #0d0e10); content: ''; }
+      .featured-grid { display: flex; gap: 9px; overflow-x: auto; margin: -5px 0 -5px -5px; padding: 5px 34px 5px 5px; scroll-snap-type: x mandatory; scrollbar-width: none; }
+      .featured-grid::-webkit-scrollbar { display: none; }
+      .featured-topic { min-width: min(272px, 80vw); min-height: 172px; flex: 0 0 auto; padding: 19px; scroll-snap-align: start; }
+      .featured-scroll-hint { display: block; margin: 12px 14px 0 0; color: rgba(255,255,255,.48); font-size: .66rem; font-weight: 650; text-align: right; }
+      .topic-groups { gap: 11px; }
+      .topic-group { border-radius: 9px; scroll-margin-top: 62px; }
+      .topic-group-head { min-height: 0; gap: 14px; padding: 19px 17px 17px; }
+      .topic-group-symbol { width: 43px; height: 43px; }
+      .topic-group-symbol svg { width: 22px; height: 22px; }
+      .topic-group-meta { margin-bottom: 6px; }
+      .topic-group-title { font-size: 1.1rem; }
+      .topic-group-copy { margin-top: 7px; font-size: .75rem; }
+      .topic-card { min-height: 72px; gap: 11px; padding: 10px 13px 10px 15px; }
+      .topic-row-copy { grid-template-columns: 1fr; gap: 3px; }
+      .topic-card-name { white-space: normal; }
+      .topic-card-description { font-size: .72rem; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+      .topic-row-arrow { width: 30px; height: 30px; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .featured-topic, .featured-topic::after, .topic-card, .topic-arrow { transition: none; }
+      .featured-topic, .featured-topic::after, .featured-arrow, .topic-card, .topic-card::before, .topic-row-arrow, .topic-jump { transition: none; }
+      .featured-grid, .topic-jumps { scroll-behavior: auto; }
     }
   </style>
   <link href="{{ url_for('static', filename='libflix.css', v=asset_version) }}" rel="stylesheet">
 </head>
 <body class="page-topics">
+  {% macro topic_icon(kind, class_name='') -%}
+  <svg class="{{ class_name }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+    {% if kind == 'focus' %}
+    <circle cx="12" cy="12" r="6.75"></circle><circle cx="12" cy="12" r="2.15"></circle><path d="M12 2.5v2.75M12 18.75v2.75M2.5 12h2.75M18.75 12h2.75"></path>
+    {% elif kind == 'connection' %}
+    <circle cx="8.7" cy="12" r="5.1"></circle><circle cx="15.3" cy="12" r="5.1"></circle>
+    {% elif kind == 'build' or kind == 'startups' %}
+    <path d="M4 19h4v-4h4v-4h4V7h4"></path><path d="M15.5 4H20v4.5"></path>
+    {% elif kind == 'value' %}
+    <path d="m12 3.25 8 8.75-8 8.75L4 12l8-8.75Z"></path><path d="M8.2 12h7.6M12 8.2v7.6"></path>
+    {% elif kind == 'vitality' %}
+    <path d="M2.5 12h4l2.1-5.25 4.2 10.5L15.25 12H21.5"></path>
+    {% elif kind == 'science' %}
+    <ellipse cx="12" cy="12" rx="9" ry="3.6"></ellipse><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(60 12 12)"></ellipse><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(120 12 12)"></ellipse><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"></circle>
+    {% elif kind == 'meditation' %}
+    <circle cx="12" cy="12" r="2"></circle><circle cx="12" cy="12" r="5.25"></circle><circle cx="12" cy="12" r="8.5"></circle>
+    {% elif kind == 'artificial intelligence' %}
+    <circle cx="12" cy="5" r="2"></circle><circle cx="5" cy="17.5" r="2"></circle><circle cx="19" cy="17.5" r="2"></circle><path d="m10.9 6.8-4.8 8.9M13.1 6.8l4.8 8.9M7 17.5h10"></path>
+    {% elif kind == 'search' %}
+    <circle cx="10.75" cy="10.75" r="6.75"></circle><path d="m16 16 4.2 4.2"></path>
+    {% elif kind == 'catalog' %}
+    <path d="M5 4.5h11.5A2.5 2.5 0 0 1 19 7v12.5H7.5A2.5 2.5 0 0 1 5 17V4.5Z"></path><path d="M5 17a2.5 2.5 0 0 1 2.5-2.5H19M9 8h6"></path>
+    {% else %}
+    <path d="M5 12h13"></path><path d="m14 8 4 4-4 4"></path>
+    {% endif %}
+  </svg>
+  {%- endmacro %}
+
   {% set active_tab = 'topics' %}
   {% include "_navbar.html" %}
 
   <main id="mainContent">
     <div class="topics-shell">
-      <header class="topics-intro">
-        <div>
-          <p class="topics-kicker">Browse LibFlix</p>
-          <h1 class="topics-title">Explore topics</h1>
-          <p class="topics-lede">Start with an idea, interest, or problem. We’ll surface the books most worth opening first.</p>
+      <header class="topics-hero">
+        <div class="topics-hero-grid">
+          <div>
+            <p class="topics-kicker"><span class="topics-kicker-mark" aria-hidden="true">/</span> Browse LibFlix</p>
+            <h1 class="topics-title"><span>Explore</span> <span class="topics-title-accent">topics</span></h1>
+            <p class="topics-lede">Start with an idea, interest, or problem. We’ll surface the books most worth opening first.</p>
+            <div class="topic-meta" aria-label="Topic catalog details">
+              <span>{{ topic_icon('catalog') }} 30 topics</span>
+              <span>{{ topic_icon('focus') }} Ranked starting points</span>
+            </div>
+          </div>
+          <div class="topic-search-wrap">
+            <label class="topic-search-label" for="topicSearch">What do you want to understand?</label>
+            <form class="topic-search" action="{{ discover_url(mode, book_lang) }}" method="get" role="search">
+              <input type="hidden" name="intent" value="topic">
+              <input type="hidden" name="type" value="nonfiction">
+              {{ topic_icon('search', 'topic-search-icon') }}
+              <input id="topicSearch" type="search" name="q" placeholder="Focus, meditation, startups…" autocomplete="off" required>
+              <button type="submit"><span>Find books</span>{{ topic_icon('arrow') }}</button>
+            </form>
+          </div>
         </div>
-        <form class="topic-search" action="{{ discover_url(mode, book_lang) }}" method="get" role="search">
-          <input type="hidden" name="intent" value="topic">
-          <input type="hidden" name="type" value="nonfiction">
-          <input type="search" name="q" placeholder="Try focus, meditation, startups…" aria-label="Search by topic" autocomplete="off" required>
-          <button type="submit">Find books</button>
-        </form>
+        <nav class="topic-jumps" aria-label="Jump to a topic collection">
+          {% for group in topic_groups %}
+          <a class="topic-jump" href="#topicGroup{{ loop.index }}">{{ topic_icon(group.icon) }}<span>{{ group.short_name }}</span></a>
+          {% endfor %}
+        </nav>
       </header>
 
       {% if featured_topics %}
       <section class="topics-section" aria-labelledby="featuredTopicsTitle">
-        <div class="topics-section-head">
-          <h2 class="topics-section-title" id="featuredTopicsTitle">Featured</h2>
-          <p class="topics-section-copy">A few useful places to begin.</p>
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker"><span class="section-kicker-mark" aria-hidden="true">01 /</span> Starting points</p>
+            <h2 class="section-title" id="featuredTopicsTitle">Good places to start</h2>
+          </div>
+          <p class="section-copy">Four useful places to begin when you want a strong recommendation without knowing the exact title.</p>
         </div>
-        <div class="featured-row">
-          {% for topic in featured_topics %}
-          <a class="featured-topic topic-link" href="{{ topic_url(topic.query, mode, book_lang) }}">
-            <span class="featured-index">{{ '%02d' | format(loop.index) }}</span>
-            <span class="featured-name">
-              <strong>{{ topic.name }}</strong>
-              <span class="topic-arrow" aria-hidden="true">→</span>
-            </span>
-          </a>
-          {% endfor %}
+        <div class="featured-rail">
+          <div class="featured-grid">
+            {% for topic in featured_topics[:4] %}
+            <a class="featured-topic topic-link" href="{{ topic_url(topic.query, mode, book_lang) }}">
+              <span class="featured-topic-top">
+                <span class="featured-symbol">{{ topic_icon(topic.query) }}</span>
+                <span class="featured-arrow" aria-hidden="true">{{ topic_icon('arrow') }}</span>
+              </span>
+              <span class="featured-copy">
+                <span class="featured-name">{{ topic.name }}</span>
+                <span class="featured-description">{{ topic.description }}</span>
+              </span>
+            </a>
+            {% endfor %}
+          </div>
+          <span class="featured-scroll-hint" aria-hidden="true">Swipe to explore →</span>
         </div>
       </section>
       {% endif %}
 
-      {% for group in topic_groups %}
-      <section class="topics-section topic-group" aria-labelledby="topicGroup{{ loop.index }}">
-        <div class="topics-section-head">
-          <h2 class="topics-section-title" id="topicGroup{{ loop.index }}">{{ group.name }}</h2>
-          {% if group.description %}<p class="topics-section-copy">{{ group.description }}</p>{% endif %}
+      <section class="topics-section" aria-labelledby="allTopicsTitle">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker"><span class="section-kicker-mark" aria-hidden="true">02 /</span> The reading map</p>
+            <h2 class="section-title" id="allTopicsTitle">Choose a direction</h2>
+          </div>
+          <p class="section-copy">Six collections for moving from a broad interest to books worth your time.</p>
         </div>
-        <div class="topic-grid">
-          {% for topic in group.topics %}
-          <a class="topic-card topic-link" href="{{ topic_url(topic.query, mode, book_lang) }}">
-            <span class="topic-card-name">{{ topic.name }}</span>
-            <span class="topic-arrow" aria-hidden="true">→</span>
-            {% if topic.description %}<span class="topic-card-description">{{ topic.description }}</span>{% endif %}
-          </a>
+        <div class="topic-groups">
+          {% for group in topic_groups %}
+          <section class="topic-group" id="topicGroup{{ loop.index }}" aria-labelledby="topicGroupTitle{{ loop.index }}">
+            <header class="topic-group-head">
+              <span class="topic-group-symbol">{{ topic_icon(group.icon) }}</span>
+              <div>
+                <p class="topic-group-meta"><span>Collection {{ '%02d' | format(loop.index) }}</span><span>{{ group.topics | length }} topics</span></p>
+                <h3 class="topic-group-title" id="topicGroupTitle{{ loop.index }}">{{ group.name }}</h3>
+                {% if group.description %}<p class="topic-group-copy">{{ group.description }}</p>{% endif %}
+              </div>
+            </header>
+            <ul class="topic-list">
+              {% for topic in group.topics %}
+              <li>
+                <a class="topic-card topic-link" href="{{ topic_url(topic.query, mode, book_lang) }}">
+                  <span class="topic-row-mark" aria-hidden="true">/</span>
+                  <span class="topic-row-copy">
+                    <span class="topic-card-name">{{ topic.name }}</span>
+                    {% if topic.description %}<span class="topic-card-description">{{ topic.description }}</span>{% endif %}
+                  </span>
+                  <span class="topic-row-arrow" aria-hidden="true">{{ topic_icon('arrow') }}</span>
+                </a>
+              </li>
+              {% endfor %}
+            </ul>
+          </section>
+          {% else %}
+          <p class="topics-empty">No topics are available yet.</p>
           {% endfor %}
         </div>
       </section>
-      {% else %}
-        {% if not featured_topics %}<p class="topics-empty">No topics are available yet.</p>{% endif %}
-      {% endfor %}
     </div>
   </main>
 

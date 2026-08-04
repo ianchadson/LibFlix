@@ -2307,8 +2307,8 @@ footer {
   }
 
   .mobile-browse-close {
-    width: 36px;
-    height: 36px;
+    width: 44px;
+    height: 44px;
     border: 0;
     border-radius: 50%;
     background: rgba(255, 255, 255, .075);
@@ -2339,10 +2339,18 @@ footer {
   }
 
   .mobile-browse-link:hover,
-  .mobile-browse-link.active {
+  .mobile-browse-link.active,
+  .mobile-browse-link[aria-current="page"] {
     border-color: rgba(242, 13, 27, .35);
     background: rgba(242, 13, 27, .1);
     color: #fff !important;
+  }
+
+  .mobile-browse-current {
+    margin-left: auto;
+    color: var(--app-red);
+    font-size: .78rem;
+    font-weight: 800;
   }
 
   html.pwa-mobile-nav-ready .app-toast,

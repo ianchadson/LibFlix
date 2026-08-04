@@ -146,8 +146,20 @@
         const key = url.pathname + url.search;
         if (seen.has(key)) return;
         seen.add(key);
+        const isCurrent = source.matches('.active, [aria-current="page"]');
         const link = source.cloneNode(true);
         link.className = 'mobile-browse-link';
+        link.classList.toggle('active', isCurrent);
+        if (isCurrent) {
+          link.setAttribute('aria-current', 'page');
+          const currentMarker = document.createElement('span');
+          currentMarker.className = 'mobile-browse-current';
+          currentMarker.setAttribute('aria-hidden', 'true');
+          currentMarker.textContent = '✓';
+          link.appendChild(currentMarker);
+        } else {
+          link.removeAttribute('aria-current');
+        }
         link.removeAttribute('id');
         fragment.appendChild(link);
       });

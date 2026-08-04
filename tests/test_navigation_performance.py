@@ -45,6 +45,18 @@ class PartialNavigationTests(unittest.TestCase):
         self.assertNotIn(b"const LOADER_DELAY", partial.data)
         self.assertLess(len(partial.data), len(full.data) * 0.75)
 
+    def test_same_page_hash_navigation_bypasses_partial_page_fetch(self):
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+
+        self.assertIn("if (rawHref.startsWith('#') && link.matches('.topic-jump'))", navbar)
+        self.assertIn("document.getElementById(decodeURIComponent(window.location.hash.slice(1)))", navbar)
+        self.assertIn("history.pushState({ libflix: true", navbar)
+        self.assertIn("focusFragmentTarget(hashTarget)", navbar)
+        self.assertIn("target.focus({ preventScroll: true })", navbar)
+        self.assertIn("let renderedPageKey = window.location.pathname + window.location.search", navbar)
+        self.assertIn("if (pageKey === renderedPageKey)", navbar)
+        self.assertIn("top: Number(event.state?.scrollY) || 0", navbar)
+
 
 class DiscoveryShellTests(unittest.TestCase):
     def test_cold_discovery_document_never_waits_for_provider(self):
@@ -142,6 +154,21 @@ class SimilarRecommendationShellTests(unittest.TestCase):
         self.assertIn("if (!hasSimilarSeed())", template)
         self.assertIn("loadBookDetails();", template)
         self.assertIn("Finding similar books…", template)
+
+
+class DownloadShellTests(unittest.TestCase):
+    def test_download_loading_state_only_previews_the_best_match(self):
+        templates = Path(app.APP_DIR) / "templates"
+
+        for template_name in ("book.html", "search.html"):
+            with self.subTest(template=template_name):
+                template = (templates / template_name).read_text()
+                loader_start = template.index('id="downloadLoader"')
+                loader_end = template.index('id="downloadError"', loader_start)
+                loader = template[loader_start:loader_end]
+
+                self.assertEqual(loader.count('class="edition-skeleton"'), 1)
+                self.assertIn("Finding the best available edition", loader)
 
 
 if __name__ == "__main__":

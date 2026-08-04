@@ -74,6 +74,8 @@ TOPIC_EXPANSIONS: dict[str, tuple[str, ...]] = {
 BROWSE_TOPIC_GROUPS = (
     {
         "name": "Focus & wellbeing",
+        "short_name": "Focus",
+        "icon": "focus",
         "description": "Direct attention, protect energy, and work with intention.",
         "topics": (
             {"name": "Focus", "query": "focus", "description": "Attention, concentration, and deep work"},
@@ -85,6 +87,8 @@ BROWSE_TOPIC_GROUPS = (
     },
     {
         "name": "Mind & relationships",
+        "short_name": "Mind",
+        "icon": "connection",
         "description": "Understand yourself and relate to other people more clearly.",
         "topics": (
             {"name": "Anxiety", "query": "anxiety", "description": "Understand worry and regain agency"},
@@ -96,6 +100,8 @@ BROWSE_TOPIC_GROUPS = (
     },
     {
         "name": "Build & lead",
+        "short_name": "Build",
+        "icon": "build",
         "description": "Create companies, lead teams, and make ideas travel.",
         "topics": (
             {"name": "Startups", "query": "startups", "description": "From early insight to durable company"},
@@ -107,6 +113,8 @@ BROWSE_TOPIC_GROUPS = (
     },
     {
         "name": "Money & work",
+        "short_name": "Money",
+        "icon": "value",
         "description": "Make clearer decisions about capital, craft, and communication.",
         "topics": (
             {"name": "Investing", "query": "investing", "description": "Long-term thinking and capital"},
@@ -118,6 +126,8 @@ BROWSE_TOPIC_GROUPS = (
     },
     {
         "name": "Health & life",
+        "short_name": "Health",
+        "icon": "vitality",
         "description": "Care for the body, family, and a more creative life.",
         "topics": (
             {"name": "Parenting", "query": "parenting", "description": "Raising children with perspective"},
@@ -129,6 +139,8 @@ BROWSE_TOPIC_GROUPS = (
     },
     {
         "name": "Science & ideas",
+        "short_name": "Science",
+        "icon": "science",
         "description": "Understand progress, nature, and possible futures.",
         "topics": (
             {"name": "Technology", "query": "technology", "description": "Innovation and technological change"},

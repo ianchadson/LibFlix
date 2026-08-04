@@ -76,6 +76,9 @@ class PwaIntegrationTests(unittest.TestCase):
         self.assertIn("active", topic_link.get("class", []))
         self.assertIn("document.querySelectorAll('.cat-tabs a')", pwa)
         self.assertIn(r"/\/topics$/.test(path)", pwa)
+        self.assertIn("link.classList.toggle('active', isCurrent)", pwa)
+        self.assertIn("link.setAttribute('aria-current', 'page')", pwa)
+        self.assertIn("currentMarker.setAttribute('aria-hidden', 'true')", pwa)
 
     def test_worker_is_allowlisted_shell_only(self):
         worker = (ROOT / "static/libflix-sw.js").read_text()
