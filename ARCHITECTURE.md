@@ -90,12 +90,11 @@ Navbar search form submits to /discover
 This route searches Open Library discovery data only. It does not search the
 download source directly.
 
-Discovery uses Open Library's unqualified relevance query, then applies a local
-language guard to every record. This avoids hiding newly catalogued works whose
-Open Library records do not yet contain language or cover metadata, while still
-rejecting records explicitly tagged in another language. Coverless matches use
-the standard placeholder rather than disappearing, and only one upstream search
-is required per discovery page.
+Discovery uses Open Library's unqualified relevance query, then applies local
+language and identity-relevance guards to every record. Exact title/author
+evidence ranks first; multi-token queries require at least two-thirds literal
+coverage, which removes unrelated popularity filler without hiding sparse exact
+works. Coverless matches use the standard placeholder rather than disappearing.
 
 ### Book Preview (`GET /book/<work_id>`)
 
@@ -692,9 +691,9 @@ and WebKit scrollbar hiding rules.
 | Open Library JSON | SQLite `api_cache.sqlite3` | SHA-256 of request key | 6 hours fresh; up to 90 days stale |
 | Chinese title resolution | memory + SQLite | `chinese_title:v1:<ol_key>` | 30 days |
 | CN English display title | memory + SQLite | `english_title:v1:<ol_key>` | 30 days |
-| Assembled book detail | memory + SQLite | `book_detail:v3:<lang>:<work>` | 7 days fresh; up to 90 days stale |
-| Similar books | memory + SQLite | `similar:v2:...` | 7 days fresh; up to 30 days stale |
-| Download search results | memory + SQLite | `download_search:v6:...` | 15 minutes fresh; stale fallback |
+| Assembled book detail | memory + SQLite | `book_detail:v5:<lang>:<work>` | 7 days fresh; up to 90 days stale |
+| Similar books | memory + SQLite | `similar:v4:...` | 7 days fresh; complete empty results use a 30-minute negative key |
+| Download search results | memory + SQLite | `download_search:v10:...` | 15 minutes for complete searches; stale fallback |
 | Homepage shelves | memory | `shelves_{lang}_{mode}` | 1 hour |
 | Homepage shelves | disk | `shelf_cache_{lang}_{mode}.json` | immediate restart hydration; stale after 6 hours |
 | Cover images | disk + browser | `covers/<source>/<hash>-<size>.*` | persistent disk; 30 days in browser |
@@ -705,7 +704,9 @@ Runtime cache files are ignored by git.
 
 SQLite runs in WAL mode with `synchronous=NORMAL`. Each cache update touches one
 row instead of reading and rewriting the former multi-megabyte JSON object.
-Rows older than the longest supported stale window are pruned at initialization.
+Rows older than the longest supported stale window are pruned at initialization
+and periodically on writes. Row count, aggregate payload bytes, individual
+payload size, and process-local memory entry count are independently capped.
 Legacy `api_cache.json` is migrated once when the database does not yet exist.
 
 All four language/mode shelf files are loaded before Flask begins serving.
@@ -715,25 +716,28 @@ single delayed background refresh guarded by `(language, mode)`.
 The Open Library gateway spaces upstream calls, coalesces matching in-flight
 requests, and opens a 60-second circuit after three consecutive failures. A
 caller with stale data returns immediately during that circuit rather than
-adding another timeout. Background metadata refresh is limited to two workers.
+adding another timeout. Background metadata refresh uses two workers and
+hard-capped pending sets for book details and recommendations.
 
 Shelf-cache startup also builds the lightweight book-hint index. Category,
 discovery, shelf, and similar-book API extraction extends that index during the
 process lifetime. A valid direct book URL with no hint still returns a stable
 shell immediately and lets `/api/book` hydrate its identity and description.
 
-CN book hydration also returns an ordered `download_queries` list. The client
-tries the next alias only when the current Chinese-filtered search is empty and
-retains the successful alias for pagination and retries. This covers edition
+Book hydration returns an ordered `download_queries` list, but the server owns
+the canonical identity used for lookup. It searches non-overlapping two-query
+batches, up to six source calls, and continues past weak PDF-only results until
+a high-confidence EPUB is found or the bound is exhausted. This covers edition
 suffixes, mixed English/Chinese titles, alternate Open Library edition names,
-Traditional/Simplified indexing differences, and a small explicit override map
-for known catalog-title mismatches without displaying non-Chinese files.
+Traditional/Simplified indexing differences, ISBNs, and a small explicit
+override map without displaying files outside the active language filter.
 
-More Like This uses up to two specific subjects instead of trusting the first
-Open Library label. Broad labels such as Fiction, Biography, Fantasy, and
-generic demographic tags are ignored. Candidate works found under both selected
-subjects rank first, while normalized-title deduplication removes translated or
-edition-level duplicates before the 12-card response is returned.
+More Like This uses up to two specific subjects plus one same-author query
+instead of trusting the first Open Library label. Broad labels such as Fiction,
+Biography, Fantasy, and generic demographic tags are ignored. Candidate works
+found under both selected subjects or by the same author rank first, while
+normalized-title deduplication removes translated or edition-level duplicates.
+The whole recommendation request remains capped at three origin searches.
 
 Cover cache paths are validated and hashed before use. A per-path lock prevents
 duplicate cold downloads within one process. Responses include a cache outcome
@@ -745,13 +749,24 @@ without delaying startup.
 - Every Flask response includes total request time in `Server-Timing`.
 - Open Library, download search, and cover endpoints add operation-specific
   timing entries.
-- `/api/health` reports local database, shelf, Open Library circuit, and Kindle
-  job state without performing a slow external probe.
+- `/api/health` reports local database, shelf, Open Library circuit, Kindle job,
+  and writable limiter/metrics storage state without a slow external probe.
 - The persistent navbar records LCP, CLS, and INP when supported and sends a
   small beacon to `/api/metrics/web-vitals` when the page becomes hidden.
-- The code and cache behavior do not require a Cloudflare-specific rule. See
-  [Performance and resilience](docs/PERFORMANCE_AND_RESILIENCE.md) for tuning,
-  failure behavior, and verification.
+- `security_runtime.py` stores bounded hourly aggregates in `metrics.sqlite3`
+  and hashed token-bucket identities in the separate `rate_limits.sqlite3`;
+  raw request URLs, IP addresses, payloads, and error messages are not retained.
+- Discovery, recommendations, book details, download search/delivery, Kindle,
+  and Web Vital endpoints have weighted cross-worker limits that fail open if
+  their SQLite store is unavailable and return `Retry-After` when capacity is
+  exhausted. Per-client capacity is checked before global capacity.
+- The mobile PWA service worker caches only its allowlisted, current-version
+  static shell when every response is explicitly public. Dynamic, sensitive,
+  private, and no-store routes are network-only.
+- Proxy identity trust is disabled in the portable app. Current production
+  enables it only behind Caddy's Cloudflare source allowlist and localhost-only
+  `X-LibFlix-Client-IP` rewrite. See [Performance and resilience](docs/PERFORMANCE_AND_RESILIENCE.md)
+  for tuning, failure behavior, and verification.
 
 ## Discovery Source
 

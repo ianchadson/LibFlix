@@ -29,8 +29,8 @@
   .search-bar button { height:34px; min-width:34px; border-radius:5px !important; padding:0 !important; margin-left:0 !important; font-size:0 !important; font-weight:700; display:inline-flex; align-items:center; justify-content:center; background:transparent !important; border:0 !important; color:#fff !important; }
   .search-bar.open button, .search-bar:focus-within button { min-width:34px; margin-left:4px !important; font-size:0 !important; }
   .settings-wrap { position:relative; }
-  .settings-panel { position:absolute; right:0; top:calc(100% + 10px); width:260px; padding:12px; border:1px solid rgba(255,255,255,.1); background:rgba(24,24,24,.96); backdrop-filter:blur(6px); border-radius:14px; box-shadow:0 18px 42px rgba(0,0,0,.34); opacity:0; transform:translateY(-6px) scale(.98); pointer-events:none; transition:opacity .18s ease, transform .18s ease; z-index:30; }
-  .settings-panel.open { opacity:1; transform:none; pointer-events:auto; }
+  .settings-panel { position:absolute; right:0; top:calc(100% + 10px); width:260px; padding:12px; border:1px solid rgba(255,255,255,.1); background:rgba(24,24,24,.96); backdrop-filter:blur(6px); border-radius:14px; box-shadow:0 18px 42px rgba(0,0,0,.34); opacity:0; visibility:hidden; transform:translateY(-6px) scale(.98); pointer-events:none; transition:opacity .18s ease, transform .18s ease, visibility 0s linear .18s; z-index:30; }
+  .settings-panel.open { opacity:1; visibility:visible; transform:none; pointer-events:auto; transition-delay:0s; }
   .settings-group + .settings-group { margin-top:10px; }
   .settings-label { color:rgba(255,255,255,.48); font-size:.68rem; font-weight:700; letter-spacing:.06em; text-transform:uppercase; margin:0 0 6px 2px; }
   .settings-panel .mode-toggle, .settings-panel .lang-toggle { width:100%; }
@@ -202,7 +202,7 @@
               </svg>
             </span>
           </button>
-          <div class="settings-panel" id="navSettingsPanel" aria-label="Browse settings">
+          <div class="settings-panel" id="navSettingsPanel" aria-label="Browse settings" aria-hidden="true" inert>
             <div class="settings-group">
               <div class="settings-label">Shelf</div>
               <div class="mode-toggle">
@@ -230,11 +230,49 @@
                 <span class="settings-action-arrow" aria-hidden="true">›</span>
               </button>
             </div>
+            <div class="settings-group" id="installAppGroup" hidden>
+              <div class="settings-label">App</div>
+              <button class="settings-action-btn" id="installAppButton" type="button">
+                <span class="settings-action-text">
+                  <span class="settings-action-icon" aria-hidden="true">↓</span>
+                  <span class="settings-action-copy">
+                    <span class="settings-action-title">Install LibFlix</span>
+                    <span class="settings-action-state" id="installAppState">Use like an app</span>
+                  </span>
+                </span>
+                <span class="settings-action-arrow" aria-hidden="true">›</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
     </div>
   </div>
+</nav>
+<section class="mobile-browse-sheet" id="mobileBrowseSheet" aria-label="Browse categories" hidden>
+  <div class="mobile-browse-head">
+    <h2>Browse</h2>
+    <button class="mobile-browse-close" id="mobileBrowseClose" type="button" aria-label="Close category browser">×</button>
+  </div>
+  <div class="mobile-browse-links" id="mobileBrowseLinks"></div>
+</section>
+<nav class="mobile-app-nav" id="mobileAppNav" aria-label="Primary navigation">
+  <a class="mobile-app-nav-item" id="mobileNavHome" href="{{ home_url(nav_mode, book_lang) }}">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1V10Z"></path></svg>
+    <span>Home</span>
+  </a>
+  <button class="mobile-app-nav-item" id="mobileNavSearch" type="button" aria-label="Search books" aria-expanded="false">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-4-4"></path></svg>
+    <span>Search</span>
+  </button>
+  <button class="mobile-app-nav-item" id="mobileNavBrowse" type="button" aria-label="Browse categories" aria-expanded="false" aria-controls="mobileBrowseSheet">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h16"></path></svg>
+    <span>Browse</span>
+  </button>
+  <button class="mobile-app-nav-item" id="mobileNavSettings" type="button" aria-label="Settings" aria-expanded="false" aria-controls="navSettingsPanel">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.04.04a2.1 2.1 0 0 1-2.97 2.97l-.04-.04a1.8 1.8 0 0 0-1.98-.36 1.8 1.8 0 0 0-1.1 1.65V21a2.1 2.1 0 0 1-4.2 0v-.06a1.8 1.8 0 0 0-1.1-1.65 1.8 1.8 0 0 0-1.98.36l-.04.04a2.1 2.1 0 0 1-2.97-2.97l.04-.04A1.8 1.8 0 0 0 3.8 15a1.8 1.8 0 0 0-1.65-1.1H2a2.1 2.1 0 0 1 0-4.2h.06A1.8 1.8 0 0 0 3.8 8.6a1.8 1.8 0 0 0-.36-1.98l-.04-.04a2.1 2.1 0 0 1 2.97-2.97l.04.04a1.8 1.8 0 0 0 1.98.36A1.8 1.8 0 0 0 9.5 3.8v-.06a2.1 2.1 0 0 1 4.2 0v.06a1.8 1.8 0 0 0 1.1 1.65 1.8 1.8 0 0 0 1.98-.36l.04-.04a2.1 2.1 0 0 1 2.97 2.97l-.04.04a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.65 1.1h.06a2.1 2.1 0 0 1 0 4.2h-.06A1.8 1.8 0 0 0 19.4 15Z"></path></svg>
+    <span>Settings</span>
+  </button>
 </nav>
 <div class="app-transition" id="appTransition" aria-hidden="true">
   <div class="app-transition-core">
@@ -309,6 +347,13 @@
   <div class="kindle-global-tray-detail" id="kindleGlobalTrayDetail" hidden></div>
 </aside>
 <script src="{{ url_for('static', filename='download-ui.js', v=asset_version) }}"></script>
+<script
+  src="{{ url_for('static', filename='libflix-pwa.js', v=asset_version) }}"
+  data-version="{{ asset_version }}"
+  data-worker="{{ url_for('static', filename='libflix-sw.js') }}"
+  data-manifest="{{ url_for('static', filename='manifest.webmanifest') }}"
+  data-icon192="{{ url_for('static', filename='icons/libflix-icon-192.png') }}"
+  defer></script>
 <script>
   (() => {
     const KINDLE_MANAGED_RELAY = {{ kindle_managed_relay | tojson }};
@@ -541,7 +586,14 @@
 
     const ensurePageScript = script => {
       if (!script.src) {
-        return Promise.resolve().then(() => Function(script.textContent)());
+        const replacement = document.createElement('script');
+        replacement.dataset.pageScript = '';
+        // Inline page scripts are permitted by the compatibility CSP.  A
+        // private function scope prevents top-level let/const collisions when
+        // navigating between pages without requiring unsafe-eval.
+        replacement.textContent = `(() => {\n${script.textContent}\n})();`;
+        document.body.appendChild(replacement);
+        return Promise.resolve();
       }
       const source = new URL(script.src, window.location.href).href;
       if (Array.from(document.scripts).some(existing => existing.src === source)) return Promise.resolve();
@@ -809,8 +861,11 @@
     const settingsPanel = document.getElementById('navSettingsPanel');
     const setSettingsOpen = open => {
       settingsPanel?.classList.toggle('open', open);
+      settingsPanel?.setAttribute('aria-hidden', String(!open));
+      if (settingsPanel) settingsPanel.inert = !open;
       settingsToggle?.setAttribute('aria-expanded', String(open));
     };
+    window.LibFlixNavUI = { setSearchOpen, setSettingsOpen };
     settingsToggle?.addEventListener('click', event => {
       event.stopPropagation();
       setSettingsOpen(!settingsPanel?.classList.contains('open'));

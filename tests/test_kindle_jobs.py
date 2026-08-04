@@ -9,6 +9,8 @@ import app
 class KindleJobTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
+        self.original_rate_limiting = app.app.config["RATE_LIMITING_ENABLED"]
+        app.app.config["RATE_LIMITING_ENABLED"] = False
         self.original_database = app.API_SQLITE_CACHE
         self.original_ready = app.SQLITE_CACHE_READY
         self.original_delivery_lock = app.KINDLE_DELIVERY_LOCK_FILE
@@ -18,6 +20,7 @@ class KindleJobTests(unittest.TestCase):
         app.initialize_disk_cache()
 
     def tearDown(self):
+        app.app.config["RATE_LIMITING_ENABLED"] = self.original_rate_limiting
         app.API_SQLITE_CACHE = self.original_database
         app.SQLITE_CACHE_READY = self.original_ready
         app.KINDLE_DELIVERY_LOCK_FILE = self.original_delivery_lock
@@ -181,6 +184,30 @@ class KindleJobTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.get_json()["error"], "SMTP port must be a number")
+        getaddrinfo.assert_not_called()
+        submit.assert_not_called()
+
+    def test_managed_relay_rejects_non_kindle_recipients(self):
+        payload = {
+            "md5": "a" * 32,
+            "title": "Book",
+            "ext": "epub",
+            "kindle_email": "reader@example.com",
+        }
+        with (
+            patch.object(app, "KINDLE_RELAY_HOST", "smtp.relay.example"),
+            patch.object(app, "KINDLE_RELAY_PORT", "587"),
+            patch.object(app, "KINDLE_RELAY_USER", "relay@example.com"),
+            patch.object(app, "KINDLE_RELAY_PASSWORD", "relay-secret"),
+            patch.object(app, "KINDLE_RELAY_SENDER", "books@example.com"),
+            patch.object(app.socket, "getaddrinfo") as getaddrinfo,
+            patch.object(app.KINDLE_EXECUTOR, "submit") as submit,
+            app.app.test_client() as client,
+        ):
+            response = client.post("/api/kindle/jobs", json=payload)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("@kindle.com", response.get_json()["error"])
         getaddrinfo.assert_not_called()
         submit.assert_not_called()
 

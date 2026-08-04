@@ -100,6 +100,9 @@
     const BOOK_LANG = {{ book_lang | tojson }};
     let downloadTitle = {{ download_title | default(title) | tojson }};
     let downloadQueries = {{ download_queries | default([]) | tojson }};
+    let bookTitleAliases = {{ title_aliases | default([]) | tojson }};
+    let bookAuthors = {{ authors | default([]) | tojson }};
+    let bookIsbns = {{ isbns | default([]) | tojson }};
     const downloadLoader = document.getElementById('downloadLoader');
     const downloadError = document.getElementById('downloadError');
     const downloadEmpty = document.getElementById('downloadEmpty');
@@ -129,7 +132,7 @@
     function normalizeDownloadQueries(provided) {
       const candidates = Array.isArray(provided) ? provided.slice() : [];
       if (BOOK_LANG !== 'cn') {
-        candidates.unshift(
+        candidates.push(
           (bookTitle + ' ' + (bookAuthor || '')).trim(),
           downloadTitle,
           bookTitle,
@@ -253,6 +256,9 @@
         queries: downloadQueries,
         title: String(bookTitle || '').trim(),
         author: String(bookAuthor || '').trim(),
+        titleAliases: bookTitleAliases,
+        authors: bookAuthors,
+        isbns: bookIsbns,
       });
     }
 
@@ -279,6 +285,9 @@
         author.hidden = false;
       }
       if (data.download_title) downloadTitle = data.download_title;
+      if (Array.isArray(data.title_aliases)) bookTitleAliases = data.title_aliases;
+      if (Array.isArray(data.authors)) bookAuthors = data.authors;
+      if (Array.isArray(data.isbns)) bookIsbns = data.isbns;
       downloadQueries = normalizeDownloadQueries(data.download_queries);
       const downloadIdentityChanged = previousDownloadSignature !== downloadQuerySignature();
       if (data.cover_url) {
@@ -292,7 +301,7 @@
       }
       const shouldRestartDownloadSearch = downloadRequested
         && downloadIdentityChanged
-        && ['loading', 'empty', 'error'].includes(downloadState);
+        && ['loading', 'empty', 'error', 'results'].includes(downloadState);
       if ((!downloadRequested || shouldRestartDownloadSearch) && buildSearchQuery(0)) {
         doSearch(1, 0);
       }
@@ -396,8 +405,16 @@
 
     function fetchSimilar(subjects) {
       similarRequested = true;
-      const params = new URLSearchParams({ ol_key: olKey, book_lang: BOOK_LANG });
-      subjects.forEach(subject => params.append('subject', subject));
+      const params = new URLSearchParams({
+        ol_key: olKey,
+        book_lang: BOOK_LANG,
+        title: String(bookTitle || '').slice(0, 180),
+        author: String(bookAuthor || '').slice(0, 120),
+        author_aliases: JSON.stringify(
+          bookAuthors.slice(0, 3).map(value => String(value || '').slice(0, 80))
+        ),
+      });
+      subjects.slice(0, 2).forEach(subject => params.append('subject', String(subject || '').slice(0, 120)));
       fetch('/api/similar?' + params)
         .then(response => response.json())
         .then(data => {
@@ -432,15 +449,20 @@
 
     function getSearchParams(page, queryIndex) {
       return {
-        q: buildSearchQuery(queryIndex),
+        q: buildSearchQuery(queryIndex).slice(0, 180),
         sort: document.getElementById('sortSel').value,
         order: 'DESC',
         limit: document.getElementById('limitSel').value,
         format: document.getElementById('fmtSel').value,
         lang: document.getElementById('langSel').value,
         dedup: document.getElementById('dedupToggle').checked ? '1' : '0',
-        target_title: BOOK_LANG === 'cn' ? buildSearchQuery(queryIndex) : bookTitle,
-        target_author: bookAuthor,
+        target_title: String(bookTitle || '').slice(0, 180),
+        target_author: String(bookAuthor || '').slice(0, 120),
+        search_aliases: JSON.stringify(
+          downloadQueries.slice(queryIndex + 1, queryIndex + 3)
+            .map(value => String(value || '').slice(0, 80))
+        ),
+        ol_key: olKey,
         mode: MODE,
         book_lang: BOOK_LANG,
         page: String(page || 1),
@@ -474,14 +496,6 @@
       });
     }
 
-    function searchNextDownloadAlias(queryIndex, maximumAttempts = downloadQueries.length) {
-      const queryLimit = Math.min(downloadQueries.length, maximumAttempts);
-      if (currentPage !== 1 || queryIndex + 1 >= queryLimit) return false;
-      activeSearch = null;
-      doSearch(1, queryIndex + 1);
-      return true;
-    }
-
     function doSearch(page, queryIndex) {
       queryIndex = Number(queryIndex) || 0;
       if (!hasResolvedBookIdentity() || !buildSearchQuery(queryIndex)) {
@@ -498,23 +512,16 @@
         .then(response => response.json())
         .then(data => {
           if (activeSearch !== controller) return;
-          if (data.success && !data.books.length && searchNextDownloadAlias(queryIndex)) {
-            return;
-          }
           if (data.success) {
             activeDownloadQueryIndex = queryIndex;
             showDownloadResults(data);
-          } else if (searchNextDownloadAlias(queryIndex, 4)) {
-            return;
           } else {
             showDownloadState('error', window.LibFlixDownloads.friendlyError(data.error));
           }
         })
         .catch(error => {
           if (activeSearch === controller && error.name !== 'AbortError') {
-            if (!searchNextDownloadAlias(queryIndex, 4)) {
-              showDownloadState('error', window.LibFlixDownloads.friendlyError(error.message));
-            }
+            showDownloadState('error', window.LibFlixDownloads.friendlyError(error.message));
           }
         })
         .finally(() => {

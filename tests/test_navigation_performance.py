@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import app
@@ -22,6 +23,12 @@ class PartialNavigationTests(unittest.TestCase):
         self.assertIn(b'class="navbar', partial.data)
         self.assertNotIn(b"const LOADER_DELAY", partial.data)
         self.assertLess(len(partial.data), len(full.data) * 0.75)
+
+    def test_partial_navigation_executes_scripts_without_unsafe_eval(self):
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+
+        self.assertNotIn("Function(script.textContent)", navbar)
+        self.assertIn("replacement.textContent = `(() => {", navbar)
 
 
 class DiscoveryShellTests(unittest.TestCase):

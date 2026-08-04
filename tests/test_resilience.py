@@ -4,6 +4,7 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from contextlib import closing
 from unittest.mock import patch
 
 import app
@@ -36,11 +37,12 @@ class DurableCacheTests(TemporaryCacheTest):
     def test_expired_entry_remains_available_as_stale(self):
         app.disk_cache_set("book", {"title": "Cached"})
         cache_key = app.disk_cache_key("book")
-        with sqlite3.connect(app.API_SQLITE_CACHE) as connection:
-            connection.execute(
-                "UPDATE api_cache SET created_at = ? WHERE cache_key = ?",
-                (time.time() - 7200, cache_key),
-            )
+        with closing(sqlite3.connect(app.API_SQLITE_CACHE)) as connection:
+            with connection:
+                connection.execute(
+                    "UPDATE api_cache SET created_at = ? WHERE cache_key = ?",
+                    (time.time() - 7200, cache_key),
+                )
 
         self.assertIsNone(app.disk_cache_get("book", ttl=3600))
         self.assertEqual(
@@ -52,11 +54,12 @@ class DurableCacheTests(TemporaryCacheTest):
         key = "ol:/works/OL1W.json:None"
         app.disk_cache_set(key, {"title": "Local copy"})
         cache_key = app.disk_cache_key(key)
-        with sqlite3.connect(app.API_SQLITE_CACHE) as connection:
-            connection.execute(
-                "UPDATE api_cache SET created_at = ? WHERE cache_key = ?",
-                (time.time() - app.API_DISK_CACHE_TTL - 1, cache_key),
-            )
+        with closing(sqlite3.connect(app.API_SQLITE_CACHE)) as connection:
+            with connection:
+                connection.execute(
+                    "UPDATE api_cache SET created_at = ? WHERE cache_key = ?",
+                    (time.time() - app.API_DISK_CACHE_TTL - 1, cache_key),
+                )
 
         with patch.object(app, "schedule_ol_refresh", return_value=True) as refresh:
             result = app.ol_get("/works/OL1W.json")
@@ -303,7 +306,7 @@ class DiscoveryFallbackTests(TemporaryCacheTest):
         sparse = [
             self.energy_game_record(
                 key=f"/works/OL90{i}W",
-                title=f"Exact sparse result {i}",
+                title=f"Covered pagination sparse result {i}",
                 author_name=[f"Sparse Author {i}"],
                 language=["eng"],
             )
@@ -312,7 +315,7 @@ class DiscoveryFallbackTests(TemporaryCacheTest):
         covered = [
             self.energy_game_record(
                 key=f"/works/OL{i}W",
-                title=f"Covered result {i}",
+                title=f"Covered pagination result {i}",
                 author_name=[f"Covered Author {i}"],
                 language=["eng"],
                 cover_i=1000 + i,

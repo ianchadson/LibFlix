@@ -70,6 +70,10 @@ No API key is required. Open Library is the only discovery backend.
   not jump directly to download search.
 - **Download search is contextual** - download options are searched from the book
   preview page using the selected title and author.
+- **Locally reranked discovery** - Open Library results must retain literal
+  title/author evidence for the query before rendering. Exact identity matches
+  rank first and unrelated popularity filler is removed locally. Exact ISBNs,
+  common AI acronym forms, and high-confidence title typos remain searchable.
 
 ### Homepage
 
@@ -136,9 +140,10 @@ No API key is required. Open Library is the only discovery backend.
 - **Async Open Library details** - the description loads after the preview shell
   renders, strips source markup, and collapses behind `Read more` on smaller
   screens when needed.
-- **More Like This** - the first subject loads a single-row horizontal
-  similar-books shelf with the same hover quick peek used elsewhere. Its API
-  request waits until the section approaches the viewport.
+- **More Like This** - up to two specific subjects plus the current author feed
+  a bounded, locally ranked single-row shelf. Multi-subject and same-author
+  books win over tangential popularity matches. Its API request waits until the
+  section approaches the viewport.
 - **Hidden More Like This scrollbar** - the shelf scrolls horizontally without a
   visible scrollbar.
 - **Inline edition picker** - download candidates appear as responsive edition
@@ -196,6 +201,13 @@ No API key is required. Open Library is the only discovery backend.
   download search without exposing filter state in the URL.
 - **Deduplication** - results can be grouped by normalized title and author,
   keeping the highest-scored candidate.
+- **Identity-aware aliases** - a work retains bounded canonical, edition,
+  author, and ISBN signals on the server. Lookup searches two aliases at a time,
+  up to six total, and continues past weak PDF-only batches until it finds a
+  high-confidence EPUB or exhausts that bound.
+- **Completeness-aware caching** - complete alias searches retain the normal
+  15-minute cache. Partial source failures can still show usable results but are
+  not persisted as a complete answer.
 - **No visible result totals** - count summaries were removed from search and
   preview download lists.
 - **Compact pagination** - pagination appears only when there is more than one
@@ -236,6 +248,18 @@ No API key is required. Open Library is the only discovery backend.
 - **Operational visibility** - `/api/health` reports local dependency state,
   server timing is attached to key responses, and lightweight browser
   performance metrics are accepted by `/api/metrics/web-vitals`.
+- **Durable bounded telemetry** - request/error timings and browser Web Vitals
+  are stored as hourly aggregates in SQLite without raw URLs, payloads, IPs, or
+  exception messages.
+- **Public-service guardrails** - discovery, recommendation, book-detail,
+  download search, file delivery, Kindle, and metric endpoints use weighted
+  cross-worker token buckets. Metadata refresh queues, in-memory entries, and
+  the durable metadata cache are hard-capped. Responses include a same-origin
+  CSP, frame/plugin blocking, a restrictive permissions policy, and HTTPS HSTS.
+- **Installable mobile app** - LibFlix includes standalone icons/manifest, an
+  install action, a safe offline screen, and Home/Search/Browse/Settings bottom
+  navigation. The service worker never stores downloads, Kindle traffic,
+  credentials, covers, or private/no-store responses.
 - **Accessible interaction** - pages provide a skip link, named icon controls,
   visible keyboard focus, modal focus return, scroll locking, reduced-motion
   fallbacks, and non-selectable app chrome while content remains selectable.
@@ -286,16 +310,28 @@ No API key is required. Open Library is the only discovery backend.
 | `KINDLE_RELAY_USER` | empty | Managed relay username |
 | `KINDLE_RELAY_PASSWORD` | empty | Managed relay password |
 | `KINDLE_RELAY_SENDER` | relay username | Approved From address used by the managed relay |
+| `LIBFLIX_TRUST_PROXY_HEADERS` | `0` | Accept Caddy's overwritten `X-LibFlix-Client-IP` only across the localhost Caddy-to-Gunicorn hop; enable only after applying the documented Caddy source allowlist/header rewrite |
+| `LIBFLIX_RATE_LIMITING_ENABLED` | `1` | Runtime protection switch; disable only in isolated regression-test environments |
+| `LIBFLIX_MEMORY_CACHE_MAX_ENTRIES` | `4096` | Maximum process-local metadata cache entries |
+| `LIBFLIX_API_CACHE_MAX_ROWS` | `20000` | Maximum durable metadata cache rows |
+| `LIBFLIX_API_CACHE_MAX_BYTES` | `268435456` | Maximum combined serialized durable metadata payload bytes |
+| `LIBFLIX_API_CACHE_MAX_PAYLOAD_BYTES` | `2097152` | Maximum serialized size of one durable cache entry |
+| `LIBFLIX_BOOK_REFRESH_PENDING_LIMIT` | `16` | Maximum active and queued book-detail refreshes per worker |
+| `LIBFLIX_SIMILAR_REFRESH_PENDING_LIMIT` | `12` | Maximum active and queued recommendation refreshes per worker |
 
 Without a managed relay, Send to Kindle settings are configured in the browser
 and stored in localStorage. The SMTP password is sent only when starting a
 delivery, remains in process memory for that job, and is never stored in SQLite.
 SMTP targets are restricted to public addresses on secure submission ports.
 When the required `KINDLE_RELAY_*` values are present, the server uses that
-relay and browser SMTP credentials are unnecessary.
+relay and browser SMTP credentials are unnecessary. Managed delivery accepts
+only `@kindle.com` recipients; public deployments still need account-level
+authorization and quotas before enabling a shared relay.
 
-These improvements are application-code changes. They do not depend on, or
-require changes to, Cloudflare configuration.
+The app remains proxy-agnostic with proxy identity trust disabled. The current
+Cloudflare production deployment enables per-client limiting only after Caddy
+allowlists official Cloudflare source networks, removes public identity headers,
+and overwrites `X-LibFlix-Client-IP` on its localhost Gunicorn upstream.
 
 ## Runtime Cache Files
 
@@ -304,7 +340,9 @@ requests. They are ignored by git.
 
 | File Pattern | Purpose |
 |---|---|
-| `api_cache.sqlite3` | WAL-enabled cache for metadata, source results, Kindle job events, and stale fallback |
+| `api_cache.sqlite3` | WAL-enabled, row/byte-capped cache for metadata, source results, Kindle job events, and stale fallback |
+| `rate_limits.sqlite3` | Hashed, cross-worker token buckets with bounded retention |
+| `metrics.sqlite3` | Bounded hourly request, error, and Web Vital aggregates |
 | `shelf_cache_<lang>_<mode>.json` | Warm shelf cache for each language and mode |
 | `shelf_cache*.json` | Historical and current shelf cache files ignored by git |
 | `covers/openlibrary/...` | Size-specific cached Open Library covers |
@@ -316,7 +354,8 @@ requests. They are ignored by git.
 Legacy `api_cache.json` data is migrated once into SQLite and removed after a
 successful migration. Shelf files and book hints are loaded before serving;
 stale shelves refresh after a delay without blocking the first page. Expired
-metadata can be served stale while a bounded background refresh runs.
+metadata can be served stale while a bounded background refresh runs. Memory
+and SQLite cache pruning continues periodically after startup.
 
 ## Architecture
 
@@ -342,8 +381,9 @@ See [CHANGELOG.md](CHANGELOG.md) for dated implementation details.
 Useful local checks:
 
 ```bash
-python3 -m unittest discover -s tests -v
-python3 -m py_compile app.py book_preparation.py kindle_delivery.py downloaders/base.py downloaders/libgen.py
+LIBFLIX_DATA_DIR="$(mktemp -d)" LIBFLIX_RATE_LIMITING_ENABLED=0 \
+  python3 -m unittest discover -s tests -v
+python3 -m py_compile app.py book_preparation.py kindle_delivery.py security_runtime.py downloaders/base.py downloaders/libgen.py
 python3 app.py
 ```
 

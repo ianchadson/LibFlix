@@ -122,9 +122,9 @@ cheap while avoiding whole-cache rewrites.
 | Data | Key family | Fresh lifetime |
 |---|---|---|
 | Open Library JSON | `ol:*` | 6 hours on disk |
-| Assembled book detail | `book_detail:v3:*` | 7 days |
-| Similar books | `similar:v2:*` | 7 days |
-| Download source search | `download_search:v4:*` | 15 minutes |
+| Assembled book detail | `book_detail:v5:*` | 7 days |
+| Similar books | `similar:v4:*` | 7 days; complete empty results use a 30-minute negative key |
+| Download source search | `download_search:v10:*` | 15 minutes for complete searches only |
 | CN/English title helpers | language-specific keys | 30 days |
 
 Stale lifetimes are longer than fresh lifetimes. Routes only use stale data when
@@ -176,6 +176,16 @@ prevent the book page, description, or More Like This shelf from rendering.
 - A stale successful result can be returned when the source is unavailable.
 - Search timing is included in `Server-Timing`.
 - Failure states are scoped to Download options and offer a retry.
+- Work identity keeps bounded canonical, work, edition, author, and ISBN aliases.
+  The server owns that identity and searches non-overlapping two-query batches,
+  up to six source calls total. It stops early only after a high-confidence EPUB
+  is found; weak PDFs do not suppress later edition or ISBN aliases.
+- Alias results merge by source identifier before relevance ranking. Partial
+  source failures may return usable results with a short private cache policy,
+  but partial or empty-failure responses are never persisted as complete.
+- Multi-alias book lookup intentionally returns a single merged page. Ordinary
+  one-query search retains upstream pagination, avoiding totals from one alias
+  being paired with pages from another.
 
 ### Best for Kindle ranking
 
@@ -279,6 +289,42 @@ keeps metadata cleanup from becoming a new delivery failure mode.
   than appearing permanently stuck.
 - Completed and failed jobs are periodically pruned.
 
+## Public Runtime Protection
+
+- Browser responses restrict scripts, styles, connections, images, manifests,
+  workers, forms, and frames to the capabilities the current same-origin UI
+  requires. Inline compatibility remains enabled until page scripts are moved
+  out of templates; framing, plugins, base-tag changes, and cross-origin forms
+  are blocked now.
+- Discovery, similar-book, book-detail, download, Kindle, and metrics endpoints
+  use weighted cross-worker SQLite token buckets. Client identities
+  are hashed, rows are retained for a bounded period, and a limiter storage
+  failure fails open rather than taking down the app. Proxy identity trust is
+  off by default; when enabled, only Caddy's overwritten
+  `X-LibFlix-Client-IP` is accepted across the localhost upstream hop. Public
+  Cloudflare and forwarding headers are never trusted directly by Flask.
+- A rejected client is checked before the shared global bucket, so it cannot
+  exhaust global capacity by continuing to send locally denied requests.
+- Metadata refresh queues are hard-capped. Process memory is capped by entry
+  count; `api_cache.sqlite3` is periodically capped by age, row count, total
+  payload bytes, and individual payload size.
+- Flask rejects a declared request body over 64 KiB before routing. Production
+  Caddy applies the same maximum while reading bodies, including chunked input.
+- Web Vitals and request/error timings are stored as bounded hourly aggregates
+  in `metrics.sqlite3`, separate from `rate_limits.sqlite3` so telemetry cannot
+  contend with enforcement. No raw URLs, IP addresses, request payloads, SMTP
+  data, or exception messages are persisted. Pruning runs at most hourly, and
+  dropped writes/degraded checks are visible in `/api/health`.
+
+## Mobile PWA Boundary
+
+The service worker controls the root scope but has a deliberately narrow cache
+policy. It may store versioned static shell assets and a safe offline document.
+Downloads, cover proxies, search-source results, Kindle routes and settings,
+credentials, health/metrics traffic, and every private/no-store response remain
+network-only. Closing existing tabs activates a newly deployed worker, avoiding
+mixed old-page/new-shell sessions.
+
 The older `/api/sendtokindle` endpoint remains available for compatibility, but
 the current UI uses background jobs.
 
@@ -296,9 +342,10 @@ KINDLE_RELAY_SENDER
 ```
 
 When the required relay variables are present, the server ignores browser SMTP
-credentials and uses the managed relay. Provisioning the external relay account
-and adding its sender to the user's Amazon approved-sender list remain external
-operations.
+credentials and uses the managed relay. It rejects recipients outside
+`@kindle.com`. Provisioning the external relay account, adding its sender to the
+user's Amazon approved-sender list, authentication, and per-user quotas remain
+external operations.
 
 ## Observability
 
@@ -311,6 +358,8 @@ operations.
 - loaded shelf state;
 - Open Library circuit state;
 - active Kindle job counts.
+- writable rate-limiter and metrics storage readiness, plus degraded/dropped
+  operation counters.
 
 It is intentionally local and lightweight. It does not make a blocking external
 probe on every health request.
@@ -367,7 +416,8 @@ designed to serve stale local data while the source recovers.
 Run the backend suite:
 
 ```bash
-python3 -m unittest discover -s tests -v
+LIBFLIX_DATA_DIR="$(mktemp -d)" LIBFLIX_RATE_LIMITING_ENABLED=0 \
+  python3 -m unittest discover -s tests -v
 python3 -m py_compile app.py downloaders/base.py downloaders/libgen.py
 git diff --check
 ```

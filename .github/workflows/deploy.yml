@@ -30,11 +30,17 @@ jobs:
 
       - name: Check syntax
         run: |
-          python -m py_compile app.py book_preparation.py kindle_delivery.py downloaders/*.py
+          python -m py_compile app.py book_preparation.py kindle_delivery.py security_runtime.py downloaders/*.py
           node --check static/download-ui.js
+          node --check static/libflix-pwa.js
+          node --check static/libflix-sw.js
+          python -m json.tool static/manifest.webmanifest >/dev/null
 
       - name: Run regression suite
-        run: python -m unittest discover -s tests -v
+        run: PYTHONWARNINGS='error::ResourceWarning' python -m unittest discover -s tests -v
+        env:
+          LIBFLIX_DATA_DIR: ${{ runner.temp }}/libflix-tests
+          LIBFLIX_RATE_LIMITING_ENABLED: "0"
 
       - name: Package release
         run: |

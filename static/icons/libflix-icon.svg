@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="LibFlix">
+  <rect width="512" height="512" rx="112" fill="#0d0e10"/>
+  <rect x="104" y="72" width="304" height="368" rx="48" fill="#f20d1b"/>
+  <path d="M152 108h194c22 0 40 18 40 40v220c-12-8-27-12-44-12H152V108Z" fill="#fff"/>
+  <path d="M152 356h196c21 0 38 17 38 38v4H152c-13 0-24-11-24-24s11-18 24-18Z" fill="#d9dade"/>
+  <path d="M206 164h52v112h82v46H206V164Z" fill="#111216"/>
+</svg>

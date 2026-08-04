@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-08-04 - Identity accuracy, runtime protection, and mobile app shell
+
+### Search and recommendation accuracy
+
+- Preserved canonical/work/edition title aliases, all available authors, and
+  bounded ISBN identity signals from Open Library metadata.
+- Search server-owned aliases in two-query batches, capped at six source calls,
+  and continue past weak PDF-only batches until a high-confidence EPUB appears.
+- Keep partial alias failures out of persistent result caches and use bounded
+  negative/partial caching for empty More Like This refreshes.
+- Added local discovery reranking and literal relevance thresholds that remove
+  unrelated provider filler before rendering.
+- Reworked More Like This to combine up to two specific subjects with a
+  same-author source, capped at three Open Library searches.
+
+### Public-service protection and observability
+
+- Added same-origin CSP, frame/plugin blocking, permissions policy, HSTS behind
+  the trusted TLS proxy, and other browser security headers.
+- Added weighted cross-worker SQLite token-bucket limits for discovery,
+  recommendations, book details, download, Kindle, and browser metrics, with
+  hashed identities and `Retry-After`.
+- Hard-capped metadata refresh queues, memory/durable cache growth, individual
+  cache payloads, and request bodies; health now verifies enforcement and
+  telemetry databases are writable.
+- Replaced log-only Web Vitals with bounded hourly SQLite aggregates and added
+  durable request/error timing aggregates without raw URLs, IPs, or payloads.
+
+### Installable mobile experience
+
+- Added a standalone PWA manifest, app icons, install affordance, safe offline
+  screen, and a narrowly scoped service worker.
+- Replaced the long mobile category strip with Home, Search, Browse, and
+  Settings navigation plus an accessible category sheet; desktop stays intact.
+- Explicitly excluded downloads, Kindle routes/settings, credentials, covers,
+  and private/no-store responses from service-worker storage.
+
 ## 2026-08-04 - End-to-end latency pass
 
 ### Faster browsing and covers

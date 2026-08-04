@@ -1,0 +1,36 @@
+{
+  "id": "/",
+  "name": "LibFlix",
+  "short_name": "LibFlix",
+  "description": "Discover books, find editions, and send them to Kindle.",
+  "lang": "en",
+  "dir": "ltr",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#0d0e10",
+  "theme_color": "#0d0e10",
+  "categories": ["books", "education", "entertainment"],
+  "icons": [
+    {
+      "src": "/static/icons/libflix-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/libflix-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/static/icons/libflix-icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

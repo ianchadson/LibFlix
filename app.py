@@ -8,7 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 import requests
 from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
-from flask import Flask, render_template, request, Response, stream_with_context, jsonify, g, redirect, send_file, has_request_context
+from flask import Flask, render_template, request, Response, stream_with_context, jsonify, g, redirect, send_file, has_request_context, got_request_exception
+from flask.testing import FlaskClient
 from opencc import OpenCC
 
 from book_preparation import prepare_book_for_kindle
@@ -17,6 +18,15 @@ from kindle_delivery import (
     SourceFileError,
     stream_smtp_attachment,
     validate_source_file,
+)
+from security_runtime import (
+    RateLimitRule,
+    SQLiteMetrics,
+    SQLiteRateLimiter,
+    SecurityHeadersConfig,
+    apply_security_headers,
+    json_rate_limit_body,
+    request_client_identity,
 )
 
 try:
@@ -40,6 +50,11 @@ CHINESE_TITLE_CACHE_TTL = 2592000
 EXTERNAL_METADATA_TTL = 2592000
 EXTERNAL_METADATA_FAILURE_TTL = 120
 API_CACHE_RETENTION_TTL = 7776000
+MEMORY_CACHE_MAX_ENTRIES = max(256, int(os.environ.get("LIBFLIX_MEMORY_CACHE_MAX_ENTRIES", "4096")))
+API_CACHE_MAX_ROWS = max(500, int(os.environ.get("LIBFLIX_API_CACHE_MAX_ROWS", "20000")))
+API_CACHE_MAX_BYTES = max(16 * 1024**2, int(os.environ.get("LIBFLIX_API_CACHE_MAX_BYTES", str(256 * 1024**2))))
+API_CACHE_MAX_PAYLOAD_BYTES = max(64 * 1024, int(os.environ.get("LIBFLIX_API_CACHE_MAX_PAYLOAD_BYTES", str(2 * 1024**2))))
+API_CACHE_PRUNE_INTERVAL = 300
 OL_STALE_TTL = 7776000
 BOOK_DETAIL_FRESH_TTL = 604800
 BOOK_DETAIL_STALE_TTL = 7776000
@@ -53,6 +68,8 @@ API_SQLITE_CACHE = os.path.join(DATA_DIR, "api_cache.sqlite3")
 COVER_CACHE_DIR = os.path.join(DATA_DIR, "covers")
 KINDLE_SOURCE_CACHE_DIR = os.path.join(DATA_DIR, "kindle-source-cache")
 KINDLE_DELIVERY_LOCK_FILE = os.path.join(DATA_DIR, "kindle-delivery.lock")
+RATE_LIMIT_SQLITE = os.path.join(DATA_DIR, "rate_limits.sqlite3")
+METRICS_SQLITE = os.path.join(DATA_DIR, "metrics.sqlite3")
 KINDLE_SOURCE_CACHE_TTL = max(0, int(os.environ.get("KINDLE_SOURCE_CACHE_TTL", "86400")))
 KINDLE_SOURCE_CACHE_MAX_BYTES = max(
     0,
@@ -64,8 +81,15 @@ KINDLE_RELAY_USER = os.environ.get("KINDLE_RELAY_USER", "").strip()
 KINDLE_RELAY_PASSWORD = os.environ.get("KINDLE_RELAY_PASSWORD", "")
 KINDLE_RELAY_SENDER = os.environ.get("KINDLE_RELAY_SENDER", "").strip()
 SHELF_REFRESH_TTL = 21600
-OL_BOOK_FIELDS = "key,title,author_name,cover_i,cover_id,language,editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id"
 OL_LIST_FIELDS = "key,title,author_name,cover_i,cover_id,language"
+OL_COVER_FIELDS = f"{OL_LIST_FIELDS},editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id"
+OL_IDENTITY_FIELDS = f"{OL_COVER_FIELDS},alternative_title,isbn,editions.author_name,editions.isbn_10,editions.isbn_13"
+# Backwards-compatible name for list/cover consumers; identity fields are
+# intentionally reserved for a single work-detail lookup.
+OL_BOOK_FIELDS = OL_COVER_FIELDS
+OL_DISCOVERY_IDENTIFIER_FIELDS = f"{OL_LIST_FIELDS},isbn"
+OL_COVER_IDENTIFIER_FIELDS = f"{OL_COVER_FIELDS},isbn"
+OL_SIMILAR_FIELDS = f"{OL_LIST_FIELDS},subject"
 SHELF_BOOK_TARGET = 40
 SHELF_SEARCH_LIMIT = 100
 SHELF_MAX_OPEN_LIBRARY_PAGES = 25
@@ -74,6 +98,17 @@ DISCOVERY_PAGE_SIZE = 30
 DISCOVERY_SEARCH_LIMIT = DISCOVERY_PAGE_SIZE
 DISCOVERY_RAW_PREFIX_LIMIT = 5
 DISCOVERY_COVER_PAGE_SIZE = DISCOVERY_PAGE_SIZE - DISCOVERY_RAW_PREFIX_LIMIT
+DOWNLOAD_ALIAS_SEARCH_LIMIT = 6
+DOWNLOAD_ALIAS_BATCH_SIZE = 2
+DOWNLOAD_IDENTITY_VALUE_LIMIT = 12
+SIMILAR_MAX_ORIGIN_QUERIES = 3
+SIMILAR_EMPTY_TTL = 1800
+SIMILAR_PARTIAL_TTL = 60
+IDENTITY_QUERY_JSON_MAX_BYTES = 512
+IDENTITY_QUERY_VALUE_MAX_CHARS = 120
+TRUST_PROXY_HEADERS = os.environ.get("LIBFLIX_TRUST_PROXY_HEADERS", "0").strip().casefold() not in {
+    "0", "false", "no", "off",
+}
 
 BOOK_LANGS = {"en", "cn"}
 BOOK_LANG_CONFIG = {
@@ -228,9 +263,11 @@ OL_CIRCUIT_FAILURE_THRESHOLD = 3
 OL_CIRCUIT_COOLDOWN = 60
 BOOK_DETAIL_REFRESHING = set()
 BOOK_DETAIL_REFRESH_LOCK = threading.Lock()
+BOOK_DETAIL_REFRESH_PENDING_LIMIT = max(2, int(os.environ.get("LIBFLIX_BOOK_REFRESH_PENDING_LIMIT", "16")))
 BOOK_DETAIL_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="book-detail")
 SIMILAR_REFRESHING = set()
 SIMILAR_REFRESH_LOCK = threading.Lock()
+SIMILAR_REFRESH_PENDING_LIMIT = max(2, int(os.environ.get("LIBFLIX_SIMILAR_REFRESH_PENDING_LIMIT", "12")))
 SIMILAR_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="similar-books")
 COVER_LOCK_STRIPES = tuple(threading.Lock() for _ in range(64))
 COVER_STATE_LOCK = threading.Lock()
@@ -245,12 +282,51 @@ COVER_WARM_COORDINATOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="c
 ARCHIVE_DESCRIPTION_LOCKS = tuple(threading.Lock() for _ in range(32))
 ARCHIVE_DESCRIPTION_MAX_IDENTIFIERS = 2
 KINDLE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="kindle-delivery")
+KINDLE_LEGACY_SEMAPHORE = threading.BoundedSemaphore(2)
 
 def disk_cache_key(key):
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
+
+MEMORY_CACHE_PRUNE_LOCK = threading.Lock()
+MEMORY_CACHE_NEXT_PRUNE_AT = 0.0
+DISK_CACHE_PRUNE_LOCK = threading.Lock()
+DISK_CACHE_NEXT_PRUNE_AT = 0.0
+
+
+def prune_disk_cache(connection, now=None):
+    """Bound durable cache age, row count, and total serialized payload size."""
+
+    now = time.time() if now is None else float(now)
+    connection.execute(
+        "DELETE FROM api_cache WHERE created_at < ?",
+        (now - API_CACHE_RETENTION_TTL,),
+    )
+    count = connection.execute("SELECT COUNT(*) FROM api_cache").fetchone()[0]
+    overflow = max(0, count - API_CACHE_MAX_ROWS)
+    if overflow:
+        connection.execute(
+            "DELETE FROM api_cache WHERE rowid IN ("
+            "SELECT rowid FROM api_cache ORDER BY created_at ASC LIMIT ?)",
+            (overflow,),
+        )
+    rows = connection.execute(
+        "SELECT rowid, LENGTH(payload) FROM api_cache ORDER BY created_at DESC"
+    ).fetchall()
+    retained_bytes = 0
+    remove = []
+    for row_id, payload_bytes in rows:
+        payload_bytes = max(0, int(payload_bytes or 0))
+        if retained_bytes + payload_bytes <= API_CACHE_MAX_BYTES:
+            retained_bytes += payload_bytes
+        else:
+            remove.append((row_id,))
+    if remove:
+        connection.executemany("DELETE FROM api_cache WHERE rowid = ?", remove)
+
 @contextmanager
 def disk_cache_connection(timeout=5):
+    os.makedirs(DATA_DIR, mode=0o700, exist_ok=True)
     connection = sqlite3.connect(API_SQLITE_CACHE, timeout=timeout)
     try:
         yield connection
@@ -304,10 +380,7 @@ def initialize_disk_cache():
                     migrated_legacy_cache = bool(rows)
                 except (OSError, ValueError, sqlite3.Error):
                     pass
-            connection.execute(
-                "DELETE FROM api_cache WHERE created_at < ?",
-                (time.time() - API_CACHE_RETENTION_TTL,),
-            )
+            prune_disk_cache(connection)
             connection.execute(
                 "DELETE FROM kindle_jobs WHERE updated_at < ?",
                 (time.time() - 86400,),
@@ -348,15 +421,25 @@ def disk_cache_get_stale(key, ttl=API_CACHE_RETENTION_TTL):
     return entry["data"]
 
 def disk_cache_set(key, data):
+    global DISK_CACHE_NEXT_PRUNE_AT
     cache_key = disk_cache_key(key)
     initialize_disk_cache()
     try:
         payload = json.dumps(data, separators=(",", ":"))
+        if len(payload.encode("utf-8")) > API_CACHE_MAX_PAYLOAD_BYTES:
+            return
+        now = time.time()
         with disk_cache_connection(timeout=5) as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO api_cache(cache_key, created_at, payload) VALUES (?, ?, ?)",
-                (cache_key, time.time(), payload),
+                (cache_key, now, payload),
             )
+            with DISK_CACHE_PRUNE_LOCK:
+                prune_due = now >= DISK_CACHE_NEXT_PRUNE_AT
+                if prune_due:
+                    DISK_CACHE_NEXT_PRUNE_AT = now + API_CACHE_PRUNE_INTERVAL
+            if prune_due:
+                prune_disk_cache(connection, now)
     except (sqlite3.Error, TypeError, ValueError):
         pass
 
@@ -367,7 +450,23 @@ def cache_get(key, ttl=CACHE_TTL_OL):
     return None
 
 def cache_set(key, data):
-    CACHE[key] = {"d": data, "t": time.time()}
+    global MEMORY_CACHE_NEXT_PRUNE_AT
+    now = time.time()
+    CACHE[key] = {"d": data, "t": now}
+    if len(CACHE) <= MEMORY_CACHE_MAX_ENTRIES and now < MEMORY_CACHE_NEXT_PRUNE_AT:
+        return
+    with MEMORY_CACHE_PRUNE_LOCK:
+        if now >= MEMORY_CACHE_NEXT_PRUNE_AT:
+            expired_before = now - API_CACHE_RETENTION_TTL
+            for cache_key, item in list(CACHE.items()):
+                if float(item.get("t", 0)) < expired_before:
+                    CACHE.pop(cache_key, None)
+            MEMORY_CACHE_NEXT_PRUNE_AT = now + API_CACHE_PRUNE_INTERVAL
+        overflow = len(CACHE) - MEMORY_CACHE_MAX_ENTRIES
+        if overflow > 0:
+            oldest = sorted(CACHE, key=lambda cache_key: CACHE[cache_key].get("t", 0))[:overflow]
+            for cache_key in oldest:
+                CACHE.pop(cache_key, None)
 
 def add_server_timing(name, started_at=None, duration=None, description=""):
     if not has_request_context():
@@ -740,6 +839,80 @@ def work_cover_id(work):
             return cover_id
     return ""
 
+def bounded_identity_values(values, limit=DOWNLOAD_IDENTITY_VALUE_LIMIT):
+    """Return compact, stable identity signals without trusting provider size."""
+    unique = []
+    seen = set()
+    for value in values or []:
+        if isinstance(value, (list, tuple, set)):
+            candidates = value
+        else:
+            candidates = [value]
+        for candidate in candidates:
+            candidate = re.sub(r"\s+", " ", str(candidate or "")).strip(" /|｜-–—")
+            if not candidate or len(candidate) > 180:
+                continue
+            key = unicodedata.normalize("NFKC", candidate).casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(candidate)
+            if len(unique) >= limit:
+                return unique
+    return unique
+
+def normalize_isbn(value):
+    value = re.sub(r"[^0-9Xx]", "", str(value or ""))
+    return value.upper() if len(value) in (10, 13) else ""
+
+def collect_book_identity_metadata(metadata=None, work=None, search_record=None, edition=None):
+    """Collect title, author and ISBN aliases already present in OL responses."""
+    metadata = metadata or {}
+    work = work or {}
+    search_record = search_record or {}
+    edition = edition or {}
+    edition_docs = (search_record.get("editions") or {}).get("docs") or []
+
+    title_values = [
+        metadata.get("download_title"),
+        metadata.get("localized_title"),
+        metadata.get("title"),
+        metadata.get("title_aliases"),
+        edition.get("title"),
+        search_record.get("title"),
+        search_record.get("alternative_title"),
+        work.get("title"),
+        work.get("other_titles"),
+    ]
+    for source in (work, search_record, edition, *edition_docs):
+        title = str(source.get("title") or "").strip()
+        subtitle = str(source.get("subtitle") or "").strip()
+        if title and subtitle:
+            title_values.append(f"{title}: {subtitle}")
+    title_values.extend(item.get("title") for item in edition_docs)
+
+    author_values = [
+        metadata.get("authors"),
+        metadata.get("author"),
+        search_record.get("author_name"),
+        edition.get("author_name"),
+    ]
+    author_values.extend(item.get("author_name") for item in edition_docs)
+
+    isbn_values = [metadata.get("isbns"), search_record.get("isbn")]
+    for source in (edition, *edition_docs):
+        isbn_values.extend((source.get("isbn_13"), source.get("isbn_10")))
+    raw_isbns = bounded_identity_values(isbn_values, limit=24)
+    isbns = bounded_identity_values(
+        [normalized for value in raw_isbns if (normalized := normalize_isbn(value))],
+        limit=8,
+    )
+    return {
+        "title_aliases": bounded_identity_values(title_values),
+        "authors": bounded_identity_values(author_values, limit=6),
+        "isbns": isbns,
+    }
+
 def chinese_download_queries(ol_key, metadata=None):
     ckey = f"chinese_download_queries:v1:{ol_key}"
     cached = cache_get(ckey, CHINESE_TITLE_CACHE_TTL)
@@ -768,6 +941,7 @@ def chinese_download_queries(ol_key, metadata=None):
         *explicit_aliases,
         metadata.get("download_title", ""),
         metadata.get("localized_title", ""),
+        *(metadata.get("title_aliases") or []),
         *edition_titles,
     ]
     queries = []
@@ -795,6 +969,8 @@ def chinese_download_queries(ol_key, metadata=None):
             add(OPENCC_T2S.convert(title))
 
     add(metadata.get("title", ""))
+    for isbn in metadata.get("isbns") or []:
+        add(isbn)
     return queries[:10]
 
 def english_download_queries(metadata=None):
@@ -802,7 +978,17 @@ def english_download_queries(metadata=None):
     title = str(
         metadata.get("download_title") or metadata.get("title") or ""
     ).strip()
-    author = str(metadata.get("author") or "").strip()
+    authors = bounded_identity_values([
+        metadata.get("authors"),
+        metadata.get("author"),
+    ], limit=6)
+    author = authors[0] if authors else ""
+    titles = bounded_identity_values([
+        title,
+        metadata.get("title_aliases"),
+        metadata.get("localized_title"),
+        metadata.get("title"),
+    ])
     queries = []
 
     def add(value):
@@ -812,6 +998,18 @@ def english_download_queries(metadata=None):
 
     add(f"{title} {author}" if author else title)
     add(title)
+    alternate_titles = [
+        alternate for alternate in titles
+        if normalize_title(alternate) != normalize_title(title)
+    ]
+    if alternate_titles:
+        add(f"{alternate_titles[0]} {author}" if author else alternate_titles[0])
+    for isbn in (metadata.get("isbns") or [])[:2]:
+        add(isbn)
+    for alternate in alternate_titles:
+        add(alternate)
+    for alternate_author in authors[1:]:
+        add(f"{title} {alternate_author}")
     cleaned = re.sub(r"\s*[\(\[].*?[\)\]]\s*", " ", title).strip()
     add(f"{cleaned} {author}" if author and cleaned != title else cleaned)
     base_title = re.split(r"\s*[:–—]\s*", cleaned, maxsplit=1)[0].strip()
@@ -1007,7 +1205,7 @@ def hinted_book_metadata(work_id, lang=None):
         if local_title and is_chinese_title(local_title):
             localized_title = local_title
             download_title = local_title
-    return {
+    result = {
         "title": title,
         "localized_title": localized_title,
         "download_title": download_title,
@@ -1015,6 +1213,8 @@ def hinted_book_metadata(work_id, lang=None):
         "cover_url": hint.get("cover_url") or english_hint.get("cover_url", ""),
         "ol_key": ol_key,
     }
+    result.update(collect_book_identity_metadata(result))
+    return result
 
 def book_identity_keys(book):
     keys = []
@@ -1176,10 +1376,120 @@ def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
     cache_set(ckey, result)
     return result
 
+DISCOVERY_STOP_WORDS = frozenset({
+    "a", "about", "an", "and", "at", "book", "books", "by", "for", "from",
+    "in", "of", "on", "or", "the", "to", "with",
+})
+
+def normalize_relevance_text(value):
+    value = normalize_match_text(value)
+    value = re.sub(r"\bartificial\s+intelligence\b", "ai", value)
+    value = re.sub(r"\ba\s+i\b", "ai", value)
+    return value
+
+def relevance_tokens(value):
+    tokens = normalize_relevance_text(value).split()
+    meaningful = [token for token in tokens if token not in DISCOVERY_STOP_WORDS]
+    return meaningful or tokens
+
+def discovery_identifier(value):
+    isbn = normalize_isbn(value)
+    if isbn:
+        return "isbn", isbn
+    work_id = work_id_from_ol_key(str(value or "").strip().upper())
+    return ("work", work_id) if work_id else ("", "")
+
+def discovery_record_relevance(record, query):
+    """Score local title/author evidence and reject provider filler."""
+    identifier_type, identifier = discovery_identifier(query)
+    if identifier_type == "isbn":
+        editions = (record.get("editions") or {}).get("docs") or []
+        isbn_values = [record.get("isbn")]
+        for edition in editions:
+            isbn_values.extend((edition.get("isbn_10"), edition.get("isbn_13")))
+        candidate_isbns = bounded_identity_values(isbn_values, limit=24)
+        if identifier in {normalize_isbn(value) for value in candidate_isbns}:
+            return 2200
+        return 0
+    if identifier_type == "work":
+        return 2200 if work_id_from_ol_key(record.get("key", "")) == identifier else 0
+
+    query_text = normalize_relevance_text(query)
+    if not query_text:
+        return 0
+    query_tokens = set(relevance_tokens(query))
+    editions = (record.get("editions") or {}).get("docs") or []
+    titles = bounded_identity_values([
+        record.get("title"),
+        record.get("alternative_title"),
+        [edition.get("title") for edition in editions],
+    ])
+    authors = bounded_identity_values([
+        record.get("author_name"),
+        [edition.get("author_name") for edition in editions],
+    ], limit=8)
+    best_score = 0
+    best_title_evidence = set()
+    best_fuzzy_ratio = 0.0
+    best_fuzzy_min_length = 0
+    for title in titles:
+        title_text = normalize_relevance_text(title)
+        title_tokens = set(relevance_tokens(title))
+        title_evidence = query_tokens & title_tokens
+        overlap = len(title_evidence)
+        if len(title_evidence) > len(best_title_evidence):
+            best_title_evidence = title_evidence
+        coverage = overlap / max(len(query_tokens), 1)
+        precision = overlap / max(len(title_tokens), 1)
+        score = round(520 * coverage + 180 * precision)
+        if title_text == query_text:
+            score += 700
+        elif query_text in title_text or title_text in query_text:
+            score += 360
+        else:
+            ratio = SequenceMatcher(None, title_text, query_text).ratio()
+            if ratio > best_fuzzy_ratio:
+                best_fuzzy_ratio = ratio
+                best_fuzzy_min_length = min(len(query_text), len(title_text))
+            if ratio >= 0.62:
+                score += round(220 * ratio)
+        best_score = max(best_score, score)
+    author_tokens = set(relevance_tokens(" ".join(authors)))
+    author_evidence = query_tokens & author_tokens
+    author_overlap = len(author_evidence)
+    combined_evidence = best_title_evidence | author_evidence
+    best_score += round(360 * author_overlap / max(len(query_tokens), 1))
+
+    # Open Library can append highly rated but unrelated books. Require at
+    # least two thirds of a multi-token identity query to be evidenced by the
+    # title/author. Fuzzy similarity only reranks literal candidates.
+    minimum_coverage = 1.0 if len(query_tokens) <= 1 else 2 / 3
+    if len(combined_evidence) / max(len(query_tokens), 1) < minimum_coverage:
+        # A narrow high-confidence typo path preserves useful fuzzy matching
+        # without re-admitting merely popular provider filler.
+        if best_fuzzy_ratio < 0.88 or best_fuzzy_min_length < 5:
+            return 0
+        best_score += round(300 * best_fuzzy_ratio)
+    return best_score
+
+def rank_discovery_records(records, query):
+    ranked = []
+    for index, record in enumerate(records or []):
+        score = discovery_record_relevance(record, query)
+        if score <= 0:
+            continue
+        ranked.append((score, index, record))
+    return [
+        record for score, index, record in sorted(
+            ranked,
+            key=lambda item: (-item[0], item[1]),
+        )
+    ]
+
 def cached_discovery_books(q, page=1, lang=None):
     """Return discovery data without ever waiting on Open Library."""
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v6:{lang}:{q}:{page}"
+    ckey = f"discover:v8:{lang}:{q}:{page}"
     cached = cache_get(ckey, 900)
     if cached is None:
         cached = disk_cache_get(ckey, 900)
@@ -1193,7 +1503,7 @@ def cached_discovery_books(q, page=1, lang=None):
 
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v6:{lang}:{q}:{page}"
+    ckey = f"discover:v8:{lang}:{q}:{page}"
     cached = cached_discovery_books(q, page, lang)
     if cached is not None:
         return cached
@@ -1204,11 +1514,16 @@ def fetch_discovery_books(q, page=1, lang=None):
 
     def fetch_search(query, limit):
         try:
+            identifier_type, _ = discovery_identifier(q)
+            if lang == "cn":
+                fields = OL_COVER_IDENTIFIER_FIELDS if identifier_type else OL_BOOK_FIELDS
+            else:
+                fields = OL_DISCOVERY_IDENTIFIER_FIELDS if identifier_type else OL_LIST_FIELDS
             return ol_get("/search.json", {
                 "q": query,
                 "limit": limit,
                 "page": page,
-                "fields": OL_BOOK_FIELDS if lang == "cn" else OL_LIST_FIELDS,
+                "fields": fields,
             })
         except Exception:
             return None
@@ -1267,8 +1582,14 @@ def fetch_discovery_books(q, page=1, lang=None):
                 break
         return added
 
-    raw_records = raw_data.get("docs", [])[:DISCOVERY_SEARCH_LIMIT]
-    covered_records = covered_data.get("docs", [])[:DISCOVERY_COVER_PAGE_SIZE]
+    raw_records = rank_discovery_records(
+        raw_data.get("docs", [])[:DISCOVERY_SEARCH_LIMIT],
+        q,
+    )
+    covered_records = rank_discovery_records(
+        covered_data.get("docs", [])[:DISCOVERY_COVER_PAGE_SIZE],
+        q,
+    )
     if page == 1:
         append_records(
             raw_records,
@@ -1387,6 +1708,15 @@ def author_match_score(candidate, target):
     sequence_score = round(140 * SequenceMatcher(None, candidate, target).ratio())
     return max(token_score, sequence_score)
 
+def identity_match(score_fn, candidate, primary="", aliases=None):
+    targets = bounded_identity_values([primary, aliases], limit=DOWNLOAD_IDENTITY_VALUE_LIMIT)
+    if not targets:
+        return 0, ""
+    return max(
+        ((score_fn(candidate, target), target) for target in targets),
+        key=lambda item: item[0],
+    )
+
 def source_metadata_language_penalty(book, preferred_language):
     if (preferred_language or "").casefold() != "english":
         return 0
@@ -1407,9 +1737,20 @@ def is_kindle_delivery_format(extension):
     extension = re.sub(r"[^a-z0-9]", "", str(extension or "").casefold())
     return extension in KINDLE_DELIVERY_FORMATS
 
-def kindle_accuracy_score(book, target_title="", target_author="", preferred_language=""):
-    score = title_match_score(book.title, target_title)
-    score += author_match_score(book.author, target_author)
+def kindle_accuracy_score(
+    book,
+    target_title="",
+    target_author="",
+    preferred_language="",
+    *,
+    target_titles=None,
+    target_authors=None,
+):
+    score, _ = identity_match(title_match_score, book.title, target_title, target_titles)
+    author_score, _ = identity_match(
+        author_match_score, book.author, target_author, target_authors
+    )
+    score += author_score
     if preferred_language:
         score += 80 if book_matches_language(book, preferred_language) else -200
     return score + source_metadata_language_penalty(book, preferred_language)
@@ -1432,27 +1773,52 @@ def kindle_delivery_size_score(book):
         return max(0, 30 - round(max(0, size_mb - 1.0)))
     return 12 if size_bytes <= 25 * 1024 * 1024 else 0
 
-def fastest_kindle_candidate(books, target_title="", target_author="", preferred_language=""):
+def fastest_kindle_candidate(
+    books,
+    target_title="",
+    target_author="",
+    preferred_language="",
+    *,
+    target_titles=None,
+    target_authors=None,
+):
     accurate_books = [book for book in books if is_kindle_delivery_format(book.ext)]
     if not accurate_books:
         return None
     best_accuracy = max(
-        kindle_accuracy_score(book, target_title, target_author, preferred_language)
+        kindle_accuracy_score(
+            book, target_title, target_author, preferred_language,
+            target_titles=target_titles, target_authors=target_authors,
+        )
         for book in accurate_books
     )
     candidates = [
         book for book in books
         if (book.ext or "").casefold() == "epub"
         and 50000 <= parse_size_bytes(book.size) <= 50 * 1024 * 1024
-        and kindle_accuracy_score(book, target_title, target_author, preferred_language)
+        and kindle_accuracy_score(
+            book, target_title, target_author, preferred_language,
+            target_titles=target_titles, target_authors=target_authors,
+        )
             >= best_accuracy - 40
     ]
     if not candidates:
         return None
     return min(candidates, key=lambda book: parse_size_bytes(book.size))
 
-def book_score(book, target_title="", target_author="", preferred_language=""):
-    score = kindle_accuracy_score(book, target_title, target_author, preferred_language)
+def book_score(
+    book,
+    target_title="",
+    target_author="",
+    preferred_language="",
+    *,
+    target_titles=None,
+    target_authors=None,
+):
+    score = kindle_accuracy_score(
+        book, target_title, target_author, preferred_language,
+        target_titles=target_titles, target_authors=target_authors,
+    )
     fmt_scores = {"epub": 160, "pdf": 70, "txt": 12, "djvu": -20, "chm": -30}
     score += fmt_scores.get(book.ext.lower(), 0)
     try:
@@ -1480,10 +1846,16 @@ def recommendation_reasons(
     preferred_language="",
     *,
     fastest_to_kindle=False,
+    target_titles=None,
+    target_authors=None,
 ):
     reasons = []
-    title_score = title_match_score(book.title, target_title)
-    author_score = author_match_score(book.author, target_author)
+    title_score, _ = identity_match(
+        title_match_score, book.title, target_title, target_titles
+    )
+    author_score, _ = identity_match(
+        author_match_score, book.author, target_author, target_authors
+    )
     extension = (book.ext or "").lower()
     size_bytes = parse_size_bytes(book.size)
     if title_score >= 900:
@@ -1518,12 +1890,22 @@ def dedup(books, scorer=None):
         best.append(max(group, key=scorer))
     return best
 
-def rank_download_books(books, target_title="", target_author="", preferred_language=""):
+def rank_download_books(
+    books,
+    target_title="",
+    target_author="",
+    preferred_language="",
+    *,
+    target_titles=None,
+    target_authors=None,
+):
     fastest = fastest_kindle_candidate(
         books,
         target_title=target_title,
         target_author=target_author,
         preferred_language=preferred_language,
+        target_titles=target_titles,
+        target_authors=target_authors,
     )
     scorer = lambda book: (
         book_score(
@@ -1531,6 +1913,8 @@ def rank_download_books(books, target_title="", target_author="", preferred_lang
             target_title=target_title,
             target_author=target_author,
             preferred_language=preferred_language,
+            target_titles=target_titles,
+            target_authors=target_authors,
         )
         + (55 if book is fastest else 0)
     )
@@ -1542,13 +1926,24 @@ def rank_download_books(books, target_title="", target_author="", preferred_lang
         )
     ], scorer
 
-def download_book_is_relevant(book, target_title="", target_author=""):
-    title_score = title_match_score(book.title, target_title)
+def download_book_is_relevant(
+    book,
+    target_title="",
+    target_author="",
+    *,
+    target_titles=None,
+    target_authors=None,
+):
+    title_score, matched_title = identity_match(
+        title_match_score, book.title, target_title, target_titles
+    )
     if not target_title or title_score < 600:
         return False
     candidate_title = normalize_match_text(book.title)
-    normalized_target = normalize_match_text(target_title)
-    author_score = author_match_score(book.author, target_author)
+    normalized_target = normalize_match_text(matched_title or target_title)
+    author_score, _ = identity_match(
+        author_match_score, book.author, target_author, target_authors
+    )
     if (
         candidate_title
         and candidate_title != normalized_target
@@ -1745,7 +2140,7 @@ def search_record_for_work(ol_key, lang=None):
         data = ol_get("/search.json", {
             "q": query,
             "limit": 1,
-            "fields": OL_BOOK_FIELDS,
+            "fields": OL_IDENTITY_FIELDS,
         })
         record = ((data or {}).get("docs") or [{}])[0]
         if record.get("key") == ol_key:
@@ -1762,11 +2157,12 @@ def known_book_metadata(work_id, lang=None):
         result["localized_title"] = ""
         result["download_title"] = result.get("title", "")
     result["ol_key"] = ol_key_from_work_id(work_id)
+    result.update(collect_book_identity_metadata(result))
     return result
 
 def book_metadata_from_work(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    ckey = f"book_meta:v2:{lang}:{work_id}"
+    ckey = f"book_meta:v3:{lang}:{work_id}"
     cached = cache_get(ckey, API_DISK_CACHE_TTL)
     if cached is None:
         cached = disk_cache_get(ckey, API_DISK_CACHE_TTL)
@@ -1823,15 +2219,22 @@ def book_metadata_from_work(work_id, lang=None):
         download_title = localized_title or selected_title or title
         if localized_title == title:
             localized_title = ""
+    primary_author = (authors[0] if authors else "") or first_work_author(work or {})
     result = {
         "title": title,
         "localized_title": localized_title,
         "download_title": download_title,
-        "author": (authors[0] if authors else "") or first_work_author(work or {}),
+        "author": primary_author,
         "cover_url": open_library_cover_url(cover_id) or archive_cover_url(archive_id),
         "ol_key": ol_key,
         "_complete": bool(work) and (bool(search_record) or editions_checked),
     }
+    result.update(collect_book_identity_metadata(
+        result,
+        work=work,
+        search_record=search_record,
+        edition=edition,
+    ))
     if result["_complete"]:
         cache_set(ckey, result)
         disk_cache_set(ckey, result)
@@ -1840,7 +2243,7 @@ def book_metadata_from_work(work_id, lang=None):
 
 def book_detail_cache_key(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    return f"book_detail:v4:{lang}:{work_id}"
+    return f"book_detail:v5:{lang}:{work_id}"
 
 def cached_book_detail(work_id, lang=None, allow_stale=True):
     key = book_detail_cache_key(work_id, lang)
@@ -1855,21 +2258,23 @@ def cached_book_detail(work_id, lang=None, allow_stale=True):
         stale = disk_cache_get_stale(key, BOOK_DETAIL_STALE_TTL)
         if stale is not None:
             return stale, "stale"
-        legacy_key = f"book_detail:v3:{normalize_book_lang(lang) or DEFAULT_BOOK_LANG}:{work_id}"
-        legacy = (
-            cache_get(legacy_key, BOOK_DETAIL_STALE_TTL)
-            or disk_cache_get_stale(legacy_key, BOOK_DETAIL_STALE_TTL)
-        )
-        if legacy is not None:
-            legacy = {**legacy, "complete": False}
-            return legacy, "stale"
+        normalized_lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+        for version in ("v4", "v3"):
+            legacy_key = f"book_detail:{version}:{normalized_lang}:{work_id}"
+            legacy = (
+                cache_get(legacy_key, BOOK_DETAIL_STALE_TTL)
+                or disk_cache_get_stale(legacy_key, BOOK_DETAIL_STALE_TTL)
+            )
+            if legacy is not None:
+                legacy = {**legacy, "complete": False}
+                return legacy, "stale"
     return None, "miss"
 
 def alternate_canonical_book_detail(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
     other_lang = "cn" if lang == "en" else "en"
     candidates = []
-    for version in ("v4", "v3"):
+    for version in ("v5", "v4", "v3"):
         key = f"book_detail:{version}:{other_lang}:{work_id}"
         detail = (
             cache_get(key, BOOK_DETAIL_STALE_TTL)
@@ -1891,17 +2296,22 @@ def merge_canonical_book_detail(detail, canonical):
     if not detail or not canonical:
         return detail
     merged = dict(detail)
-    for field in ("description", "cover_url", "subjects", "similar_subjects"):
+    for field in (
+        "description", "cover_url", "subjects", "similar_subjects",
+        "title_aliases", "authors", "isbns", "download_queries",
+    ):
         if not merged.get(field) and canonical.get(field):
             merged[field] = canonical[field]
     return merged
 
 def fallback_book_detail(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    metadata_key = f"book_meta:v2:{lang}:{work_id}"
+    metadata_key = f"book_meta:v3:{lang}:{work_id}"
     metadata = (
         cache_get(metadata_key, BOOK_DETAIL_STALE_TTL)
         or disk_cache_get_stale(metadata_key, BOOK_DETAIL_STALE_TTL)
+        or cache_get(f"book_meta:v2:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
+        or disk_cache_get_stale(f"book_meta:v2:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
         or hinted_book_metadata(work_id, lang)
         or known_book_metadata(work_id, lang)
         or {}
@@ -1911,6 +2321,16 @@ def fallback_book_detail(work_id, lang=None):
         metadata = canonical
     if not metadata:
         return None
+    identity = collect_book_identity_metadata(metadata)
+    if lang == "cn":
+        download_queries = bounded_identity_values([
+            metadata.get("download_title"),
+            metadata.get("localized_title"),
+            identity.get("title_aliases"),
+            identity.get("isbns"),
+        ], limit=10)
+    else:
+        download_queries = english_download_queries({**metadata, **identity})
     return {
         "success": True,
         "title": metadata.get("title", ""),
@@ -1920,7 +2340,8 @@ def fallback_book_detail(work_id, lang=None):
         "cover_url": localize_cover_url(
             metadata.get("cover_url", "") or canonical.get("cover_url", "")
         ),
-        "download_queries": [],
+        "download_queries": download_queries,
+        **identity,
         "description": canonical.get("description", ""),
         "subjects": canonical.get("subjects", []),
         "similar_subjects": canonical.get("similar_subjects", []),
@@ -1937,12 +2358,17 @@ def build_book_detail(work_id, lang=None):
     if metadata.get("success"):
         metadata = {
             key: value for key, value in metadata.items()
-            if key in {"title", "localized_title", "download_title", "author", "cover_url", "_complete"}
+            if key in {
+                "title", "localized_title", "download_title", "author", "cover_url",
+                "title_aliases", "authors", "isbns", "_complete",
+            }
         }
     if not work and not metadata:
         return None
     description, description_complete = english_description_result(ol_key, work)
     subjects = work.get("subjects", [])[:20]
+    identity = collect_book_identity_metadata(metadata, work=work)
+    enriched_metadata = {**metadata, **identity}
     detail = {
         "success": True,
         "title": metadata.get("title") or work.get("title", ""),
@@ -1951,10 +2377,11 @@ def build_book_detail(work_id, lang=None):
         "author": metadata.get("author", ""),
         "cover_url": localize_cover_url(metadata.get("cover_url", "")),
         "download_queries": (
-            chinese_download_queries(ol_key, metadata)
+            chinese_download_queries(ol_key, enriched_metadata)
             if lang == "cn"
-            else english_download_queries(metadata)
+            else english_download_queries(enriched_metadata)
         ),
+        **identity,
         "description": description,
         "subjects": subjects,
         "similar_subjects": similar_subject_candidates(subjects),
@@ -1986,6 +2413,8 @@ def schedule_book_detail_refresh(work_id, lang=None):
     with BOOK_DETAIL_REFRESH_LOCK:
         if refresh_key in BOOK_DETAIL_REFRESHING:
             return False
+        if len(BOOK_DETAIL_REFRESHING) >= BOOK_DETAIL_REFRESH_PENDING_LIMIT:
+            return False
         BOOK_DETAIL_REFRESHING.add(refresh_key)
     BOOK_DETAIL_EXECUTOR.submit(_refresh_book_detail, work_id, lang)
     return True
@@ -2006,12 +2435,158 @@ def get_book_detail(work_id, lang=None):
     schedule_book_detail_refresh(work_id, lang)
     return fallback, "fallback" if fallback else "miss"
 
+class LibFlixTestClient(FlaskClient):
+    """Mark in-process test requests without a forgeable HTTP header."""
+
+    def open(self, *args, **kwargs):
+        environ_overrides = kwargs.setdefault("environ_overrides", {})
+        environ_overrides.setdefault("libflix.test_client", True)
+        return super().open(*args, **kwargs)
+
+
 app = Flask(__name__)
+app.test_client_class = LibFlixTestClient
+app.config["MAX_CONTENT_LENGTH"] = 64 * 1024
+app.config["RATE_LIMITING_ENABLED"] = os.environ.get(
+    "LIBFLIX_RATE_LIMITING_ENABLED", "1"
+).strip().casefold() not in {"0", "false", "no", "off"}
+
+RUNTIME_RATE_LIMITER = SQLiteRateLimiter(RATE_LIMIT_SQLITE)
+RUNTIME_METRICS = SQLiteMetrics(METRICS_SQLITE)
+RUNTIME_SECURITY_HEADERS = SecurityHeadersConfig(trust_forwarded_proto=True)
+RUNTIME_RATE_LIMIT_RULES = {
+    "api_discover": ("discovery", RateLimitRule(24, 60)),
+    "api_similar": ("similar", RateLimitRule(36, 60)),
+    "api_book": ("book-detail", RateLimitRule(24, 60)),
+    "api_search": ("search", RateLimitRule(24, 60)),
+    "download": ("download", RateLimitRule(12, 300)),
+    "api_create_kindle_job": ("kindle", RateLimitRule(4, 600)),
+    "api_sendtokindle": ("kindle", RateLimitRule(4, 600)),
+    "api_kindle_job": ("kindle-status", RateLimitRule(60, 60)),
+    "web_vitals": ("metrics", RateLimitRule(30, 60)),
+}
+RUNTIME_GLOBAL_RATE_LIMIT_RULES = {
+    "api_discover": ("discovery-global", RateLimitRule(120, 60)),
+    "api_similar": ("similar-global", RateLimitRule(240, 60)),
+    "api_book": ("book-detail-global", RateLimitRule(120, 60)),
+    "api_search": ("search-global", RateLimitRule(120, 60)),
+    "download": ("download-global", RateLimitRule(60, 300)),
+    "api_create_kindle_job": ("kindle-global", RateLimitRule(10, 600)),
+    "api_sendtokindle": ("kindle-global", RateLimitRule(10, 600)),
+    "api_kindle_job": ("kindle-status-global", RateLimitRule(600, 60)),
+}
+RUNTIME_METRICS_SKIPPED_ENDPOINTS = {
+    "static", "favicon", "cover_default", "cover", "olcover", "iacover",
+}
+
+
+def trusted_proxy_client_identity():
+    return request_client_identity(
+        request,
+        trusted_client_ip_header=(
+            "X-LibFlix-Client-IP" if TRUST_PROXY_HEADERS else ""
+        ),
+        trusted_proxy_networks=("127.0.0.1/32", "::1/128"),
+    )
+
+
+def rate_limit_client_identity():
+    """Return a usable end-client identity, or none for an unconfigured proxy.
+
+    A loopback peer is normally the local reverse proxy.  Without the explicit
+    trusted-header setting, treating that peer as the client would collapse
+    every visitor into one small per-client bucket.  Global protection remains
+    active in that safe-default configuration.
+    """
+
+    identity = trusted_proxy_client_identity()
+    if TRUST_PROXY_HEADERS:
+        return identity
+    try:
+        if ipaddress.ip_address(request.remote_addr or "").is_loopback:
+            return None
+    except ValueError:
+        pass
+    return identity
+
+
+def request_rate_limit_cost():
+    if request.endpoint == "api_discover":
+        return 2
+    if request.endpoint == "api_similar":
+        subject_count = len([
+            value for value in request.args.getlist("subject")[:2] if value.strip()
+        ])
+        return min(SIMILAR_MAX_ORIGIN_QUERIES, max(1, subject_count + bool(request.args.get("author", "").strip())))
+    if request.endpoint != "api_search" or request.args.get("page", "1") != "1":
+        return 1
+    if re.fullmatch(r"/works/OL\d+W", request.args.get("ol_key", "")):
+        return DOWNLOAD_ALIAS_SEARCH_LIMIT
+    raw_aliases = request.args.get("search_aliases") or "[]"
+    if len(raw_aliases.encode("utf-8")) > IDENTITY_QUERY_JSON_MAX_BYTES:
+        return DOWNLOAD_ALIAS_SEARCH_LIMIT
+    try:
+        aliases = json.loads(raw_aliases)
+    except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
+        aliases = []
+    return min(DOWNLOAD_ALIAS_SEARCH_LIMIT, 1 + len(aliases)) if isinstance(aliases, list) else 1
 
 @app.before_request
 def start_request_timing():
     g.request_started_at = time.perf_counter()
     g.server_timings = []
+    if (
+        request.content_length is not None
+        and request.content_length > app.config["MAX_CONTENT_LENGTH"]
+    ):
+        if request.path.startswith("/api/"):
+            return jsonify({"success": False, "error": "Request body is too large"}), 413
+        return Response("Request body is too large", status=413, mimetype="text/plain")
+    if (
+        not app.config["RATE_LIMITING_ENABLED"]
+        or request.environ.get("libflix.test_client")
+        and not request.environ.get("libflix.enforce_rate_limits")
+    ):
+        return None
+    rule_config = RUNTIME_RATE_LIMIT_RULES.get(request.endpoint)
+    if not rule_config:
+        return None
+    cost = request_rate_limit_cost()
+    global_config = RUNTIME_GLOBAL_RATE_LIMIT_RULES.get(request.endpoint)
+    checks = []
+    client_identity = rate_limit_client_identity()
+    # Check the narrowest bucket first so a client that is already exhausted
+    # cannot keep draining capacity reserved for every other visitor.
+    if client_identity:
+        checks.append((*rule_config, client_identity))
+    if global_config:
+        checks.append((*global_config, "all-clients"))
+    if not checks:
+        return None
+    decision = None
+    client_decision = None
+    for bucket, rule, identity in checks:
+        decision = RUNTIME_RATE_LIMITER.check(bucket, identity, rule, cost=cost)
+        if not decision.allowed:
+            break
+        if identity != "all-clients":
+            client_decision = decision
+    header_decision = client_decision or decision
+    g.rate_limit_headers = header_decision.response_headers
+    if decision.allowed:
+        return None
+    response = Response(
+        json_rate_limit_body(decision.retry_after),
+        status=429,
+        mimetype="application/json",
+    )
+    response.headers.update(decision.response_headers)
+    return response
+
+
+@got_request_exception.connect_via(app)
+def record_request_exception(_sender, exception, **_extra):
+    RUNTIME_METRICS.record_exception(request.path, exception)
 
 
 def compact_partial_navigation(resp):
@@ -2056,7 +2631,9 @@ def switch_language(lang):
 @app.after_request
 def cache_headers(resp):
     resp = compact_partial_navigation(resp)
+    duration_ms = 0.0
     if getattr(g, "request_started_at", None) is not None:
+        duration_ms = max(0.0, (time.perf_counter() - g.request_started_at) * 1000)
         add_server_timing("app", g.request_started_at, description=request.endpoint or "request")
     if getattr(g, "server_timings", None):
         resp.headers["Server-Timing"] = ", ".join(g.server_timings)
@@ -2067,21 +2644,43 @@ def cache_headers(resp):
     elif request.method in ("GET", "HEAD") and resp.status_code < 400:
         if request.path.startswith(("/api/kindle/", "/api/health")):
             resp.headers["Cache-Control"] = "no-store"
-        elif resp.mimetype == "text/html":
-            resp.headers["Cache-Control"] = "private, max-age=90, stale-while-revalidate=600"
-        elif request.path.startswith(("/api/book", "/api/category", "/api/shelf", "/api/discover", "/api/cn-display-title")):
-            resp.headers["Cache-Control"] = "private, max-age=600, stale-while-revalidate=3600"
-        elif request.path.startswith("/api/search"):
-            resp.headers["Cache-Control"] = "private, max-age=120"
         elif request.path.startswith("/static/"):
             resp.headers["Cache-Control"] = (
                 "public, max-age=31536000, immutable"
                 if request.args.get("v")
                 else "public, max-age=3600"
             )
-    if resp.mimetype == "text/html" or request.path.startswith("/api/"):
+        elif resp.mimetype == "text/html":
+            resp.headers["Cache-Control"] = "private, max-age=90, stale-while-revalidate=600"
+        elif request.path.startswith(("/api/book", "/api/category", "/api/shelf", "/api/discover", "/api/cn-display-title")):
+            resp.headers["Cache-Control"] = "private, max-age=600, stale-while-revalidate=3600"
+        elif request.path.startswith("/api/search"):
+            resp.headers["Cache-Control"] = "private, max-age=120"
+    if request.path == "/static/libflix-sw.js":
+        resp.headers["Service-Worker-Allowed"] = "/"
+        resp.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
+    if not request.path.startswith("/static/") and (
+        resp.mimetype == "text/html" or request.path.startswith("/api/")
+    ):
         resp.set_cookie("book_lang", get_book_lang(), max_age=31536000, samesite="Lax")
-    return resp
+    if getattr(g, "rate_limit_headers", None):
+        resp.headers.update(g.rate_limit_headers)
+    if request.endpoint not in RUNTIME_METRICS_SKIPPED_ENDPOINTS:
+        RUNTIME_METRICS.record_request(
+            request.path,
+            request.method,
+            resp.status_code,
+            duration_ms,
+        )
+    return apply_security_headers(resp, request, RUNTIME_SECURITY_HEADERS)
+
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    if request.path.startswith("/api/"):
+        return jsonify({"success": False, "error": "Request body is too large"}), 413
+    return Response("Request body is too large", status=413, mimetype="text/plain")
+
 
 @app.route("/api/health")
 def api_health():
@@ -2106,8 +2705,10 @@ def api_health():
         database["ready"] = True
     except (OSError, sqlite3.Error):
         pass
+    rate_limiter_ready = RUNTIME_RATE_LIMITER.healthcheck()
+    metrics_ready = RUNTIME_METRICS.healthcheck()
     payload = {
-        "success": database["ready"],
+        "success": database["ready"] and rate_limiter_ready and metrics_ready,
         "service": "libflix",
         "database": database,
         "openlibrary": openlibrary_status(),
@@ -2120,6 +2721,13 @@ def api_health():
             ),
         },
         "kindle_jobs": job_counts,
+        "runtime_protection": {
+            "rate_limiter_ready": rate_limiter_ready,
+            "metrics_ready": metrics_ready,
+            "rate_limiter_degraded_checks": RUNTIME_RATE_LIMITER.degraded_checks,
+            "metrics_dropped_writes": RUNTIME_METRICS.dropped_writes,
+            "trusted_client_header": TRUST_PROXY_HEADERS,
+        },
     }
     return jsonify(payload), 200 if payload["success"] else 503
 
@@ -2139,6 +2747,8 @@ def favicon():
 def web_vitals():
     if request.content_length and request.content_length > 4096:
         return "", 413
+    if len(request.get_data(cache=True)) > 4096:
+        return "", 413
     payload = request.get_json(silent=True) or {}
     metrics = {}
     path = payload.get("path")
@@ -2152,7 +2762,7 @@ def web_vitals():
     if isinstance(cls, (int, float)) and not isinstance(cls, bool) and 0 <= cls <= 100:
         metrics["cls"] = cls
     if metrics:
-        print("WEB_VITALS " + json.dumps(metrics, separators=(",", ":")), flush=True)
+        RUNTIME_METRICS.record_web_vitals(metrics)
     return "", 204
 
 @app.context_processor
@@ -2160,6 +2770,13 @@ def inject_book_context():
     static_paths = (
         os.path.join(app.static_folder, "libflix.css"),
         os.path.join(app.static_folder, "download-ui.js"),
+        os.path.join(app.static_folder, "libflix-pwa.js"),
+        os.path.join(app.static_folder, "libflix-sw.js"),
+        os.path.join(app.static_folder, "manifest.webmanifest"),
+        os.path.join(app.static_folder, "libflix-offline.html"),
+        os.path.join(app.static_folder, "icons", "libflix-icon-192.png"),
+        os.path.join(app.static_folder, "icons", "libflix-icon-512.png"),
+        os.path.join(app.static_folder, "icons", "libflix-icon-maskable-512.png"),
     )
     asset_version = max(
         (int(os.path.getmtime(path)) for path in static_paths if os.path.exists(path)),
@@ -2493,7 +3110,14 @@ def api_discover():
     q = request.args.get("q", "").strip()
     if not q:
         return jsonify({"success": False, "error": "No query provided"})
-    page = int(request.args.get("page", 1))
+    if len(q) > 200:
+        return jsonify({"success": False, "error": "Search query is too long"}), 400
+    try:
+        page = int(request.args.get("page", 1))
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "Invalid page"}), 400
+    if page < 1 or page > 100:
+        return jsonify({"success": False, "error": "Invalid page"}), 400
     lang = normalize_book_lang(request.args.get("book_lang")) or get_book_lang()
     books, total, total_pages = fetch_discovery_books(q, page, lang)
     if total is None:
@@ -2589,107 +3213,279 @@ def book_page(work_id, clean_mode, clean_lang):
         **detail,
     )
 
-def similar_cache_key(ol_key, subjects, lang):
+def similar_cache_key(ol_key, subjects, lang, current_title="", current_authors=None):
     normalized = "|".join(sorted(subject.casefold() for subject in subjects))
-    return f"similar:v2:{lang}:{ol_key}:{normalized}"
+    identity = "|".join(
+        normalize_match_text(value)
+        for value in bounded_identity_values([current_title, current_authors], limit=7)
+    )
+    return f"similar:v4:{lang}:{ol_key}:{normalized}:{identity}"
 
-def build_similar_books(ol_key, subjects, lang):
-    def fetch_subject(subject):
+def build_similar_books(
+    ol_key,
+    subjects,
+    lang,
+    current_title="",
+    current_authors=None,
+    with_status=False,
+):
+    subjects = bounded_identity_values(subjects, limit=2)
+    current_authors = bounded_identity_values(current_authors, limit=6)
+
+    def fetch_source(source):
+        source_type, value = source
+        field = "subject" if source_type == "subject" else "author"
         data = ol_get("/search.json", {
-            "q": f"subject:{subject} language:{BOOK_LANG_CONFIG[lang]['ol_lang']}",
+            "q": f'{field}:"{value}" language:{BOOK_LANG_CONFIG[lang]["ol_lang"]}',
             "sort": "rating",
-            "limit": 30,
-            "fields": OL_BOOK_FIELDS,
+            "limit": 30 if source_type == "subject" else 18,
+            "fields": OL_SIMILAR_FIELDS,
         })
-        return (data or {}).get("docs", [])
+        if data is None:
+            raise requests.RequestException("Open Library recommendation source unavailable")
+        return data.get("docs", [])
 
-    subject_docs = []
-    with ThreadPoolExecutor(max_workers=len(subjects)) as pool:
-        futures = [pool.submit(fetch_subject, subject) for subject in subjects]
-        for future in futures:
+    sources = [("subject", subject) for subject in subjects]
+    if current_authors and len(sources) < SIMILAR_MAX_ORIGIN_QUERIES:
+        sources.append(("author", current_authors[0]))
+    source_docs = []
+    complete = True
+    with ThreadPoolExecutor(max_workers=max(1, len(sources))) as pool:
+        futures = {
+            pool.submit(fetch_source, source): source
+            for source in sources[:SIMILAR_MAX_ORIGIN_QUERIES]
+        }
+        for future, source in futures.items():
             try:
-                subject_docs.append(future.result())
+                source_docs.append((source, future.result()))
             except Exception:
-                subject_docs.append([])
+                complete = False
+                source_docs.append((source, []))
 
     candidates = {}
     sequence = 0
-    for docs in subject_docs:
-        seen_in_subject = set()
+    for source, docs in source_docs:
+        seen_in_source = set()
         for record in docs:
             book = extract_book(record, lang)
             if not book or book["ol_key"] == ol_key:
                 continue
             key = book["ol_key"]
-            entry = candidates.setdefault(key, {"book": book, "matches": 0, "order": sequence})
-            if key not in seen_in_subject:
-                entry["matches"] += 1
-                seen_in_subject.add(key)
+            entry = candidates.setdefault(key, {
+                "book": book,
+                "record": record,
+                "matches": 0,
+                "author_source": False,
+                "order": sequence,
+            })
+            if key not in seen_in_source:
+                if source[0] == "subject":
+                    entry["matches"] += 1
+                else:
+                    entry["author_source"] = True
+                seen_in_source.add(key)
             sequence += 1
 
-    current_work = ol_get_work(ol_key) or {}
-    current_title = normalize_title(current_work.get("title", ""))
-    seen_titles = {current_title} if current_title else set()
+    if not current_title:
+        current_title = (ol_get_work(ol_key) or {}).get("title", "")
+    current_title_key = normalize_title(current_title)
+    current_title_tokens = set(relevance_tokens(current_title))
+    seen_titles = {current_title_key} if current_title_key else set()
     books = []
+    required_subject_matches = min(2, len(subjects))
+
+    def candidate_rank(entry):
+        record_authors = bounded_identity_values(
+            entry["record"].get("author_name"),
+            limit=8,
+        )
+        author_score = max((
+            identity_match(
+                author_match_score,
+                candidate_author,
+                current_authors[0] if current_authors else "",
+                current_authors,
+            )[0]
+            for candidate_author in record_authors
+        ), default=0)
+        title_overlap = len(
+            current_title_tokens & set(relevance_tokens(entry["book"].get("title", "")))
+        )
+        title_score = title_match_score(
+            entry["book"].get("title", ""),
+            current_title,
+        )
+        entry["author_score"] = author_score
+        entry["title_overlap"] = title_overlap
+        entry["title_score"] = title_score
+        return (
+            entry["matches"] * 320
+            + max(0, author_score) * 2
+            + title_overlap * 110
+            + max(0, title_score - 600) // 2
+            + (100 if entry["author_source"] and author_score >= 180 else 0)
+        )
+
     ranked = sorted(
         candidates.values(),
-        key=lambda entry: (-entry["matches"], entry["order"]),
+        key=lambda entry: (-candidate_rank(entry), entry["order"]),
     )
     for entry in ranked:
         book = entry["book"]
         title_key = normalize_title(book.get("title", ""))
         if not title_key or title_key in seen_titles:
             continue
+        if required_subject_matches > 1 and not (
+            entry["matches"] >= required_subject_matches
+            or entry.get("author_score", 0) >= 180
+            or entry.get("title_overlap", 0) >= 2
+            or entry.get("title_score", 0) >= 850
+        ):
+            continue
+        if not entry["matches"] and entry.get("author_score", 0) < 180:
+            continue
         seen_titles.add(title_key)
         books.append(book)
         if len(books) == 12:
             break
-    return books
+    return (books, complete) if with_status else books
 
-def _refresh_similar_books(cache_key, ol_key, subjects, lang):
+def similar_empty_cache_key(cache_key):
+    return f"{cache_key}:empty"
+
+def similar_partial_cache_key(cache_key):
+    return f"{cache_key}:partial"
+
+def _refresh_similar_books(
+    cache_key,
+    ol_key,
+    subjects,
+    lang,
+    current_title="",
+    current_authors=None,
+):
     try:
-        books = build_similar_books(ol_key, subjects, lang)
-        if books:
-            payload = {"success": True, "books": books, "refreshing": False}
+        books, complete = build_similar_books(
+            ol_key,
+            subjects,
+            lang,
+            current_title=current_title,
+            current_authors=current_authors,
+            with_status=True,
+        )
+        payload = {
+            "success": True,
+            "books": books,
+            "refreshing": not complete,
+            "partial": not complete,
+        }
+        if complete and books:
             cache_set(cache_key, payload)
             disk_cache_set(cache_key, payload)
+        elif complete:
+            payload["negative"] = True
+            empty_key = similar_empty_cache_key(cache_key)
+            cache_set(empty_key, payload)
+            disk_cache_set(empty_key, payload)
+        else:
+            cache_set(similar_partial_cache_key(cache_key), payload)
     finally:
         with SIMILAR_REFRESH_LOCK:
             SIMILAR_REFRESHING.discard(cache_key)
 
-def schedule_similar_refresh(cache_key, ol_key, subjects, lang):
+def schedule_similar_refresh(
+    cache_key,
+    ol_key,
+    subjects,
+    lang,
+    current_title="",
+    current_authors=None,
+):
     with SIMILAR_REFRESH_LOCK:
         if cache_key in SIMILAR_REFRESHING:
             return False
+        if len(SIMILAR_REFRESHING) >= SIMILAR_REFRESH_PENDING_LIMIT:
+            return False
         SIMILAR_REFRESHING.add(cache_key)
-    SIMILAR_EXECUTOR.submit(_refresh_similar_books, cache_key, ol_key, subjects, lang)
+    SIMILAR_EXECUTOR.submit(
+        _refresh_similar_books,
+        cache_key,
+        ol_key,
+        subjects,
+        lang,
+        current_title,
+        current_authors,
+    )
     return True
 
 @app.route("/api/similar")
 def api_similar():
     subjects = [
-        subject.strip()
+        subject.strip()[:120]
         for subject in request.args.getlist("subject")[:2]
         if subject.strip()
     ]
     ol_key = request.args.get("ol_key", "").strip()
+    current_title = request.args.get("title", "").strip()[:180]
+    current_author = request.args.get("author", "").strip()[:120]
+    current_authors = bounded_identity_values([
+        current_author,
+        parse_bounded_json_list(request.args.get("author_aliases"), 6),
+    ], limit=6)
     lang = get_book_lang()
     if not subjects:
         return jsonify({"success": False, "error": "No subject"})
-    cache_key = similar_cache_key(ol_key, subjects, lang)
+    if not re.fullmatch(r"/works/OL\d+W", ol_key):
+        return jsonify({"success": False, "error": "Invalid Open Library work"}), 400
+    cache_key = similar_cache_key(
+        ol_key,
+        subjects,
+        lang,
+        current_title,
+        current_authors,
+    )
     payload = cache_get(cache_key, SIMILAR_FRESH_TTL) or disk_cache_get(cache_key, SIMILAR_FRESH_TTL)
     if payload:
         payload = {**payload, "books": canonicalize_book_covers(payload.get("books", []))}
         add_server_timing("similar", duration=0, description="cache")
         return jsonify(payload)
+    empty_key = similar_empty_cache_key(cache_key)
+    empty = cache_get(empty_key, SIMILAR_EMPTY_TTL) or disk_cache_get(empty_key, SIMILAR_EMPTY_TTL)
+    if empty:
+        add_server_timing("similar", duration=0, description="negative-cache")
+        return jsonify(empty)
+    partial = cache_get(similar_partial_cache_key(cache_key), SIMILAR_PARTIAL_TTL)
     stale = disk_cache_get_stale(cache_key, SIMILAR_STALE_TTL)
     if stale:
         stale = {**stale, "books": canonicalize_book_covers(stale.get("books", []))}
-        schedule_similar_refresh(cache_key, ol_key, subjects, lang)
-        add_server_timing("similar", duration=0, description="stale")
+        if not partial:
+            schedule_similar_refresh(
+                cache_key, ol_key, subjects, lang, current_title, current_authors
+            )
+        add_server_timing(
+            "similar",
+            duration=0,
+            description="stale-cooldown" if partial else "stale",
+        )
         g.cache_control_override = "private, max-age=15"
         return jsonify({**stale, "refreshing": True})
-    schedule_similar_refresh(cache_key, ol_key, subjects, lang)
+    if partial:
+        add_server_timing("similar", duration=0, description="partial-cache")
+        g.cache_control_override = "private, max-age=5"
+        return jsonify(partial)
+    scheduled = schedule_similar_refresh(
+        cache_key, ol_key, subjects, lang, current_title, current_authors
+    )
+    if not scheduled:
+        with SIMILAR_REFRESH_LOCK:
+            already_refreshing = cache_key in SIMILAR_REFRESHING
+        if not already_refreshing:
+            g.cache_control_override = "no-store"
+            return jsonify({
+                "success": False,
+                "error": "Recommendations are busy. Please try again shortly.",
+                "code": "refresh_capacity",
+            }), 503
     add_server_timing("similar", duration=0, description="background")
     g.cache_control_override = "private, max-age=2"
     return jsonify({"success": True, "books": [], "refreshing": True})
@@ -2699,8 +3495,8 @@ def api_book():
     ol_key = request.args.get("ol_key", "").strip()
     if not ol_key:
         return jsonify({"success": False, "error": "No ol_key provided"})
-    if not ol_key.startswith("/works/"):
-        return jsonify({"success": False, "error": "Book not found"})
+    if not re.fullmatch(r"/works/OL\d+W", ol_key):
+        return jsonify({"success": False, "error": "Invalid Open Library work"}), 400
     work_id = work_id_from_ol_key(ol_key)
     detail, cache_state = get_book_detail(work_id, get_book_lang())
     if not detail:
@@ -2769,6 +3565,174 @@ def download_cover_url(md5, cover_dir, size="S"):
         return ""
     return f"/cover/{md5}/{size}.webp?{urlencode({'dir': cover_dir})}"
 
+def parse_bounded_json_list(
+    value,
+    limit=DOWNLOAD_IDENTITY_VALUE_LIMIT,
+    *,
+    max_bytes=IDENTITY_QUERY_JSON_MAX_BYTES,
+    max_chars=IDENTITY_QUERY_VALUE_MAX_CHARS,
+):
+    raw_value = str(value or "")
+    if len(raw_value.encode("utf-8")) > max_bytes:
+        return []
+    try:
+        parsed = json.loads(raw_value or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError, RecursionError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [
+        item for item in bounded_identity_values(parsed, limit=limit)
+        if len(item) <= max_chars
+    ]
+
+@dataclass
+class DownloadAliasSearchOutcome:
+    books: list
+    total: int
+    complete: bool
+    errors: list
+    queries: list
+
+def download_book_merge_key(book):
+    key = str(getattr(book, "book_id", "") or "").casefold()
+    if key:
+        return key
+    return "|".join((
+        normalize_title(book.title),
+        normalize_author(book.author),
+        str(book.ext or "").casefold(),
+        str(book.size or "").casefold(),
+    ))
+
+def merge_download_books(existing, additions):
+    merged = list(existing or [])
+    seen = {download_book_merge_key(book) for book in merged}
+    for book in additions or []:
+        key = download_book_merge_key(book)
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(book)
+    return merged
+
+def search_download_aliases(queries, *, sort, order, page, limit):
+    """Search a small identity set and merge results in query priority order."""
+    queries = bounded_identity_values(queries, limit=DOWNLOAD_ALIAS_SEARCH_LIMIT)
+    if not queries:
+        return DownloadAliasSearchOutcome([], 0, True, [], [])
+    if len(queries) == 1:
+        try:
+            books, total = DOWNLOADER.search(
+                queries[0], sort=sort, order=order, page=page, limit=limit
+            )
+            return DownloadAliasSearchOutcome(books, total, True, [], queries)
+        except Exception as error:
+            return DownloadAliasSearchOutcome([], 0, False, [error], queries)
+
+    results = [None] * len(queries)
+    errors = []
+    with ThreadPoolExecutor(max_workers=min(3, len(queries))) as pool:
+        futures = {
+            pool.submit(
+                DOWNLOADER.search,
+                query,
+                sort=sort,
+                order=order,
+                page=page,
+                limit=limit,
+            ): index
+            for index, query in enumerate(queries)
+        }
+        for future in as_completed(futures):
+            index = futures[future]
+            try:
+                results[index] = future.result()
+            except Exception as error:
+                errors.append(error)
+
+    successful = [result for result in results if result is not None]
+    merged = []
+    totals = []
+    for books, total in successful:
+        totals.append(total or 0)
+        merged = merge_download_books(merged, books)
+    return DownloadAliasSearchOutcome(
+        merged,
+        max(totals, default=len(merged)),
+        not errors,
+        errors,
+        queries,
+    )
+
+def filter_download_candidates(
+    books,
+    *,
+    lang_filter,
+    fmt_filter,
+    target_title,
+    target_author,
+    target_titles,
+    target_authors,
+):
+    filtered = []
+    for book in books:
+        if not is_visible_kindle_format(book.ext):
+            continue
+        if lang_filter and not book_matches_language(book, lang_filter):
+            continue
+        if fmt_filter and book.ext.lower() != fmt_filter.lower():
+            continue
+        if not download_book_is_relevant(
+            book,
+            target_title,
+            target_author,
+            target_titles=target_titles,
+            target_authors=target_authors,
+        ):
+            continue
+        filtered.append(book)
+    return filtered
+
+def has_high_confidence_epub(
+    books,
+    *,
+    target_title,
+    target_author,
+    target_titles,
+    target_authors,
+):
+    author_targets = bounded_identity_values([target_author, target_authors], limit=6)
+    for book in books:
+        if (book.ext or "").casefold() != "epub":
+            continue
+        title_score, _ = identity_match(
+            title_match_score, book.title, target_title, target_titles
+        )
+        author_score, _ = identity_match(
+            author_match_score, book.author, target_author, target_authors
+        )
+        if title_score < 900:
+            continue
+        if author_targets and author_score < 180 and title_score < 980:
+            continue
+        return True
+    return False
+
+def preferred_download_search_error(errors):
+    return (
+        next((error for error in errors if isinstance(error, requests.Timeout)), None)
+        or next((error for error in errors if isinstance(error, requests.RequestException)), None)
+        or (errors[0] if errors else RuntimeError("No download search completed"))
+    )
+
+def server_download_identity(ol_key, lang):
+    work_id = work_id_from_ol_key(ol_key)
+    if not work_id:
+        return {}
+    detail, _ = get_book_detail(work_id, lang)
+    return detail or {}
+
 @app.route("/api/search")
 def api_search():
     q = request.args.get("q", "").strip()
@@ -2788,11 +3752,46 @@ def api_search():
     if lang not in ("English", "Chinese", "all"):
         lang = default_download_lang
     dedup_on = request.args.get("dedup", "1") == "1"
-    target_title = request.args.get("target_title", "").strip() or q
-    target_author = request.args.get("target_author", "").strip()
+    ol_key = request.args.get("ol_key", "").strip()
+    identity_detail = server_download_identity(ol_key, get_book_lang())
+    target_title = (
+        request.args.get("target_title", "").strip()
+        or identity_detail.get("title", "")
+        or q
+    )[:180]
+    target_author = (
+        request.args.get("target_author", "").strip()
+        or identity_detail.get("author", "")
+    )[:180]
+    fallback_search_aliases = parse_bounded_json_list(
+        request.args.get("search_aliases"),
+        3,
+        max_bytes=768,
+        max_chars=80,
+    )
+    target_titles = bounded_identity_values([
+        identity_detail.get("title_aliases"),
+        parse_bounded_json_list(request.args.get("target_title_aliases"), 4),
+    ], limit=DOWNLOAD_IDENTITY_VALUE_LIMIT)
+    target_authors = bounded_identity_values([
+        identity_detail.get("authors"),
+        parse_bounded_json_list(request.args.get("target_author_aliases"), 3),
+    ], limit=6)
+    planned_queries = bounded_identity_values(
+        [q, identity_detail.get("download_queries"), fallback_search_aliases],
+        limit=DOWNLOAD_ALIAS_SEARCH_LIMIT,
+    )
+    if page > 1:
+        planned_queries = [q]
+    identity_signature = json.dumps(
+        [planned_queries, target_titles, target_authors],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
     result_cache_key = (
-        f"download_search:v8:{q}:{sort}:{order}:{limit}:{page}:"
-        f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}"
+        f"download_search:v10:{sort}:{order}:{limit}:{page}:"
+        f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}:"
+        f"{identity_signature}"
     )
     cached_result = cache_get(result_cache_key, 900)
     if cached_result is None:
@@ -2805,8 +3804,60 @@ def api_search():
 
     sort_field = "y" if sort in ("year", "best_match") else sort
     download_started = time.perf_counter()
+    lang_filter = None if lang == "all" else lang
+    fmt_filter = None if fmt == "all" else fmt
+    books = []
+    total = 0
+    searched_queries = []
+    search_complete = True
+    search_errors = []
     try:
-        books, total = DOWNLOADER.search(q, sort=sort_field, order=order, page=page, limit=limit)
+        for offset in range(0, len(planned_queries), DOWNLOAD_ALIAS_BATCH_SIZE):
+            batch = planned_queries[offset:offset + DOWNLOAD_ALIAS_BATCH_SIZE]
+            outcome = search_download_aliases(
+                batch,
+                sort=sort_field,
+                order=order,
+                page=page,
+                limit=limit,
+            )
+            searched_queries.extend(outcome.queries)
+            books = merge_download_books(books, outcome.books)
+            total = max(total, outcome.total)
+            search_complete = search_complete and outcome.complete
+            search_errors.extend(outcome.errors)
+            filtered_preview = filter_download_candidates(
+                books,
+                lang_filter=lang_filter,
+                fmt_filter=fmt_filter,
+                target_title=target_title,
+                target_author=target_author,
+                target_titles=target_titles,
+                target_authors=target_authors,
+            )
+            if (
+                page == 1
+                and sort == "best_match"
+                and has_high_confidence_epub(
+                    filtered_preview,
+                    target_title=target_title,
+                    target_author=target_author,
+                    target_titles=target_titles,
+                    target_authors=target_authors,
+                )
+            ):
+                break
+        books = filter_download_candidates(
+            books,
+            lang_filter=lang_filter,
+            fmt_filter=fmt_filter,
+            target_title=target_title,
+            target_author=target_author,
+            target_titles=target_titles,
+            target_authors=target_authors,
+        )
+        if search_errors and not books:
+            raise preferred_download_search_error(search_errors)
     except requests.Timeout:
         stale = disk_cache_get_stale(result_cache_key, 604800)
         if stale:
@@ -2841,25 +3892,13 @@ def api_search():
             "code": "search_failed",
         }), 502
 
-    lang_filter = None if lang == "all" else lang
-    fmt_filter = None if fmt == "all" else fmt
-    filtered = []
-    for b in books:
-        if not is_visible_kindle_format(b.ext):
-            continue
-        if lang_filter and not book_matches_language(b, lang_filter):
-            continue
-        if fmt_filter and b.ext.lower() != fmt_filter.lower():
-            continue
-        if not download_book_is_relevant(b, target_title, target_author):
-            continue
-        filtered.append(b)
-    books = filtered
     _, scorer = rank_download_books(
         books,
         target_title=target_title,
         target_author=target_author,
         preferred_language=lang_filter or "",
+        target_titles=target_titles,
+        target_authors=target_authors,
     )
     if dedup_on:
         books = dedup(books, scorer)
@@ -2868,6 +3907,8 @@ def api_search():
         target_title=target_title,
         target_author=target_author,
         preferred_language=lang_filter or "",
+        target_titles=target_titles,
+        target_authors=target_authors,
     )
     if sort == "best_match":
         books, scorer = rank_download_books(
@@ -2875,6 +3916,8 @@ def api_search():
             target_title=target_title,
             target_author=target_author,
             preferred_language=lang_filter or "",
+            target_titles=target_titles,
+            target_authors=target_authors,
         )
         if fastest_book in books:
             books = [fastest_book] + [book for book in books if book is not fastest_book]
@@ -2885,10 +3928,20 @@ def api_search():
             target_title=target_title,
             target_author=target_author,
             preferred_language=lang_filter or "",
+            target_titles=target_titles,
+            target_authors=target_authors,
         )
         best_book = max(books, key=scorer) if books else None
 
-    total_pages = (total + limit - 1) // limit if total else 1
+    matched_total = len(books)
+    books = books[:limit]
+    multi_identity_search = len(planned_queries) > 1
+    if multi_identity_search:
+        total = matched_total
+        total_pages = 1
+    else:
+        total = max(total or 0, len(books))
+        total_pages = (total + limit - 1) // limit if total else 1
     result_books = []
     for i, b in enumerate(books):
         d = b.to_dict(i + 1 + (page - 1) * limit)
@@ -2900,6 +3953,8 @@ def api_search():
             target_author=target_author,
             preferred_language=lang_filter or "",
             fastest_to_kindle=b is fastest_book,
+            target_titles=target_titles,
+            target_authors=target_authors,
         )
         d["kindle_compatible"] = is_kindle_delivery_format(b.ext)
         d["fastest_to_kindle"] = b is fastest_book
@@ -2918,10 +3973,20 @@ def api_search():
         "format": fmt,
         "lang": lang,
         "dedup_on": dedup_on,
+        "searched_queries": searched_queries,
+        "complete": search_complete,
+        "partial": not search_complete,
     }
-    cache_set(result_cache_key, result)
-    disk_cache_set(result_cache_key, result)
-    add_server_timing("downloads", download_started, description="origin")
+    if search_complete:
+        cache_set(result_cache_key, result)
+        disk_cache_set(result_cache_key, result)
+    else:
+        g.cache_control_override = "private, max-age=5"
+    add_server_timing(
+        "downloads",
+        download_started,
+        description="origin" if search_complete else "partial",
+    )
     return jsonify(result)
 
 @app.route("/download/<md5>")
@@ -4061,6 +5126,8 @@ def validate_kindle_payload(data):
         return "Invalid SMTP hostname"
     if not _valid_delivery_email(data.get("kindle_email")):
         return "Invalid Kindle email address"
+    if relay and not str(data.get("kindle_email", "")).strip().casefold().endswith("@kindle.com"):
+        return "Managed delivery requires an @kindle.com address"
     if not _valid_delivery_email(smtp_configuration.get("sender")):
         return "Invalid sender email address"
     try:
@@ -4245,6 +5312,15 @@ def api_sendtokindle():
     error = validate_kindle_payload(data)
     if error:
         return jsonify({"success": False, "error": error}), 400
+    if not KINDLE_LEGACY_SEMAPHORE.acquire(blocking=False):
+        response = jsonify({
+            "success": False,
+            "error": "Kindle delivery is busy. Please try again shortly.",
+            "retry_after": 15,
+        })
+        response.status_code = 429
+        response.headers["Retry-After"] = "15"
+        return response
 
     if request.args.get("stream") == "1":
         def stream_events():
@@ -4252,11 +5328,15 @@ def api_sendtokindle():
                 yield json.dumps(event, ensure_ascii=False) + "\n"
 
         response = Response(stream_with_context(stream_events()), mimetype="application/x-ndjson")
+        response.call_on_close(KINDLE_LEGACY_SEMAPHORE.release)
         response.headers["Cache-Control"] = "no-cache, no-store"
         response.headers["X-Accel-Buffering"] = "no"
         return response
 
-    events = list(_locked_kindle_events(data))
+    try:
+        events = list(_locked_kindle_events(data))
+    finally:
+        KINDLE_LEGACY_SEMAPHORE.release()
     final = events[-1] if events else {"success": False, "error": "Delivery did not complete"}
     status = 200 if final.get("success") else 502
     return jsonify(final), status

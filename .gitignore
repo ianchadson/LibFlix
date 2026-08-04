@@ -15,6 +15,15 @@ api_cache.json.tmp
 api_cache.sqlite3
 api_cache.sqlite3-shm
 api_cache.sqlite3-wal
+runtime.sqlite3
+runtime.sqlite3-shm
+runtime.sqlite3-wal
+rate_limits.sqlite3
+rate_limits.sqlite3-shm
+rate_limits.sqlite3-wal
+metrics.sqlite3
+metrics.sqlite3-shm
+metrics.sqlite3-wal
 output/playwright/
 .playwright-cli/
 covers/

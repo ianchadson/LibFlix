@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d0e10">
+  <title>LibFlix is offline</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { min-height:100vh; margin:0; display:grid; place-items:center; padding:24px; background:#0d0e10; color:#f4f4f5; }
+    main { width:min(420px, 100%); padding:32px; border:1px solid rgba(255,255,255,.1); border-radius:12px; background:#17191d; text-align:center; }
+    .mark { width:56px; height:56px; margin:0 auto 22px; display:grid; place-items:center; border-radius:14px; background:#f20d1b; color:#fff; font-size:1.55rem; font-weight:850; }
+    h1 { margin:0; font-size:1.35rem; }
+    p { margin:10px 0 22px; color:#a3a5ab; line-height:1.55; }
+    button { min-height:44px; padding:0 20px; border:0; border-radius:999px; background:#f1f1f2; color:#111216; font:inherit; font-weight:750; }
+    button:focus-visible { outline:2px solid #ff5a63; outline-offset:3px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="mark" aria-hidden="true">L</div>
+    <h1>You’re offline</h1>
+    <p>Reconnect to keep browsing LibFlix. Downloads and Kindle delivery are never stored for offline use.</p>
+    <button type="button" onclick="location.reload()">Try again</button>
+  </main>
+</body>
+</html>
