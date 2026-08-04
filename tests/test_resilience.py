@@ -66,6 +66,76 @@ class DurableCacheTests(TemporaryCacheTest):
 
         self.assertEqual(result["title"], "Local copy")
         refresh.assert_called_once()
+        self.assertNotIn(key, app.CACHE)
+
+
+class ProviderBoundaryTests(TemporaryCacheTest):
+    class FakeResponse:
+        def __init__(self, chunks, content_length=""):
+            self._chunks = chunks
+            self.headers = {"Content-Length": content_length} if content_length else {}
+
+        def iter_content(self, chunk_size=0):
+            del chunk_size
+            yield from self._chunks
+
+    def test_bounded_json_rejects_declared_and_streamed_oversize_payloads(self):
+        declared = self.FakeResponse([b"{}"], str(app.UPSTREAM_JSON_MAX_BYTES + 1))
+        streamed = self.FakeResponse([
+            b"{" + b" " * app.UPSTREAM_JSON_MAX_BYTES,
+            b"}",
+        ])
+
+        with self.assertRaisesRegex(ValueError, "too large"):
+            app.bounded_upstream_json(declared)
+        with self.assertRaisesRegex(ValueError, "too large"):
+            app.bounded_upstream_json(streamed)
+
+    def test_bounded_json_rejects_non_object_schema(self):
+        response = self.FakeResponse([b"[]"])
+
+        with self.assertRaisesRegex(ValueError, "not an object"):
+            app.bounded_upstream_json(response)
+
+    def test_malformed_cached_search_payload_is_purged_before_use(self):
+        params = {"subject": "focus"}
+        key = f"ol:/search.json:{str(params)}"
+        app.cache_set(key, {"unexpected": []})
+        app.disk_cache_set(key, {"unexpected": []})
+        replacement = {"docs": []}
+        with patch.object(app, "_openlibrary_request", return_value=replacement) as origin:
+            result = app.ol_get("/search.json", params, allow_stale=False)
+
+        self.assertEqual(result, replacement)
+        origin.assert_called_once()
+        self.assertEqual(app.disk_cache_get(key), replacement)
+
+    def test_refresh_queues_reject_saturation_without_submitting(self):
+        with (
+            patch.object(app, "OL_REFRESHING", {"existing"}),
+            patch.object(app, "OL_REFRESH_PENDING_LIMIT", 1),
+            patch.object(app.OL_REFRESH_EXECUTOR, "submit") as ol_submit,
+        ):
+            self.assertFalse(app.schedule_ol_refresh("new", "/search.json"))
+        ol_submit.assert_not_called()
+
+        with (
+            patch.object(app, "INVENTAIRE_REFRESHING", {"existing"}),
+            patch.object(app, "INVENTAIRE_REFRESH_PENDING_LIMIT", 1),
+            patch.object(app.INVENTAIRE_REFRESH_EXECUTOR, "submit") as inv_submit,
+        ):
+            self.assertFalse(app.schedule_inventaire_refresh("new", "/search"))
+        inv_submit.assert_not_called()
+
+    def test_refresh_reservation_is_released_when_submit_fails(self):
+        refreshing = set()
+        with (
+            patch.object(app, "INVENTAIRE_REFRESHING", refreshing),
+            patch.object(app.INVENTAIRE_REFRESH_EXECUTOR, "submit", side_effect=RuntimeError),
+        ):
+            self.assertFalse(app.schedule_inventaire_refresh("new", "/search"))
+
+        self.assertEqual(refreshing, set())
 
 
 class CrossLanguageDetailTests(TemporaryCacheTest):

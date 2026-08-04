@@ -30,7 +30,7 @@ jobs:
 
       - name: Check syntax
         run: |
-          python -m py_compile app.py book_preparation.py kindle_delivery.py security_runtime.py downloaders/*.py
+          python -m py_compile app.py topic_discovery.py book_preparation.py kindle_delivery.py security_runtime.py downloaders/*.py
           node --check static/download-ui.js
           node --check static/libflix-pwa.js
           node --check static/libflix-sw.js
@@ -67,3 +67,17 @@ jobs:
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
+
+      - name: Verify production topic surface
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if curl --fail --silent --show-error --max-time 15 \
+              https://libflix.fomalhaut.app/api/health > health.json; then
+              break
+            fi
+            sleep 3
+          done
+          python -c 'import json; data=json.load(open("health.json")); assert data["success"]'
+          curl --fail --silent --show-error --max-time 15 \
+            'https://libflix.fomalhaut.app/discover?q=focus&intent=topic' \
+            | grep -q 'Books about focus'

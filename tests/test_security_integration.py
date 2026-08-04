@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import app
@@ -165,6 +166,68 @@ class SecurityIntegrationTests(unittest.TestCase):
             "/api/similar?ol_key=/works/OL1W&subject=One&subject=Two&author=A"
         ):
             self.assertEqual(app.request_rate_limit_cost(), 3)
+
+    def test_topic_discovery_cost_tracks_fanout_but_cached_pages_are_cheap(self):
+        with app.app.test_request_context(
+            "/api/discover?q=unmapped+topic&intent=topic"
+        ):
+            self.assertEqual(app.request_rate_limit_cost(), 7)
+        with app.app.test_request_context(
+            "/api/discover?q=focus&intent=topic&page=2"
+        ):
+            self.assertEqual(app.request_rate_limit_cost(), 1)
+        with app.app.test_request_context(
+            "/api/discover?q=Deep+Work&intent=identity"
+        ):
+            self.assertEqual(app.request_rate_limit_cost(), 2)
+
+    def test_topic_cost_is_applied_to_client_and_global_buckets(self):
+        allowed = RateLimitDecision(True, 24, 17, retry_after=0)
+        denied = RateLimitDecision(False, 120, 0, retry_after=5)
+        with (
+            patch.dict(app.app.config, {"RATE_LIMITING_ENABLED": True}),
+            patch.object(app, "TRUST_PROXY_HEADERS", True),
+            patch.object(
+                app.RUNTIME_RATE_LIMITER,
+                "check",
+                side_effect=[allowed, denied],
+            ) as check,
+        ):
+            response = app.app.test_client().get(
+                "/api/discover?q=unknown&intent=topic",
+                headers={"X-LibFlix-Client-IP": "203.0.113.8"},
+                environ_overrides={"libflix.enforce_rate_limits": True},
+            )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEqual(check.call_count, 2)
+        self.assertEqual(check.call_args_list[0].args[:2], ("discovery", "203.0.113.8"))
+        self.assertEqual(check.call_args_list[1].args[:2], ("discovery-global", "all-clients"))
+        self.assertTrue(all(call.kwargs["cost"] == 7 for call in check.call_args_list))
+
+    def test_provider_metadata_is_rendered_without_inner_html_sinks(self):
+        discover = (Path(app.APP_DIR) / "templates" / "discover.html").read_text()
+        create_card = discover.split("function createBookLink", 1)[1].split(
+            "function initializeRenderedKeys", 1
+        )[0]
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+        quick_peek = navbar.split("const renderQuickPeek", 1)[1].split(
+            "const positionQuickPeek", 1
+        )[0]
+
+        self.assertNotIn("innerHTML", create_card)
+        self.assertIn("titleNode.textContent = displayTitle", create_card)
+        self.assertNotIn("innerHTML", quick_peek)
+        self.assertIn("descriptionNode.textContent", quick_peek)
+
+    def test_topic_benchmark_pacing_matches_weighted_client_budget(self):
+        workflow = (
+            Path(app.APP_DIR) / ".github" / "workflows" / "topic-quality.yml"
+        ).read_text()
+        sustainable_delay = 7 / (24 / 60)
+
+        self.assertLessEqual(sustainable_delay, 18)
+        self.assertIn("--delay 18", workflow)
 
     def test_noncanonical_book_key_is_rejected_before_refresh(self):
         with patch.object(app, "get_book_detail") as detail:

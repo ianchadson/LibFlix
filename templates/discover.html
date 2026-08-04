@@ -1,9 +1,47 @@
+{% set topic_active = topic_mode | default(false) %}
+{% set topic_label = display_query | default(topic | default(query), true) %}
+{% set topic_start_books = start_here | default([], true) %}
+{% set topic_start_books = topic_start_books[:6] %}
+{% set start_key_ns = namespace(keys=[]) %}
+{% for featured_book in topic_start_books %}
+  {% set featured_key = featured_book.ol_key | default('') %}
+  {% if featured_key %}
+    {% set start_key_ns.keys = start_key_ns.keys + [featured_key] %}
+  {% endif %}
+{% endfor %}
+
+{% macro topic_book_card(book) -%}
+  {% set reason_payload = book.reasons | default([], true) %}
+  {% if not reason_payload and book.reason | default('', true) %}
+    {% set reason_payload = [book.reason] %}
+  {% endif %}
+  <a href="{{ book_url(book, mode | default('nonfiction'), book_lang) }}" class="book-card-link topic-book-item" data-topic-book="true" aria-label="{{ book.title | default('Untitled') }}{% if book.author %} by {{ book.author }}{% endif %}. Find an edition.">
+    <div class="book-card" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}" data-quick-peek-action="Find an edition">
+      {% if book.cover_url %}
+      <div class="cover-skeleton"></div>
+      <img data-cover-src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';">
+      <div class="placeholder ph-fallback" style="display:none">?</div>
+      {% else %}
+      <div class="placeholder">?</div>
+      {% endif %}
+      <div class="info">
+        <div class="t">{{ book.title[:50] }}{% if book.title|length > 50 %}...{% endif %}</div>
+        {% if book.author %}<div class="a">{{ book.author[:35] }}{% if book.author|length > 35 %}...{% endif %}</div>{% endif %}
+      </div>
+    </div>
+    <span class="topic-card-copy">
+      <span class="topic-reasons" data-reasons='{{ reason_payload | tojson | forceescape }}'></span>
+      <span class="topic-card-action">Find an edition <span aria-hidden="true">→</span></span>
+    </span>
+  </a>
+{%- endmacro %}
+
 <!doctype html>
 <html lang="{{ 'zh' if book_lang == 'cn' else 'en' }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Search: {{ query }} - LibFlix</title>
+  <title>{% if topic_active %}Books about {{ topic_label }}{% else %}Search: {{ query }}{% endif %} - LibFlix</title>
   <style data-page-style>
     * { box-sizing: border-box; }
     body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
@@ -22,6 +60,43 @@
     .discover-head { padding: 1.6rem 1rem .8rem; }
     .discover-title { font-size: 1.55rem; font-weight: 700; line-height: 1.15; margin: 0; }
     .discover-meta { color: #777; font-size: .83rem; margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .intent-switch { display: inline-flex; align-items: center; gap: 2px; margin-top: 12px; padding: 3px; border: 1px solid rgba(255,255,255,.1); border-radius: 999px; background: rgba(255,255,255,.035); }
+    .intent-switch a { padding: 5px 10px; border-radius: 999px; color: #989ba2; font-size: .74rem; font-weight: 650; line-height: 1; text-decoration: none; transition: color .15s ease, background .15s ease; }
+    .intent-switch a:hover { color: #fff; }
+    .intent-switch a.active { background: #34363b; color: #fff; }
+    .topic-tools { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-top: 13px; }
+    .topic-source-note { min-height: 20px; padding-top: 5px; color: #777b83; font-size: .75rem; }
+    .topic-source-note:empty { display: none; }
+    .topic-filters { position: relative; flex: 0 0 auto; }
+    .topic-filters summary { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 6px 10px; border: 1px solid rgba(255,255,255,.13); border-radius: 5px; color: #b8bac0; background: #1c1e22; font-size: .75rem; font-weight: 650; cursor: pointer; list-style: none; user-select: none; }
+    .topic-filters summary::-webkit-details-marker { display: none; }
+    .topic-filters summary::after { content: '▾'; color: #72757c; font-size: .65rem; transition: transform .15s ease; }
+    .topic-filters[open] summary::after { transform: rotate(180deg); }
+    .topic-filter-count { display: none; min-width: 17px; padding: 1px 5px; border-radius: 999px; color: #fff; background: #e50914; font-size: .65rem; text-align: center; }
+    .topic-filter-count.visible { display: inline-block; }
+    .topic-filter-panel { position: absolute; right: 0; z-index: 8; width: min(520px, calc(100vw - 32px)); margin-top: 7px; padding: 14px; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; background: #1b1d21; box-shadow: 0 18px 42px rgba(0,0,0,.42); }
+    .topic-filter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
+    .topic-filter-field { display: grid; gap: 5px; color: #8e9198; font-size: .69rem; font-weight: 650; }
+    .topic-filter-field select { width: 100%; min-height: 34px; padding: 5px 28px 5px 8px; border: 1px solid rgba(255,255,255,.13); border-radius: 5px; color: #f2f2f3; background: #26282d; font: inherit; font-size: .77rem; }
+    .topic-filter-actions { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-top: 14px; }
+    .topic-filter-reset { color: #8d9097; font-size: .74rem; text-decoration: none; }
+    .topic-filter-reset:hover { color: #fff; }
+    .topic-filter-apply { min-height: 32px; padding: 6px 12px; border: 0; border-radius: 5px; color: #fff; background: #e50914; font-size: .75rem; font-weight: 700; cursor: pointer; }
+    .topic-section { width: min(1560px, calc(100% - 48px)); margin: 0 auto; }
+    .topic-section[hidden], .topic-tools[hidden] { display: none !important; }
+    .topic-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 5px 0 10px; }
+    .topic-section-title { margin: 0; color: #f2f2f3; font-size: 1.02rem; font-weight: 730; letter-spacing: 0; }
+    .topic-start { margin-bottom: 22px; }
+    .topic-start-row { display: flex; gap: 12px; overflow-x: auto; overflow-y: hidden; padding: 2px 2px 10px; scroll-snap-type: x proximity; scrollbar-width: none; }
+    .topic-start-row::-webkit-scrollbar { display: none; }
+    .topic-book-item { width: 150px; color: inherit; text-decoration: none; scroll-snap-align: start; }
+    .topic-card-copy { display: grid; gap: 5px; padding: 7px 2px 0; }
+    .topic-reasons { display: flex; flex-wrap: wrap; gap: 4px; min-height: 18px; }
+    .topic-reasons:empty { min-height: 0; }
+    .topic-reason-chip { display: inline-block; max-width: 100%; overflow: hidden; padding: 3px 6px; border: 1px solid rgba(255,255,255,.09); border-radius: 999px; color: #a9abb1; background: rgba(255,255,255,.035); font-size: .62rem; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+    .topic-card-action { color: #e1e2e5; font-size: .69rem; font-weight: 650; opacity: .8; }
+    .topic-book-item:hover .topic-card-action, .topic-book-item:focus-visible .topic-card-action { color: #fff; opacity: 1; }
+    .topic-explore-head { margin-top: 4px; }
     .book-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 1rem 2rem; justify-content: center; }
     .book-card { width: 150px; cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; position: relative; border-radius: 8px; overflow: hidden; background:#242424; box-shadow: 0 8px 22px rgba(0,0,0,.18); }
     .book-card:hover { transform: scale(1.06); z-index: 5; box-shadow: 0 18px 42px rgba(0,0,0,.46); }
@@ -52,22 +127,104 @@
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
       .cat-tab { font-size: .65rem; padding: 2px 6px; }
+      .topic-section { width: calc(100% - 32px); }
+      .topic-book-item { width: 120px; }
+      .topic-filter-panel { position: fixed; right: 16px; left: 16px; width: auto; }
+    }
+    @media (max-width: 520px) {
+      .topic-tools { align-items: flex-end; }
+      .topic-filter-grid { grid-template-columns: 1fr; }
     }
   </style>
   <link href="{{ url_for('static', filename='libflix.css', v=asset_version) }}" rel="stylesheet">
 </head>
-<body class="page-discover">
+<body class="page-discover{% if topic_active %} topic-mode{% endif %}">
   {% set active_tab = '' %}
   {% include "_navbar.html" %}
 
   <main id="mainContent">
     <section class="discover-head">
-      <h1 class="discover-title">Results for “{{ query }}”</h1>
+      <h1 class="discover-title" id="discoverTitle">{% if topic_active %}Books about {{ topic_label }}{% else %}Results for “{{ query }}”{% endif %}</h1>
+      <nav class="intent-switch" aria-label="Search intent">
+        <a id="topicIntentLink" href="#"{% if topic_active %} class="active" aria-current="page"{% endif %}>About</a>
+        <a id="identityIntentLink" href="#"{% if not topic_active %} class="active" aria-current="page"{% endif %}>Title or author</a>
+      </nav>
+      <div class="topic-tools" id="topicTools"{% if not topic_active %} hidden{% endif %}>
+        <div class="topic-source-note" id="topicSourceNote" aria-live="polite">{% if partial | default(false) %}Some book sources are temporarily unavailable.{% endif %}</div>
+        <details class="topic-filters" id="topicFilters">
+          <summary>Filters <span class="topic-filter-count" id="topicFilterCount"></span></summary>
+          <form class="topic-filter-panel" id="topicFilterForm" method="get" action="{{ request.path }}">
+            <input type="hidden" name="q" value="{{ query }}">
+            <input type="hidden" name="intent" value="topic">
+            <div class="topic-filter-grid">
+              <label class="topic-filter-field">Type
+                <select name="type">
+                  <option value="any"{% if request.args.get('type', 'any') == 'any' %} selected{% endif %}>Any</option>
+                  <option value="nonfiction"{% if request.args.get('type') == 'nonfiction' %} selected{% endif %}>Non-fiction</option>
+                  <option value="fiction"{% if request.args.get('type') == 'fiction' %} selected{% endif %}>Fiction</option>
+                </select>
+              </label>
+              <label class="topic-filter-field">Language
+                <select name="language">
+                  <option value="current"{% if request.args.get('language', 'current') == 'current' %} selected{% endif %}>Current</option>
+                  <option value="any"{% if request.args.get('language') == 'any' %} selected{% endif %}>Any</option>
+                  <option value="en"{% if request.args.get('language') == 'en' %} selected{% endif %}>English</option>
+                  <option value="cn"{% if request.args.get('language') == 'cn' %} selected{% endif %}>Chinese</option>
+                </select>
+              </label>
+              <label class="topic-filter-field">Published
+                <select name="published">
+                  <option value="any"{% if request.args.get('published', 'any') == 'any' %} selected{% endif %}>Any time</option>
+                  <option value="recent"{% if request.args.get('published') == 'recent' %} selected{% endif %}>Recent</option>
+                  <option value="classic"{% if request.args.get('published') == 'classic' %} selected{% endif %}>Classic</option>
+                </select>
+              </label>
+              <label class="topic-filter-field">Sort
+                <select name="sort">
+                  <option value="best"{% if request.args.get('sort', 'best') == 'best' %} selected{% endif %}>Best match</option>
+                  <option value="newest"{% if request.args.get('sort') == 'newest' %} selected{% endif %}>Newest</option>
+                </select>
+              </label>
+            </div>
+            <div class="topic-filter-actions">
+              <a class="topic-filter-reset" id="topicFilterReset" href="#">Reset</a>
+              <button class="topic-filter-apply" type="submit">Apply</button>
+            </div>
+          </form>
+        </details>
+      </div>
+    </section>
+
+    <section class="topic-section topic-start" id="startHereSection" aria-labelledby="startHereTitle"{% if not topic_active or not topic_start_books %} hidden{% endif %}>
+      <div class="topic-section-head">
+        <h2 class="topic-section-title" id="startHereTitle">Start here</h2>
+      </div>
+      <div class="topic-start-row" id="startHereRow">
+        {% for book in topic_start_books %}
+          {{ topic_book_card(book) }}
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="topic-section topic-explore-head" id="exploreHeading" aria-labelledby="exploreTitle"{% if not topic_active %} hidden{% endif %}>
+      <div class="topic-section-head">
+        <h2 class="topic-section-title" id="exploreTitle">Explore {{ topic_label }}</h2>
+      </div>
     </section>
 
     <div class="book-grid" id="bookGrid">
-      {% for book in books[:12] %}
-      {% include "_book_card.html" %}
+      {% set grid_ns = namespace(count=0) %}
+      {% for book in books %}
+        {% set grid_key = book.ol_key | default('') %}
+        {% set is_start_book = topic_active and grid_key and grid_key in start_key_ns.keys %}
+        {% if grid_ns.count < 12 and not is_start_book %}
+          {% if topic_active %}
+            {{ topic_book_card(book) }}
+          {% else %}
+            {% include "_book_card.html" %}
+          {% endif %}
+          {% set grid_ns.count = grid_ns.count + 1 %}
+        {% endif %}
       {% endfor %}
     </div>
 
@@ -75,10 +232,12 @@
     <div class="initial-results-loading" id="initialResultsLoading" role="status" aria-live="polite">
       <span class="spinner-sm" aria-hidden="true"></span><span>Finding books</span>
     </div>
-    {% elif not books %}
+    {% elif not books and not topic_start_books %}
     <div class="empty-state" id="emptyState">
       {% if search_unavailable %}
       Book search is temporarily unavailable.<a href="{{ request.url }}">Try again</a>
+      {% elif topic_active %}
+      No strong matches yet. Try a more specific topic.
       {% else %}
       No books found. Try a different title or author.
       {% endif %}
@@ -95,32 +254,334 @@
     const QUERY = {{ query | tojson }};
     const MODE = {{ mode | tojson if mode else 'nonfiction' | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
+    const SERVER_BOOKS = {{ books | tojson }};
+    const INITIAL_TOPIC_MODE = {{ topic_active | tojson }};
+    const INITIAL_TOPIC_LABEL = {{ topic_label | tojson }};
+    const INITIAL_TOPIC_REFRESH = {{ (refresh_partial | default(false)) | tojson }};
+    const INITIAL_TOPIC_SNAPSHOT = {{ (snapshot_id | default('')) | tojson }};
     const INITIAL_BATCH_SIZE = 12;
     const REQUESTED_PAGE = {{ requested_page | default(page) | int }};
+    let topicMode = INITIAL_TOPIC_MODE;
+    let topicLabel = INITIAL_TOPIC_LABEL || QUERY;
+    let topicSnapshotId = INITIAL_TOPIC_SNAPSHOT;
     let initialLoading = {{ (initial_loading | default(false)) | tojson }};
-    let pendingBooks = {{ books[12:] | tojson }};
     let currentPage = {{ page | int }};
     let totalPages = {{ total_pages | int }};
     let loading = false;
-    let finished = !initialLoading && currentPage >= totalPages && !pendingBooks.length;
+    let pendingBooks = [];
+    let finished = false;
     let observer = null;
     let fillTimer = null;
+    let partialRefreshTimer = null;
+    let partialRefreshCount = 0;
+    let partialRefreshRequest = null;
+    let activePageRequest = null;
+    let pageDisposed = false;
+    let forceTopicReconcile = false;
+    let topicSnapshotIncomplete = INITIAL_TOPIC_REFRESH;
     let meaningfulScroll = false;
     const scrollOrigin = window.scrollY;
+    const startKeys = new Set();
+    const exploreKeys = new Set();
+    const queuedKeys = new Set();
     const scrollSentinel = document.getElementById('scrollSentinel');
     const infLoading = document.getElementById('infLoading');
+    const bookGrid = document.getElementById('bookGrid');
+    const startHereRow = document.getElementById('startHereRow');
+    const explicitIntent = new URL(window.location.href).searchParams.get('intent');
 
-    function esc(s) {
-      const d = document.createElement('div');
-      d.textContent = s || '';
-      return d.innerHTML;
+    function normalizeKey(value) {
+      return String(value || '').trim().replace(/^\/?works\//, '');
+    }
+
+    function normalizeText(value) {
+      return String(value || '').trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+    }
+
+    function bookIdentity(book) {
+      const olKey = normalizeKey(book?.ol_key || book?.key || book?.open_library_key);
+      if (olKey) return 'ol:' + olKey.toLowerCase();
+      const isbn = String(book?.isbn || book?.isbn13 || book?.isbn10 || '').replace(/[^0-9X]/gi, '').toUpperCase();
+      if (isbn) return 'isbn:' + isbn;
+      const providerId = String(book?.provider_id || book?.id || '').trim();
+      const provider = String(book?.provider || book?.source || '').trim().toLowerCase();
+      if (providerId && provider) return provider + ':' + providerId;
+      const title = normalizeText(book?.title);
+      const author = normalizeText(book?.author || book?.authors);
+      return title ? 'text:' + title + '|' + author : '';
+    }
+
+    function domBookIdentity(link) {
+      const card = link?.querySelector('.book-card');
+      return card ? bookIdentity({
+        ol_key: card.dataset.olKey,
+        title: card.dataset.title,
+        author: card.dataset.author
+      }) : '';
     }
 
     function bookUrl(book) {
-      const key = (book.ol_key || '').replace(/^\/?works\//, '');
+      const key = normalizeKey(book?.ol_key || book?.key || book?.open_library_key);
       if (!key) return '/preview';
       const prefix = (MODE === 'fiction' ? '/fiction' : '') + (BOOK_LANG === 'cn' ? '/cn' : '');
       return (prefix || '') + '/book/' + encodeURIComponent(key);
+    }
+
+    function getReasonValues(book) {
+      let values = book?.reasons ?? book?.reason ?? book?.relevance_reason ?? [];
+      if (!Array.isArray(values)) values = [values];
+      return [...new Set(values.map(value => {
+        if (value && typeof value === 'object') value = value.label || value.text || value.reason || '';
+        return String(value || '').trim().replace(/\s+/g, ' ');
+      }).filter(Boolean))].slice(0, 2);
+    }
+
+    function populateReasonChips(container, values) {
+      container.replaceChildren();
+      for (const reason of values.slice(0, 2)) {
+        const chip = document.createElement('span');
+        chip.className = 'topic-reason-chip';
+        chip.textContent = reason.length > 54 ? reason.slice(0, 51).trim() + '...' : reason;
+        chip.title = reason;
+        container.appendChild(chip);
+      }
+    }
+
+    function hydrateServerReasons(root = document) {
+      root.querySelectorAll('.topic-reasons[data-reasons]').forEach(container => {
+        let values = [];
+        try {
+          const parsed = JSON.parse(container.dataset.reasons || '[]');
+          values = Array.isArray(parsed) ? parsed : [parsed];
+        } catch (_) {}
+        populateReasonChips(container, getReasonValues({ reasons: values }));
+        container.removeAttribute('data-reasons');
+      });
+    }
+
+    function createBookLink(book, withTopicCopy = topicMode) {
+      const title = String(book?.title || 'Untitled');
+      const author = String(book?.author || (Array.isArray(book?.authors) ? book.authors.join(', ') : book?.authors || ''));
+      const olKey = normalizeKey(book?.ol_key || book?.key || book?.open_library_key);
+      const coverUrl = String(book?.cover_url || book?.cover || '');
+      const card = document.createElement('a');
+      card.href = bookUrl(book);
+      card.className = 'book-card-link' + (withTopicCopy ? ' topic-book-item' : '');
+      if (withTopicCopy) {
+        card.dataset.topicBook = 'true';
+        card.setAttribute('aria-label', title + (author ? ' by ' + author : '') + '. Find an edition.');
+      }
+      const displayTitle = title.length > 50 ? title.slice(0, 50) + '...' : title;
+      const displayAuthor = author.length > 35 ? author.slice(0, 35) + '...' : author;
+      const bookCard = document.createElement('div');
+      bookCard.className = 'book-card';
+      bookCard.dataset.olKey = olKey;
+      bookCard.dataset.title = title;
+      bookCard.dataset.author = author;
+      if (withTopicCopy) bookCard.dataset.quickPeekAction = 'Find an edition';
+      if (coverUrl) {
+        const skeleton = document.createElement('div');
+        skeleton.className = 'cover-skeleton';
+        const image = document.createElement('img');
+        image.dataset.coverSrc = coverUrl;
+        image.alt = title;
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        image.referrerPolicy = 'no-referrer';
+        const fallback = document.createElement('div');
+        fallback.className = 'placeholder ph-fallback';
+        fallback.hidden = true;
+        fallback.textContent = '?';
+        image.addEventListener('load', () => image.classList.add('loaded'));
+        image.addEventListener('error', () => {
+          image.hidden = true;
+          fallback.hidden = false;
+        });
+        bookCard.append(skeleton, image, fallback);
+      } else {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'placeholder';
+        placeholder.textContent = '?';
+        bookCard.appendChild(placeholder);
+      }
+      const info = document.createElement('div');
+      info.className = 'info';
+      const titleNode = document.createElement('div');
+      titleNode.className = 't';
+      titleNode.textContent = displayTitle;
+      info.appendChild(titleNode);
+      if (author) {
+        const authorNode = document.createElement('div');
+        authorNode.className = 'a';
+        authorNode.textContent = displayAuthor;
+        info.appendChild(authorNode);
+      }
+      bookCard.appendChild(info);
+      card.appendChild(bookCard);
+      if (withTopicCopy) {
+        const copy = document.createElement('span');
+        copy.className = 'topic-card-copy';
+        const reasons = document.createElement('span');
+        reasons.className = 'topic-reasons';
+        populateReasonChips(reasons, getReasonValues(book));
+        const action = document.createElement('span');
+        action.className = 'topic-card-action';
+        action.append('Find an edition ');
+        const arrow = document.createElement('span');
+        arrow.setAttribute('aria-hidden', 'true');
+        arrow.textContent = '→';
+        action.appendChild(arrow);
+        copy.append(reasons, action);
+        card.appendChild(copy);
+      }
+      return card;
+    }
+
+    function initializeRenderedKeys() {
+      startHereRow.querySelectorAll(':scope > a').forEach(link => {
+        const key = domBookIdentity(link);
+        if (key) startKeys.add(key);
+      });
+      bookGrid.querySelectorAll(':scope > a').forEach(link => {
+        const key = domBookIdentity(link);
+        if (key) exploreKeys.add(key);
+      });
+    }
+
+    function refreshRenderedBook(container, key, book, withTopicCopy = topicMode) {
+      const existing = [...container.children].find(link => domBookIdentity(link) === key);
+      if (!existing) return false;
+      const incomingCover = String(book?.cover_url || book?.cover || '');
+      const existingCover = existing.querySelector('img')?.getAttribute('data-cover-src') || '';
+      if (incomingCover && incomingCover !== existingCover) {
+        existing.replaceWith(createBookLink(book, withTopicCopy));
+        window.LibFlixCoverLoader?.register(container);
+      }
+      return true;
+    }
+
+    function enqueueBooks(books) {
+      for (const book of Array.isArray(books) ? books : []) {
+        const key = bookIdentity(book);
+        if (!key || queuedKeys.has(key)) continue;
+        if (exploreKeys.has(key)) {
+          refreshRenderedBook(bookGrid, key, book);
+          continue;
+        }
+        if (topicMode && startKeys.has(key)) {
+          refreshRenderedBook(startHereRow, key, book, true);
+          continue;
+        }
+        queuedKeys.add(key);
+        pendingBooks.push(book);
+      }
+    }
+
+    function renderBooks(books) {
+      const emptyState = document.getElementById('emptyState');
+      if (emptyState) emptyState.style.display = 'none';
+      for (const book of books) {
+        const key = bookIdentity(book);
+        queuedKeys.delete(key);
+        if (!key || exploreKeys.has(key) || (topicMode && startKeys.has(key))) continue;
+        exploreKeys.add(key);
+        bookGrid.appendChild(createBookLink(book));
+      }
+      window.LibFlixCoverLoader?.register(bookGrid);
+    }
+
+    function renderStartHere(books, replace = false) {
+      if (replace) {
+        startHereRow.replaceChildren();
+        startKeys.clear();
+      }
+      for (const book of (Array.isArray(books) ? books : [])) {
+        const key = bookIdentity(book);
+        if (!key) continue;
+        if (startKeys.has(key)) {
+          refreshRenderedBook(startHereRow, key, book, true);
+          continue;
+        }
+        if (startHereRow.children.length >= 6) break;
+        startKeys.add(key);
+        startHereRow.appendChild(createBookLink(book, true));
+        const duplicate = [...bookGrid.children].find(link => domBookIdentity(link) === key);
+        if (duplicate) {
+          duplicate.remove();
+          exploreKeys.delete(key);
+        }
+        if (queuedKeys.has(key)) {
+          pendingBooks = pendingBooks.filter(candidate => bookIdentity(candidate) !== key);
+          queuedKeys.delete(key);
+        }
+      }
+      document.getElementById('startHereSection').hidden = !startHereRow.children.length;
+      window.LibFlixCoverLoader?.register(startHereRow);
+    }
+
+    function responseStartHere(data, books) {
+      const supplied = data?.start_here || data?.startHere || data?.featured || data?.top_picks;
+      if (Array.isArray(supplied)) return supplied.slice(0, 6);
+      return Number(data?.page) === 1 ? books.slice(0, 5) : [];
+    }
+
+    function responseIsTopic(data) {
+      return data?.topic_mode === true || data?.intent === 'topic' || data?.search_intent === 'topic';
+    }
+
+    function makePageUrl(intent, resetTopicFilters = false) {
+      const url = new URL(window.location.href);
+      url.searchParams.set('q', QUERY);
+      url.searchParams.set('intent', intent);
+      url.searchParams.delete('page');
+      if (intent === 'identity' || resetTopicFilters) {
+        for (const name of ['type', 'language', 'published', 'sort']) url.searchParams.delete(name);
+      }
+      return url.pathname + '?' + url.searchParams.toString();
+    }
+
+    function updateIntentLinks() {
+      const topicLink = document.getElementById('topicIntentLink');
+      const identityLink = document.getElementById('identityIntentLink');
+      topicLink.href = makePageUrl('topic');
+      identityLink.href = makePageUrl('identity', true);
+      topicLink.classList.toggle('active', topicMode);
+      identityLink.classList.toggle('active', !topicMode);
+      if (topicMode) topicLink.setAttribute('aria-current', 'page');
+      else topicLink.removeAttribute('aria-current');
+      if (!topicMode) identityLink.setAttribute('aria-current', 'page');
+      else identityLink.removeAttribute('aria-current');
+      document.getElementById('topicFilterReset').href = makePageUrl('topic', true);
+    }
+
+    function setTopicPresentation(active, label = QUERY, data = null) {
+      topicMode = Boolean(active);
+      if (data?.snapshot_id) topicSnapshotId = String(data.snapshot_id);
+      topicSnapshotIncomplete = topicMode && Boolean(data?.partial);
+      topicLabel = String(label || QUERY).trim() || QUERY;
+      document.body.classList.toggle('topic-mode', topicMode);
+      document.getElementById('discoverTitle').textContent = topicMode ? 'Books about ' + topicLabel : 'Results for “' + QUERY + '”';
+      document.getElementById('exploreTitle').textContent = 'Explore ' + topicLabel;
+      document.getElementById('exploreHeading').hidden = !topicMode;
+      document.getElementById('topicTools').hidden = !topicMode;
+      if (!topicMode) document.getElementById('startHereSection').hidden = true;
+      document.title = (topicMode ? 'Books about ' + topicLabel : 'Search: ' + QUERY) + ' - LibFlix';
+      const sourceNote = document.getElementById('topicSourceNote');
+      sourceNote.textContent = topicMode && data?.partial
+        ? 'Some book sources are temporarily unavailable.'
+        : topicMode && data?.refresh_partial
+          ? 'Showing saved results while book sources refresh.'
+          : '';
+      updateIntentLinks();
+    }
+
+    function updateFilterCount() {
+      const form = document.getElementById('topicFilterForm');
+      const defaults = { type: 'any', language: 'current', published: 'any', sort: 'best' };
+      const active = Object.entries(defaults).filter(([name, value]) => form.elements[name]?.value !== value).length;
+      const count = document.getElementById('topicFilterCount');
+      count.textContent = active ? String(active) : '';
+      count.classList.toggle('visible', active > 0);
     }
 
     function setLoading(on) {
@@ -132,26 +593,6 @@
       if (scrollSentinel) scrollSentinel.style.display = 'none';
     }
 
-    function renderBooks(books) {
-      const grid = document.getElementById('bookGrid');
-      const emptyState = document.getElementById('emptyState');
-      if (emptyState) emptyState.style.display = 'none';
-      for (const b of books) {
-        const href = bookUrl(b);
-        const card = document.createElement('a');
-        card.href = href;
-        card.className = 'book-card-link';
-        const imgFallback = 'this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';';
-        card.innerHTML = '<div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">' +
-          (b.cover_url ? '<div class="cover-skeleton"></div><img data-cover-src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + imgFallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>' : '<div class="placeholder">?</div>') +
-          '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' +
-          (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') +
-          '</div></div>';
-        grid.appendChild(card);
-      }
-      window.LibFlixCoverLoader?.register(grid);
-    }
-
     function renderNextBatch() {
       if (!pendingBooks.length) return 0;
       const batch = pendingBooks.splice(0, INITIAL_BATCH_SIZE);
@@ -160,9 +601,14 @@
       return batch.length;
     }
 
+    function hasAnyBooks() {
+      return Boolean(bookGrid.children.length || (topicMode && startHereRow.children.length));
+    }
+
     function showEmptyResults(message, retry = false) {
       document.getElementById('initialResultsLoading')?.remove();
-      if (document.getElementById('bookGrid').children.length) return;
+      if (hasAnyBooks()) return;
+      document.getElementById('emptyState')?.remove();
       const empty = document.createElement('div');
       empty.className = 'empty-state';
       empty.id = 'emptyState';
@@ -173,12 +619,114 @@
         link.textContent = 'Try again';
         empty.appendChild(link);
       }
-      document.getElementById('bookGrid').insertAdjacentElement('afterend', empty);
+      bookGrid.insertAdjacentElement('afterend', empty);
+    }
+
+    function apiDiscoverUrl(page) {
+      const params = new URLSearchParams({
+        q: QUERY,
+        page: String(page),
+        mode: MODE,
+        book_lang: BOOK_LANG
+      });
+      if (topicMode) params.set('intent', 'topic');
+      else if (explicitIntent === 'identity') params.set('intent', 'identity');
+      if (topicMode) {
+        const current = new URL(window.location.href).searchParams;
+        params.set('type', current.get('type') || 'any');
+        params.set('language', current.get('language') || 'current');
+        params.set('published', current.get('published') || 'any');
+        params.set('sort', current.get('sort') || 'best');
+        if (page > 1 && topicSnapshotId) params.set('snapshot', topicSnapshotId);
+      }
+      return '/api/discover?' + params.toString();
+    }
+
+    function responseNeedsRefresh(data) {
+      return Boolean(data?.partial || data?.refresh_partial);
+    }
+
+    function schedulePartialRefresh(data) {
+      if (!topicMode || !responseNeedsRefresh(data) || partialRefreshCount >= 4) return;
+      if (partialRefreshTimer) window.clearTimeout(partialRefreshTimer);
+      const delays = [7000, 11000, 16000, 32000];
+      const retryAfter = Math.min(65000, Math.max(0, Number(data?.retry_after) || 0) * 1000);
+      partialRefreshTimer = window.setTimeout(
+        refreshPartialResults,
+        Math.max(delays[partialRefreshCount], retryAfter)
+      );
+    }
+
+    function refreshPartialResults() {
+      if (!topicMode || pageDisposed || partialRefreshCount >= 4) return;
+      partialRefreshCount += 1;
+      partialRefreshRequest?.abort();
+      const controller = new AbortController();
+      partialRefreshRequest = controller;
+      fetch(apiDiscoverUrl(1), { cache: 'no-store', signal: controller.signal })
+        .then(response => response.json())
+        .then(data => {
+          if (pageDisposed || partialRefreshRequest !== controller) return;
+          if (!data.success) {
+            schedulePartialRefresh(data);
+            return;
+          }
+          const books = Array.isArray(data.books) ? data.books : [];
+          const starts = responseStartHere(data, books);
+          if (
+            currentPage > 1
+            && !responseNeedsRefresh(data)
+            && !forceTopicReconcile
+          ) {
+            partialRefreshCount = 4;
+            document.getElementById('topicSourceNote').textContent = '';
+            return;
+          }
+          forceTopicReconcile = false;
+          setTopicPresentation(true, data.display_query || data.topic || QUERY, data);
+          activePageRequest?.abort();
+          activePageRequest = null;
+          loading = false;
+          setLoading(false);
+          document.getElementById('emptyState')?.remove();
+          startHereRow.replaceChildren();
+          bookGrid.replaceChildren();
+          startKeys.clear();
+          exploreKeys.clear();
+          queuedKeys.clear();
+          pendingBooks = [];
+          renderStartHere(starts, true);
+          enqueueBooks(books);
+          currentPage = Number(data.page) || 1;
+          totalPages = Number(data.total_pages) || 1;
+          initialLoading = false;
+          finished = false;
+          if (scrollSentinel) scrollSentinel.style.display = '';
+          document.getElementById('initialResultsLoading')?.remove();
+          const rendered = renderNextBatch();
+          if (!rendered && currentPage >= totalPages) finishLoading();
+          if (!responseNeedsRefresh(data)) {
+            partialRefreshCount = 4;
+            document.getElementById('topicSourceNote').textContent = '';
+          } else {
+            schedulePartialRefresh(data);
+          }
+        })
+        .catch(error => {
+          if (error.name !== 'AbortError') schedulePartialRefresh({ partial: true });
+        })
+        .finally(() => {
+          if (partialRefreshRequest === controller) partialRefreshRequest = null;
+        });
     }
 
     function loadMore() {
-      if (loading || finished) return;
+      if (pageDisposed || loading || finished) return;
       if (renderNextBatch()) return;
+      if (topicMode && topicSnapshotIncomplete) {
+        finishLoading();
+        return;
+      }
       if (!meaningfulScroll && !initialLoading) return;
       const nextPage = initialLoading ? REQUESTED_PAGE : currentPage + 1;
       if (!initialLoading && currentPage >= totalPages) {
@@ -187,26 +735,46 @@
       }
       loading = true;
       setLoading(true);
-      fetch('/api/discover?q=' + encodeURIComponent(QUERY) + '&page=' + nextPage + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
-        .then(r => r.json())
+      const controller = new AbortController();
+      activePageRequest = controller;
+      fetch(apiDiscoverUrl(nextPage), { signal: controller.signal })
+        .then(response => response.json())
         .then(data => {
-          if (!data.success || !data.books.length) {
+          if (pageDisposed || activePageRequest !== controller) return;
+          const books = Array.isArray(data.books) ? data.books : [];
+          const isTopicResponse = responseIsTopic(data);
+          const starts = isTopicResponse ? responseStartHere(data, books) : [];
+          if (!data.success || (!books.length && !starts.length)) {
+            if (data.code === 'snapshot_changed' || data.code === 'snapshot_unavailable') {
+              forceTopicReconcile = true;
+              partialRefreshCount = 0;
+              refreshPartialResults();
+              return;
+            }
             initialLoading = false;
             totalPages = Number(data.total_pages) || nextPage;
+            if (isTopicResponse) setTopicPresentation(true, data.display_query || data.topic || QUERY, data);
+            schedulePartialRefresh(data);
             showEmptyResults(data.success
-              ? 'No books found. Try a different title or author.'
+              ? (isTopicResponse ? 'No strong matches yet. Try a more specific topic.' : 'No books found. Try a different title or author.')
               : 'Book search is temporarily unavailable.', !data.success);
             finishLoading();
             return;
           }
-          pendingBooks.push(...data.books);
-          currentPage = data.page || nextPage;
-          totalPages = data.total_pages || totalPages;
+          if (isTopicResponse) {
+            setTopicPresentation(true, data.display_query || data.topic || QUERY, data);
+            if (!startHereRow.children.length) renderStartHere(starts, true);
+            schedulePartialRefresh(data);
+          }
+          enqueueBooks(books);
+          currentPage = Number(data.page) || nextPage;
+          totalPages = Number(data.total_pages) || totalPages;
           initialLoading = false;
           document.getElementById('initialResultsLoading')?.remove();
           renderNextBatch();
         })
-        .catch(() => {
+        .catch(error => {
+          if (error.name === 'AbortError' || pageDisposed) return;
           initialLoading = false;
           const initial = document.getElementById('initialResultsLoading');
           if (initial) {
@@ -221,7 +789,10 @@
           finishLoading();
         })
         .finally(() => {
+          if (activePageRequest !== controller) return;
+          activePageRequest = null;
           loading = false;
+          if (pageDisposed) return;
           setLoading(false);
           fillViewportIfNeeded();
         });
@@ -242,6 +813,25 @@
       }
     }
 
+    hydrateServerReasons();
+    initializeRenderedKeys();
+    if (topicMode) renderStartHere([], false);
+    const initialCandidates = topicMode
+      ? SERVER_BOOKS.filter(book => !startKeys.has(bookIdentity(book)))
+      : SERVER_BOOKS;
+    enqueueBooks(initialCandidates);
+    pendingBooks = pendingBooks.filter(book => !exploreKeys.has(bookIdentity(book)));
+    for (const key of exploreKeys) queuedKeys.delete(key);
+    finished = !initialLoading && currentPage >= totalPages && !pendingBooks.length;
+    const initialTopicState = {
+      partial: {{ (partial | default(false)) | tojson }},
+      refresh_partial: INITIAL_TOPIC_REFRESH
+    };
+    setTopicPresentation(topicMode, topicLabel, initialTopicState);
+    if (topicMode) schedulePartialRefresh(initialTopicState);
+    updateFilterCount();
+    document.getElementById('topicFilterForm').addEventListener('change', updateFilterCount);
+
     if ('IntersectionObserver' in window && scrollSentinel) {
       observer = new IntersectionObserver(entries => {
         if (entries.some(entry => entry.isIntersecting) && (pendingBooks.length || meaningfulScroll)) loadMore();
@@ -254,8 +844,12 @@
     if (initialLoading) loadMore();
     fillTimer = window.setTimeout(fillViewportIfNeeded, 250);
     window.LibFlixPageCleanup = () => {
+      pageDisposed = true;
       observer?.disconnect();
       if (fillTimer) window.clearTimeout(fillTimer);
+      if (partialRefreshTimer) window.clearTimeout(partialRefreshTimer);
+      partialRefreshRequest?.abort();
+      activePageRequest?.abort();
       window.removeEventListener('scroll', maybeLoadMore);
       window.removeEventListener('resize', fillViewportIfNeeded);
     };

@@ -1,5 +1,65 @@
 # Changelog
 
+## 2026-08-04 - Relevance-first topic discovery
+
+### Topic intent and source safety
+
+- Added automatic topic-versus-identity intent detection to `/discover`, with a
+  visible `About` / `Title or author` override. ISBNs, Open Library work ids,
+  quoted titles, and title-by-author queries retain the strict identity path.
+- Added a deterministic, versioned expansion corpus for more than 30 broad
+  topics. Each request fans out to no more than three normalized terms and two
+  approved Inventaire semantic claims; no per-request language model or user
+  profile is involved.
+- Added a provider-neutral topic pipeline that combines Open Library subject
+  results with bounded Inventaire work enrichment. Inventaire candidates are
+  accepted only when Wikidata `P648` maps directly to an Open Library work;
+  edition ids, unresolved records, and arbitrary provider covers are rejected.
+- Kept Open Library canonical for every rendered work identity, book route,
+  detail, cover, download alias, and Send to Kindle handoff.
+
+### Ranking and topic UX
+
+- Added a hard local relevance gate over subject, title, description, and
+  approved semantic evidence before any popularity signal can matter.
+- Added weighted reciprocal-rank fusion across provider and expansion ranks,
+  followed by bounded reading-log, syllabus, rating, edition, cover,
+  Inventaire-popularity, and source-consensus tie-breakers.
+- Merged duplicate work identities, made remaining ordering deterministic, and
+  capped each author at two topic results.
+- Added up to six `Start here` cards followed by a duplicate-free
+  `Explore <topic>` grid, concise factual reason chips, and `Find an edition`
+  actions that preserve identity verification before download or Kindle work.
+- Added a compact topic Filters panel for Type, Language, Published, and Best
+  match / Newest sorting.
+
+### Pagination, failure behavior, and API
+
+- Cached complete ranked windows before stable 30-book Explore pagination;
+  page-one `Start here` items are excluded from Explore and provider totals are
+  never summed. Content-derived snapshot ids reject page mixing when a ranking
+  changes between scroll requests.
+- Added independent Open Library and Inventaire request spacing, coalescing,
+  timeouts, stale caches, hard-capped refresh queues, response-byte/schema
+  validation, and circuit breakers behind a bounded overall topic-provider wait.
+- Prefer a stale complete topic window over a newly partial refresh. Partial
+  windows and outage empties are not persisted as authoritative results, all
+  partial responses are no-store, and a source-less outage returns a no-store
+  503 with circuit-aware retry timing.
+- Extended `/api/discover` additively with `intent`, `topic_mode`,
+  `display_query`, `start_here`, `partial`, `sources`, `source_unavailable`,
+  normalized `filters`, `retry_after`, `snapshot_id`, and expansion/ranker
+  version fields while retaining the existing card and pagination fields.
+- Added weighted topic-request rate costs, cheap cached-page reads, weekly
+  paced 30-topic quality monitoring, and a post-deploy production topic-surface
+  smoke check.
+- Rebuilt hydrated topic cards and Quick Peek metadata with DOM text/attribute
+  APIs so provider titles, authors, and descriptions cannot become executable
+  markup.
+- Kept Topic Discovery stateless: no accounts, personal library, reading
+  history, reading-progress tracking, or personalized recommendation profile
+  was added.
+
 ## 2026-08-04 - Identity accuracy, runtime protection, and mobile app shell
 
 ### Search and recommendation accuracy
@@ -371,7 +431,9 @@
 
 ### Changed search behavior
 
-- The navbar search now searches Open Library discovery through `/discover`.
+- At this release, the navbar searched Open Library discovery through
+  `/discover`; the later Topic Discovery release adds multi-source topic mode
+  while retaining this Open Library identity path.
 - Download search remains available from `/search` and from each book preview.
 - This separates "find a book" from "find a downloadable file".
 
@@ -437,7 +499,8 @@
 
 ### Documentation
 
-- Rewrote README to match the current Open Library-only architecture.
+- Rewrote README to match the then-current Open Library-only architecture;
+  the later Topic Discovery entry supersedes that source description.
 - Rewrote ARCHITECTURE.md with current route, API, caching, and frontend flow
   documentation.
 - Added this changelog to capture the feature set and migration notes.

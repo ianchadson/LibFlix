@@ -1072,12 +1072,35 @@
       const title = card.dataset.title || 'Untitled';
       const author = card.dataset.author || '';
       const desc = details?.description || '';
-      quickPeek.innerHTML =
-        '<div class="quick-peek-title">' + truncate(title, 92) + '</div>' +
-        (author ? '<div class="quick-peek-author">' + truncate(author, 70) + '</div>' : '') +
-        (state === 'loading'
-          ? '<div class="quick-peek-loading"><span class="quick-peek-spinner" aria-hidden="true"></span><span>Loading details</span></div>'
-          : '<div class="quick-peek-desc">' + (desc ? truncate(desc, 760) : 'No description available yet.') + '</div>');
+      const titleNode = document.createElement('div');
+      titleNode.className = 'quick-peek-title';
+      titleNode.textContent = truncate(title, 92);
+      const nodes = [titleNode];
+      if (author) {
+        const authorNode = document.createElement('div');
+        authorNode.className = 'quick-peek-author';
+        authorNode.textContent = truncate(author, 70);
+        nodes.push(authorNode);
+      }
+      if (state === 'loading') {
+        const loadingNode = document.createElement('div');
+        loadingNode.className = 'quick-peek-loading';
+        const spinner = document.createElement('span');
+        spinner.className = 'quick-peek-spinner';
+        spinner.setAttribute('aria-hidden', 'true');
+        const label = document.createElement('span');
+        label.textContent = 'Loading details';
+        loadingNode.append(spinner, label);
+        nodes.push(loadingNode);
+      } else {
+        const descriptionNode = document.createElement('div');
+        descriptionNode.className = 'quick-peek-desc';
+        descriptionNode.textContent = desc
+          ? truncate(desc, 760)
+          : 'No description available yet.';
+        nodes.push(descriptionNode);
+      }
+      quickPeek.replaceChildren(...nodes);
     };
     const positionQuickPeek = (link, pointer = quickPeekPointer) => {
       const rect = link.getBoundingClientRect();

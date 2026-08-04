@@ -1,0 +1,38 @@
+name: Topic quality benchmark
+
+on:
+  schedule:
+    - cron: "17 17 * * 6"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: topic-quality-benchmark
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run low-volume production benchmark
+        run: >-
+          python3 scripts/topic_quality_benchmark.py
+          --base-url https://libflix.fomalhaut.app
+          --delay 18
+          --retries 2
+          --retry-delay 18
+          --strict
+          --output topic-quality-report.json
+
+      - name: Upload benchmark report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: topic-quality-report
+          path: topic-quality-report.json
+          if-no-files-found: warn

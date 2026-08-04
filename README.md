@@ -1,14 +1,16 @@
-# LibFlix - Book Discovery Library
+# LibFlix - Book Discovery and Delivery
 
 LibFlix is a Netflix-style web app for browsing books, previewing metadata, and
-finding download options. Discovery is powered by Open Library. Downloads are
+finding download options. Open Library remains the canonical source for book
+identity, browsing, details, covers, and similar books. Broad-topic discovery
+also uses Inventaire as a tightly gated supplemental signal. Downloads are
 handled separately through the modular downloader layer, currently backed by
 libgen.li.
 
 The app supports fiction and non-fiction browsing, English and Chinese discovery
-filters, Open Library search, book previews, similar-book shelves, inline
-download search, direct downloads, and Send to Kindle via the user's SMTP
-settings.
+filters, intent-aware topic and identity search, book previews, similar-book
+shelves, inline download search, direct downloads, and Send to Kindle via the
+user's SMTP settings.
 
 ## About
 
@@ -16,6 +18,11 @@ LibFlix is a local-first book discovery interface for browsing public Open
 Library metadata with a polished streaming-app style UI. It focuses on fast
 category browsing, clean book previews, contextual download lookup, and a
 low-friction path from discovery to Send to Kindle.
+
+LibFlix is intentionally a find-and-send utility, not a reading platform. It
+has no user accounts, personal library, reading history, reading-progress
+tracking, or personalized profile. The server retains only bounded operational
+and Web Vital aggregates without raw URLs, payloads, or IP addresses.
 
 ## Quick Start
 
@@ -27,7 +34,8 @@ python3 app.py
 # http://127.0.0.1:5800
 ```
 
-No API key is required. Open Library is the only discovery backend.
+No API key is required. Open Library provides the canonical catalog, while
+Inventaire supplements broad-topic searches with public semantic metadata.
 
 ## Screenshots
 
@@ -47,8 +55,42 @@ No API key is required. Open Library is the only discovery backend.
 
 ### Discovery
 
-- **Open Library discovery** - browsing, shelves, categories, metadata, covers,
-  similar books, and discovery search all use Open Library with no API key.
+- **Intent-aware search** - `/discover` automatically treats known broad topics
+  such as `focus`, `meditation`, or `startups` as topic searches. ISBNs, Open
+  Library ids, quoted titles, and `Title by Author` queries stay on the strict
+  identity path. The visible `About` / `Title or author` switch always lets the
+  user override the automatic choice.
+- **Deterministic topic expansion** - a versioned corpus covers more than 30
+  common topics and expands each request to at most three bounded search terms.
+  Prefixes such as `books about` also opt an otherwise unknown query into topic
+  mode. No per-request language model or user profile is involved.
+- **Safe multi-source candidates** - Open Library subject results are combined
+  with Inventaire text or semantic results. Inventaire records are admitted
+  only when their Wikidata `P648` claim maps directly to an Open Library work;
+  edition ids and unresolved native records are rejected. Book identity,
+  details, covers, download aliases, and final book routes remain Open Library
+  canonical.
+- **Relevance-first ranking** - subject, title, description, and semantic
+  evidence must pass a local relevance gate before popularity can matter.
+  Weighted reciprocal-rank fusion combines source/query ranks, then bounded
+  reading, syllabus, rating, edition, source-consensus, and cover signals break
+  close calls. Duplicate works merge and one author is capped at two results.
+- **Topic browsing surface** - topic results lead with up to six `Start here`
+  books, followed by a deduplicated `Explore <topic>` grid. Cards can explain
+  concise signals such as subject match, multiple-source agreement, widely
+  read, frequently assigned, or highly rated, and lead to `Find an edition`.
+- **Compact topic filters** - one collapsed panel supports book type, language,
+  publication period, and Best match / Newest sorting without adding accounts,
+  saved searches, or a library.
+- **Stable resilient pagination** - a complete ranked window is cached before
+  it is divided into stable 30-book Explore pages. `Start here` is returned only
+  on page one and is excluded from Explore. A short snapshot id prevents pages
+  from different rankings being mixed. A stale complete window wins over a
+  newly partial provider response, while partial outages are no-store and never
+  persisted as authoritative empty results.
+- **Open Library catalog** - browsing, shelves, categories, metadata, covers,
+  similar books, identity search, and every rendered book work key use Open
+  Library with no API key.
 - **Sparse-record recovery** - discovery validates language locally so newly
   catalogued Open Library works remain searchable before language or cover
   metadata has been assigned, without mixing explicitly foreign-language
@@ -70,10 +112,11 @@ No API key is required. Open Library is the only discovery backend.
   not jump directly to download search.
 - **Download search is contextual** - download options are searched from the book
   preview page using the selected title and author.
-- **Locally reranked discovery** - Open Library results must retain literal
-  title/author evidence for the query before rendering. Exact identity matches
-  rank first and unrelated popularity filler is removed locally. Exact ISBNs,
-  common AI acronym forms, and high-confidence title typos remain searchable.
+- **Locally reranked identity discovery** - identity-search results must retain
+  literal Open Library title/author evidence before rendering. Exact identity
+  matches rank first and unrelated popularity filler is removed locally. Exact
+  ISBNs, common AI acronym forms, and high-confidence title typos remain
+  searchable.
 
 ### Homepage
 
@@ -241,10 +284,12 @@ No API key is required. Open Library is the only discovery backend.
 - **Local-first book pages** - cached card hints and assembled book details
   render immediately. Open Library refreshes happen in the background and stale
   data remains usable during an upstream outage.
-- **Resilient discovery** - all Open Library traffic uses a rate-limited,
-  coalesced gateway with short timeouts, a circuit breaker, and durable stale
-  fallback. An unavailable upstream no longer turns a cached category or book
-  into a blank page.
+- **Resilient discovery** - Open Library and Inventaire use independent
+  rate-limited, coalesced gateways with bounded timeouts, circuit breakers, and
+  durable stale fallback. Topic search has a bounded overall provider wait and
+  can identify a partial response without letting one source failure poison a
+  complete cached result. An unavailable upstream no longer turns a cached
+  category, topic, or book into a blank page.
 - **Operational visibility** - `/api/health` reports local dependency state,
   server timing is attached to key responses, and lightweight browser
   performance metrics are accepted by `/api/metrics/web-vitals`.
@@ -271,7 +316,7 @@ No API key is required. Open Library is the only discovery backend.
 |---|---|
 | `/` | Homepage with hero and horizontal shelves |
 | `/category/<topic>` | Category grid with vertical infinite scroll |
-| `/discover?q=...` | Open Library discovery search results |
+| `/discover?q=...` | Auto-detected topic or Open Library identity discovery |
 | `/book/OL...W` | Book detail, similar books, download search |
 | `/fiction/cn/book/OL...W` | Book detail with clean mode/language context |
 | `/search?q=...` | Direct libgen download search page |
@@ -299,10 +344,17 @@ No API key is required. Open Library is the only discovery backend.
 |---|---|---|
 | `BOOK_LANG` | `en` | Optional default discovery language |
 | `LIBFLIX_DATA_DIR` | repository directory | Writable location for SQLite, shelf, cover, and marker caches |
-| `LIBFLIX_CONTACT` | repository URL | Contact value included in the Open Library user agent |
+| `LIBFLIX_CONTACT` | repository URL | Contact value included in the Open Library and Inventaire user agent |
 | `OPENLIBRARY_MIN_INTERVAL` | `1.05` seconds | Minimum process-wide interval between upstream Open Library requests |
 | `OPENLIBRARY_CONNECT_TIMEOUT` | `3` seconds | Open Library connection timeout |
 | `OPENLIBRARY_READ_TIMEOUT` | `15` seconds | Open Library response timeout |
+| `INVENTAIRE_MIN_INTERVAL` | `0.5` seconds | Minimum process-wide interval between upstream Inventaire requests |
+| `INVENTAIRE_CONNECT_TIMEOUT` | `2.5` seconds | Inventaire connection timeout |
+| `INVENTAIRE_READ_TIMEOUT` | `5` seconds | Inventaire response timeout |
+| `TOPIC_PROVIDER_WAIT_TIMEOUT` | `10` seconds | Bounded total wait for concurrent topic providers |
+| `LIBFLIX_UPSTREAM_JSON_MAX_BYTES` | `2097152` | Maximum decoded Open Library or Inventaire JSON response size |
+| `LIBFLIX_OL_REFRESH_PENDING_LIMIT` | `12` | Maximum active and queued stale Open Library refreshes per worker |
+| `LIBFLIX_INVENTAIRE_REFRESH_PENDING_LIMIT` | `12` | Maximum active and queued stale Inventaire refreshes per worker |
 | `KINDLE_SOURCE_CACHE_TTL` | `86400` seconds | Idle lifetime for a verified EPUB/PDF source copy |
 | `KINDLE_SOURCE_CACHE_MAX_BYTES` | `5368709120` | Shared source-cache byte quota |
 | `KINDLE_PDF_METADATA_MAX_BYTES` | `20971520` | Largest PDF rewritten solely to improve metadata |
@@ -373,7 +425,7 @@ See [CHANGELOG.md](CHANGELOG.md) for dated implementation details.
 
 - **Backend:** Flask, requests, BeautifulSoup4
 - **Frontend:** Local CSS and vanilla JavaScript
-- **Discovery:** Open Library Search/Works/Covers APIs
+- **Discovery:** Open Library Search/Works/Covers APIs, with Inventaire topic enrichment
 - **Downloads:** Modular downloader interface, currently libgen.li
 - **Port:** 5800
 
@@ -384,7 +436,7 @@ Useful local checks:
 ```bash
 LIBFLIX_DATA_DIR="$(mktemp -d)" LIBFLIX_RATE_LIMITING_ENABLED=0 \
   python3 -m unittest discover -s tests -v
-python3 -m py_compile app.py book_preparation.py kindle_delivery.py security_runtime.py downloaders/base.py downloaders/libgen.py
+python3 -m py_compile app.py topic_discovery.py book_preparation.py kindle_delivery.py security_runtime.py downloaders/base.py downloaders/libgen.py
 python3 app.py
 ```
 
@@ -396,6 +448,8 @@ background Kindle progress. Do not use the installed Chrome profile.
 ```text
 http://127.0.0.1:5800
 http://127.0.0.1:5800/category/history
+http://127.0.0.1:5800/discover?q=focus
+http://127.0.0.1:5800/discover?q=focus&intent=identity
 http://127.0.0.1:5800/fiction/cn/discover?q=三体
 http://127.0.0.1:5800/book/OL82563W
 http://127.0.0.1:5800/search?q=Harry%20Potter

@@ -3,7 +3,13 @@ from contextlib import contextmanager
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, quote, urlencode, urlsplit, parse_qs
 from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError, as_completed
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    ThreadPoolExecutor,
+    TimeoutError as FutureTimeoutError,
+    as_completed,
+    wait,
+)
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -28,6 +34,19 @@ from security_runtime import (
     json_rate_limit_body,
     request_client_identity,
 )
+from topic_discovery import (
+    EXPANSION_VERSION as TOPIC_EXPANSION_VERSION,
+    RANKER_VERSION as TOPIC_RANKER_VERSION,
+    build_inventaire_request,
+    build_openlibrary_request,
+    candidate_to_book,
+    filter_topic_results,
+    merge_topic_candidates,
+    normalize_text as normalize_topic_text,
+    parse_inventaire_payload,
+    parse_openlibrary_payload,
+    plan_topic_query,
+)
 
 try:
     from PIL import Image, UnidentifiedImageError
@@ -43,6 +62,7 @@ from downloaders.libgen import MIRROR
 warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
 OL = "https://openlibrary.org"
+INVENTAIRE = "https://inventaire.io/api"
 CACHE = {}
 CACHE_TTL_OL = 3600
 API_DISK_CACHE_TTL = 21600
@@ -54,6 +74,13 @@ MEMORY_CACHE_MAX_ENTRIES = max(256, int(os.environ.get("LIBFLIX_MEMORY_CACHE_MAX
 API_CACHE_MAX_ROWS = max(500, int(os.environ.get("LIBFLIX_API_CACHE_MAX_ROWS", "20000")))
 API_CACHE_MAX_BYTES = max(16 * 1024**2, int(os.environ.get("LIBFLIX_API_CACHE_MAX_BYTES", str(256 * 1024**2))))
 API_CACHE_MAX_PAYLOAD_BYTES = max(64 * 1024, int(os.environ.get("LIBFLIX_API_CACHE_MAX_PAYLOAD_BYTES", str(2 * 1024**2))))
+UPSTREAM_JSON_MAX_BYTES = max(
+    256 * 1024,
+    min(
+        API_CACHE_MAX_PAYLOAD_BYTES,
+        int(os.environ.get("LIBFLIX_UPSTREAM_JSON_MAX_BYTES", str(2 * 1024**2))),
+    ),
+)
 API_CACHE_PRUNE_INTERVAL = 300
 OL_STALE_TTL = 7776000
 BOOK_DETAIL_FRESH_TTL = 604800
@@ -104,6 +131,30 @@ DOWNLOAD_IDENTITY_VALUE_LIMIT = 12
 SIMILAR_MAX_ORIGIN_QUERIES = 3
 SIMILAR_EMPTY_TTL = 1800
 SIMILAR_PARTIAL_TTL = 60
+TOPIC_DISCOVERY_PAGE_SIZE = 30
+TOPIC_DISCOVERY_START_COUNT = 6
+TOPIC_DISCOVERY_WINDOW = 126
+TOPIC_MERGED_FRESH_TTL = 1800
+TOPIC_MERGED_STALE_TTL = 86400
+TOPIC_PARTIAL_FRESH_TTL = 90
+TOPIC_PROVIDER_WAIT_TIMEOUT = max(
+    3.0,
+    min(float(os.environ.get("TOPIC_PROVIDER_WAIT_TIMEOUT", "10")), 15.0),
+)
+INVENTAIRE_FRESH_TTL = 21600
+INVENTAIRE_STALE_TTL = 604800
+INVENTAIRE_CONNECT_TIMEOUT = max(
+    1.0,
+    min(float(os.environ.get("INVENTAIRE_CONNECT_TIMEOUT", "2.5")), 5.0),
+)
+INVENTAIRE_READ_TIMEOUT = max(
+    2.0,
+    min(float(os.environ.get("INVENTAIRE_READ_TIMEOUT", "5")), 10.0),
+)
+INVENTAIRE_MIN_INTERVAL = max(
+    0.34,
+    float(os.environ.get("INVENTAIRE_MIN_INTERVAL", "0.5")),
+)
 IDENTITY_QUERY_JSON_MAX_BYTES = 512
 IDENTITY_QUERY_VALUE_MAX_CHARS = 120
 TRUST_PROXY_HEADERS = os.environ.get("LIBFLIX_TRUST_PROXY_HEADERS", "0").strip().casefold() not in {
@@ -253,6 +304,10 @@ OL_INFLIGHT_LOCK = threading.Lock()
 OL_INFLIGHT = {}
 OL_REFRESHING = set()
 OL_REFRESH_LOCK = threading.Lock()
+OL_REFRESH_PENDING_LIMIT = max(
+    2,
+    int(os.environ.get("LIBFLIX_OL_REFRESH_PENDING_LIMIT", "12")),
+)
 OL_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="openlibrary")
 OL_LAST_REQUEST_AT = 0.0
 OL_FAILURES = 0
@@ -262,6 +317,26 @@ OL_CONNECT_TIMEOUT = max(1.0, float(os.environ.get("OPENLIBRARY_CONNECT_TIMEOUT"
 OL_READ_TIMEOUT = max(2.0, float(os.environ.get("OPENLIBRARY_READ_TIMEOUT", "15")))
 OL_CIRCUIT_FAILURE_THRESHOLD = 3
 OL_CIRCUIT_COOLDOWN = 60
+INVENTAIRE_GATEWAY_LOCK = threading.Lock()
+INVENTAIRE_STATE_LOCK = threading.Lock()
+INVENTAIRE_INFLIGHT_LOCK = threading.Lock()
+INVENTAIRE_INFLIGHT = {}
+INVENTAIRE_REFRESH_LOCK = threading.Lock()
+INVENTAIRE_REFRESHING = set()
+INVENTAIRE_REFRESH_PENDING_LIMIT = max(
+    2,
+    int(os.environ.get("LIBFLIX_INVENTAIRE_REFRESH_PENDING_LIMIT", "12")),
+)
+INVENTAIRE_REFRESH_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="inventaire")
+INVENTAIRE_LAST_REQUEST_AT = 0.0
+INVENTAIRE_FAILURES = 0
+INVENTAIRE_CIRCUIT_OPEN_UNTIL = 0.0
+INVENTAIRE_CIRCUIT_FAILURE_THRESHOLD = 3
+INVENTAIRE_CIRCUIT_COOLDOWN = 60
+TOPIC_OL_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="topic-openlibrary")
+TOPIC_INVENTAIRE_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="topic-inventaire")
+TOPIC_OL_SLOTS = threading.BoundedSemaphore(6)
+TOPIC_INVENTAIRE_SLOTS = threading.BoundedSemaphore(6)
 BOOK_DETAIL_REFRESHING = set()
 BOOK_DETAIL_REFRESH_LOCK = threading.Lock()
 BOOK_DETAIL_REFRESH_PENDING_LIMIT = max(2, int(os.environ.get("LIBFLIX_BOOK_REFRESH_PENDING_LIMIT", "16")))
@@ -444,6 +519,19 @@ def disk_cache_set(key, data):
     except (sqlite3.Error, TypeError, ValueError):
         pass
 
+
+def disk_cache_delete(key):
+    cache_key = disk_cache_key(key)
+    initialize_disk_cache()
+    try:
+        with disk_cache_connection(timeout=5) as connection:
+            connection.execute(
+                "DELETE FROM api_cache WHERE cache_key = ?",
+                (cache_key,),
+            )
+    except sqlite3.Error:
+        pass
+
 def cache_get(key, ttl=CACHE_TTL_OL):
     v = CACHE.get(key)
     if v and time.time() - v["t"] < ttl:
@@ -485,6 +573,56 @@ def add_server_timing(name, started_at=None, duration=None, description=""):
         item += f';desc="{safe_description}"'
     timings.append(item)
 
+
+def bounded_upstream_json(response, maximum=UPSTREAM_JSON_MAX_BYTES):
+    """Decode a JSON object without allowing an origin to fill worker memory."""
+    content_length = response.headers.get("Content-Length", "")
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except (TypeError, ValueError):
+            declared_length = 0
+        if declared_length > maximum:
+            raise ValueError("Upstream JSON response is too large")
+    chunks = []
+    received = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        received += len(chunk)
+        if received > maximum:
+            raise ValueError("Upstream JSON response is too large")
+        chunks.append(chunk)
+    data = json.loads(b"".join(chunks).decode("utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("Upstream JSON response is not an object")
+    return data
+
+
+def openlibrary_payload_valid(path, data):
+    if not isinstance(data, dict):
+        return False
+    if path == "/search.json":
+        return isinstance(data.get("docs"), list)
+    if path.endswith("/editions.json"):
+        return isinstance(data.get("entries"), list)
+    return True
+
+
+def inventaire_payload_valid(path, data):
+    if not isinstance(data, dict):
+        return False
+    if path == "/search":
+        return isinstance(data.get("results"), list)
+    if path == "/entities/by-uris":
+        return isinstance(data.get("entities"), dict)
+    return True
+
+
+def purge_provider_cache(key):
+    CACHE.pop(key, None)
+    disk_cache_delete(key)
+
 def openlibrary_status():
     with OL_STATE_LOCK:
         return {
@@ -521,9 +659,15 @@ def _openlibrary_request(path, params=None):
             f"{OL}{path}",
             params=params,
             timeout=(OL_CONNECT_TIMEOUT, OL_READ_TIMEOUT),
+            stream=True,
         )
-        response.raise_for_status()
-        data = response.json()
+        try:
+            response.raise_for_status()
+            data = bounded_upstream_json(response)
+            if not openlibrary_payload_valid(path, data):
+                raise ValueError("Open Library returned an invalid schema")
+        finally:
+            response.close()
         _openlibrary_success()
         add_server_timing("openlibrary", started, description="origin")
         return data
@@ -544,29 +688,43 @@ def _refresh_ol_cache(key, path, params):
 
 def schedule_ol_refresh(key, path, params=None):
     with OL_REFRESH_LOCK:
-        if key in OL_REFRESHING or openlibrary_status()["circuit_open"]:
+        if (
+            key in OL_REFRESHING
+            or len(OL_REFRESHING) >= OL_REFRESH_PENDING_LIMIT
+            or openlibrary_status()["circuit_open"]
+        ):
             return False
         OL_REFRESHING.add(key)
-    OL_REFRESH_EXECUTOR.submit(_refresh_ol_cache, key, path, params)
+    try:
+        OL_REFRESH_EXECUTOR.submit(_refresh_ol_cache, key, path, params)
+    except RuntimeError:
+        with OL_REFRESH_LOCK:
+            OL_REFRESHING.discard(key)
+        return False
     return True
 
 def ol_get(path, params=None, allow_stale=True):
     key = f"ol:{path}:{str(params)}"
     cached = cache_get(key, CACHE_TTL_OL)
     if cached is not None:
-        add_server_timing("olcache", duration=0, description="memory")
-        return cached
+        if openlibrary_payload_valid(path, cached):
+            add_server_timing("olcache", duration=0, description="memory")
+            return cached
+        purge_provider_cache(key)
     cached = disk_cache_get(key)
     if cached is not None:
-        cache_set(key, cached)
-        add_server_timing("olcache", duration=0, description="disk")
-        return cached
+        if openlibrary_payload_valid(path, cached):
+            cache_set(key, cached)
+            add_server_timing("olcache", duration=0, description="disk")
+            return cached
+        purge_provider_cache(key)
     stale = disk_cache_get_stale(key, OL_STALE_TTL) if allow_stale else None
     if stale is not None:
-        cache_set(key, stale)
-        schedule_ol_refresh(key, path, params)
-        add_server_timing("olcache", duration=0, description="stale")
-        return stale
+        if openlibrary_payload_valid(path, stale):
+            schedule_ol_refresh(key, path, params)
+            add_server_timing("olcache", duration=0, description="stale")
+            return stale
+        purge_provider_cache(key)
 
     with OL_INFLIGHT_LOCK:
         event = OL_INFLIGHT.get(key)
@@ -577,9 +735,11 @@ def ol_get(path, params=None, allow_stale=True):
     if not leader:
         event.wait(OL_CONNECT_TIMEOUT + OL_READ_TIMEOUT + 2)
         shared = cache_get(key, CACHE_TTL_OL) or disk_cache_get(key)
-        if shared is not None:
+        if shared is not None and openlibrary_payload_valid(path, shared):
             add_server_timing("olcache", duration=0, description="shared")
             return shared
+        if shared is not None:
+            purge_provider_cache(key)
         return None
 
     try:
@@ -596,6 +756,172 @@ def ol_get(path, params=None, allow_stale=True):
 
 def ol_get_work(ol_key):
     return ol_get(ol_key + ".json")
+
+
+def inventaire_status():
+    with INVENTAIRE_STATE_LOCK:
+        return {
+            "circuit_open": time.monotonic() < INVENTAIRE_CIRCUIT_OPEN_UNTIL,
+            "failures": INVENTAIRE_FAILURES,
+            "retry_after": max(
+                0,
+                round(INVENTAIRE_CIRCUIT_OPEN_UNTIL - time.monotonic()),
+            ),
+        }
+
+
+def _inventaire_failure():
+    global INVENTAIRE_FAILURES, INVENTAIRE_CIRCUIT_OPEN_UNTIL
+    with INVENTAIRE_STATE_LOCK:
+        INVENTAIRE_FAILURES += 1
+        if INVENTAIRE_FAILURES >= INVENTAIRE_CIRCUIT_FAILURE_THRESHOLD:
+            INVENTAIRE_CIRCUIT_OPEN_UNTIL = (
+                time.monotonic() + INVENTAIRE_CIRCUIT_COOLDOWN
+            )
+
+
+def _inventaire_success():
+    global INVENTAIRE_FAILURES, INVENTAIRE_CIRCUIT_OPEN_UNTIL
+    with INVENTAIRE_STATE_LOCK:
+        INVENTAIRE_FAILURES = 0
+        INVENTAIRE_CIRCUIT_OPEN_UNTIL = 0.0
+
+
+def _provider_params_key(params):
+    if not params:
+        return ""
+    if isinstance(params, dict):
+        values = sorted(params.items(), key=lambda item: str(item[0]))
+    else:
+        values = list(params)
+    return urlencode(values, doseq=True)
+
+
+def _inventaire_request(path, params=None):
+    global INVENTAIRE_LAST_REQUEST_AT
+    if inventaire_status()["circuit_open"]:
+        return None
+    started = time.perf_counter()
+    try:
+        with INVENTAIRE_GATEWAY_LOCK:
+            wait_for = INVENTAIRE_MIN_INTERVAL - (
+                time.monotonic() - INVENTAIRE_LAST_REQUEST_AT
+            )
+            if wait_for > 0:
+                time.sleep(wait_for)
+            INVENTAIRE_LAST_REQUEST_AT = time.monotonic()
+        response = SESSION.get(
+            f"{INVENTAIRE}{path}",
+            params=params,
+            timeout=(INVENTAIRE_CONNECT_TIMEOUT, INVENTAIRE_READ_TIMEOUT),
+            stream=True,
+        )
+        try:
+            response.raise_for_status()
+            data = bounded_upstream_json(response)
+            if not inventaire_payload_valid(path, data):
+                raise ValueError("Inventaire returned an invalid schema")
+        finally:
+            response.close()
+        _inventaire_success()
+        add_server_timing("inventaire", started, description="origin")
+        return data
+    except (requests.RequestException, ValueError):
+        _inventaire_failure()
+        add_server_timing("inventaire", started, description="failed")
+        return None
+
+
+def _refresh_inventaire_cache(key, path, params):
+    try:
+        data = _inventaire_request(path, params)
+        if data is not None:
+            cache_set(key, data)
+            disk_cache_set(key, data)
+    finally:
+        with INVENTAIRE_REFRESH_LOCK:
+            INVENTAIRE_REFRESHING.discard(key)
+
+
+def schedule_inventaire_refresh(key, path, params=None):
+    with INVENTAIRE_REFRESH_LOCK:
+        if (
+            key in INVENTAIRE_REFRESHING
+            or len(INVENTAIRE_REFRESHING) >= INVENTAIRE_REFRESH_PENDING_LIMIT
+            or inventaire_status()["circuit_open"]
+        ):
+            return False
+        INVENTAIRE_REFRESHING.add(key)
+    try:
+        INVENTAIRE_REFRESH_EXECUTOR.submit(
+            _refresh_inventaire_cache,
+            key,
+            path,
+            params,
+        )
+    except RuntimeError:
+        with INVENTAIRE_REFRESH_LOCK:
+            INVENTAIRE_REFRESHING.discard(key)
+        return False
+    return True
+
+
+def inventaire_get(path, params=None, allow_stale=True):
+    """Cached, coalesced Inventaire request with independent failure state."""
+    key = f"inventaire:{path}:{_provider_params_key(params)}"
+    cached = cache_get(key, INVENTAIRE_FRESH_TTL)
+    if cached is not None:
+        if inventaire_payload_valid(path, cached):
+            add_server_timing("invcache", duration=0, description="memory")
+            return cached
+        purge_provider_cache(key)
+    cached = disk_cache_get(key, INVENTAIRE_FRESH_TTL)
+    if cached is not None:
+        if inventaire_payload_valid(path, cached):
+            cache_set(key, cached)
+            add_server_timing("invcache", duration=0, description="disk")
+            return cached
+        purge_provider_cache(key)
+    stale = (
+        disk_cache_get_stale(key, INVENTAIRE_STALE_TTL)
+        if allow_stale else None
+    )
+    if stale is not None:
+        if inventaire_payload_valid(path, stale):
+            schedule_inventaire_refresh(key, path, params)
+            add_server_timing("invcache", duration=0, description="stale")
+            return stale
+        purge_provider_cache(key)
+
+    with INVENTAIRE_INFLIGHT_LOCK:
+        event = INVENTAIRE_INFLIGHT.get(key)
+        leader = event is None
+        if leader:
+            event = threading.Event()
+            INVENTAIRE_INFLIGHT[key] = event
+    if not leader:
+        event.wait(INVENTAIRE_CONNECT_TIMEOUT + INVENTAIRE_READ_TIMEOUT + 1)
+        shared = (
+            cache_get(key, INVENTAIRE_FRESH_TTL)
+            or disk_cache_get(key, INVENTAIRE_FRESH_TTL)
+        )
+        if shared is not None and inventaire_payload_valid(path, shared):
+            return shared
+        if shared is not None:
+            purge_provider_cache(key)
+        return None
+
+    try:
+        data = _inventaire_request(path, params)
+        if data is not None:
+            cache_set(key, data)
+            disk_cache_set(key, data)
+        return data
+    finally:
+        with INVENTAIRE_INFLIGHT_LOCK:
+            inflight = INVENTAIRE_INFLIGHT.pop(key, None)
+            if inflight:
+                inflight.set()
 
 SHELVES_DEF = [
     ("Trending", "trending"),
@@ -1532,6 +1858,505 @@ def rank_discovery_records(records, query):
             key=lambda item: (-item[0], item[1]),
         )
     ]
+
+
+TOPIC_FILTER_VALUES = {
+    "type": {"any", "nonfiction", "fiction"},
+    "language": {"current", "any", "en", "cn"},
+    "published": {"any", "recent", "classic"},
+    "sort": {"best", "newest"},
+}
+TOPIC_FILTER_DEFAULTS = {
+    "type": "any",
+    "language": "current",
+    "published": "any",
+    "sort": "best",
+}
+INVENTAIRE_CLAIM_TERMS = {
+    "wd:Q108458": "meditation",
+    "wd:Q341045": "mindfulness",
+    "wd:Q6501338": "attention",
+    "wd:Q129238": "startups",
+    "wd:Q3908516": "entrepreneurship",
+}
+
+
+def normalize_topic_filters(values=None):
+    values = values or {}
+    normalized = {}
+    for name, allowed in TOPIC_FILTER_VALUES.items():
+        value = str(values.get(name) or TOPIC_FILTER_DEFAULTS[name]).strip().lower()
+        normalized[name] = value if value in allowed else TOPIC_FILTER_DEFAULTS[name]
+    return normalized
+
+
+def topic_discovery_cache_key(query, lang, filters):
+    normalized_filters = normalize_topic_filters(filters)
+    filter_key = ":".join(normalized_filters[name] for name in (
+        "type", "language", "published", "sort",
+    ))
+    return (
+        f"topic-discover:{TOPIC_EXPANSION_VERSION}:{TOPIC_RANKER_VERSION}:"
+        f"{lang}:{normalize_topic_text(query)}:{filter_key}"
+    )
+
+
+def _topic_cache_entry(key):
+    entries = []
+    memory = CACHE.get(key)
+    if isinstance(memory, dict) and isinstance(memory.get("d"), dict):
+        entries.append({
+            "age": max(0, time.time() - float(memory.get("t", 0))),
+            "data": memory["d"],
+            "source": "memory",
+        })
+    disk = disk_cache_entry(key)
+    if disk and isinstance(disk.get("data"), dict):
+        entries.append({**disk, "source": "disk"})
+    return min(entries, key=lambda item: item["age"]) if entries else None
+
+
+def cached_topic_discovery_payload(query, lang, filters, *, allow_stale=True):
+    key = topic_discovery_cache_key(query, lang, filters)
+    entry = _topic_cache_entry(key)
+    if not entry:
+        return None
+    payload = entry["data"]
+    partial = bool(payload.get("partial"))
+    fresh_ttl = TOPIC_PARTIAL_FRESH_TTL if partial else TOPIC_MERGED_FRESH_TTL
+    if entry["age"] < fresh_ttl:
+        if entry.get("source") == "disk":
+            cache_set(key, payload)
+        return dict(payload)
+    if (
+        allow_stale
+        and not partial
+        and entry["age"] < TOPIC_MERGED_STALE_TTL
+    ):
+        stale = dict(payload)
+        stale["stale"] = True
+        return stale
+    return None
+
+
+def _topic_openlibrary_page(plan, query_rank, provider_lang, filters):
+    path, params = build_openlibrary_request(
+        plan,
+        query_rank,
+        language=provider_lang,
+        limit=50,
+    )
+    if filters.get("sort") == "newest":
+        params["sort"] = "new"
+    data = ol_get(path, params)
+    query = plan.queries[query_rank]
+    if not isinstance(data, dict) or not isinstance(data.get("docs"), list):
+        return [parse_openlibrary_payload(None, query, query_rank)]
+    data = dict(data)
+    records = data["docs"]
+    if filters.get("language") != "any":
+        selected_lang = (
+            provider_lang if provider_lang in BOOK_LANGS else DEFAULT_BOOK_LANG
+        )
+        data["docs"] = [
+            record for record in records
+            if isinstance(record, dict)
+            and discovery_fallback_matches_language(record, selected_lang)
+        ]
+    return [parse_openlibrary_payload(data, query, query_rank)]
+
+
+def _inventaire_entity_params(uris):
+    params = [("uris", uri) for uri in uris]
+    params.extend(("attributes", attribute) for attribute in (
+        "info", "labels", "descriptions", "claims", "image", "popularity",
+    ))
+    return params
+
+
+def _inventaire_semantic_term(claim, fallback):
+    value = str(claim or "").rsplit("=", 1)[-1]
+    return INVENTAIRE_CLAIM_TERMS.get(value, fallback)
+
+
+def _topic_inventaire_pages(plan, query_rank, provider_lang, filters):
+    path, params, semantic = build_inventaire_request(
+        plan,
+        query_rank,
+        language=provider_lang,
+        limit=20,
+    )
+    data = inventaire_get(path, params)
+    fallback_query = plan.queries[min(query_rank, len(plan.queries) - 1)]
+    claim = next((value for name, value in params if name == "claim"), "")
+    semantic_query = _inventaire_semantic_term(claim, fallback_query)
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
+        return [
+            parse_inventaire_payload(
+                None,
+                semantic_query,
+                query_rank,
+                semantic=semantic,
+            )
+        ]
+    data = dict(data)
+    raw_results = [
+        result for result in data["results"][:20]
+        if isinstance(result, dict)
+    ]
+    uris = []
+    for result in raw_results:
+        uri = str(result.get("uri") or "").strip()
+        if re.fullmatch(r"(?:wd:Q\d+|inv:[a-f0-9]{32})", uri):
+            uris.append(uri)
+    entity_data = (
+        inventaire_get("/entities/by-uris", _inventaire_entity_params(uris))
+        if uris else {"entities": {}}
+    )
+    entities = (
+        entity_data.get("entities")
+        if isinstance(entity_data, dict)
+        and isinstance(entity_data.get("entities"), dict)
+        else {}
+    )
+    hydration_incomplete = bool(
+        uris
+        and (
+            not isinstance(entity_data, dict)
+            or not isinstance(entity_data.get("entities"), dict)
+            or any(uri not in entities for uri in uris)
+        )
+    )
+    enriched = []
+    for result in raw_results:
+        uri = str(result.get("uri") or "")
+        entity = entities.get(uri) if isinstance(entities, dict) else None
+        combined = dict(result)
+        if isinstance(entity, dict):
+            for name in (
+                "labels", "descriptions", "claims", "image", "popularity",
+            ):
+                if entity.get(name) not in (None, {}, []):
+                    combined[name] = entity[name]
+            combined["uri"] = uri
+        enriched.append(combined)
+    data["results"] = enriched
+    if isinstance(entity_data, dict) and entity_data.get("warnings"):
+        data["warnings"] = entity_data["warnings"]
+    inv_page = parse_inventaire_payload(
+        data,
+        semantic_query,
+        query_rank,
+        semantic=semantic,
+    )
+    if hydration_incomplete:
+        unavailable = parse_inventaire_payload(
+            None,
+            semantic_query,
+            query_rank,
+            semantic=semantic,
+        )
+        return [inv_page, unavailable]
+    return [inv_page]
+
+
+def _topic_provider_pages(plan, lang, filters):
+    selected_language = filters.get("language", "current")
+    provider_lang = (
+        "any" if selected_language == "any"
+        else lang if selected_language == "current"
+        else selected_language
+    )
+    futures = {}
+    saturated = False
+
+    def submit_bounded(executor, slots, source, function, *args):
+        nonlocal saturated
+        if not slots.acquire(blocking=False):
+            saturated = True
+            return
+
+        def run():
+            try:
+                return function(*args)
+            finally:
+                slots.release()
+
+        try:
+            future = executor.submit(run)
+        except RuntimeError:
+            slots.release()
+            saturated = True
+            return
+        futures[future] = source
+
+    ol_ranks = list(range(len(plan.queries)))
+    if plan.display_query == "focus" and len(ol_ranks) > 1:
+        ol_ranks[0], ol_ranks[1] = ol_ranks[1], ol_ranks[0]
+    for query_rank in ol_ranks:
+        submit_bounded(
+            TOPIC_OL_EXECUTOR,
+            TOPIC_OL_SLOTS,
+            "openlibrary",
+            _topic_openlibrary_page,
+            plan,
+            query_rank,
+            provider_lang,
+            filters,
+        )
+
+    if plan.inventaire_claims:
+        raw_rank = len(plan.queries) - 1
+        inventaire_ranks = [raw_rank]
+        inventaire_ranks.extend(
+            rank for rank in range(len(plan.inventaire_claims))
+            if rank != raw_rank
+        )
+        inventaire_ranks = inventaire_ranks[:2]
+    else:
+        inventaire_ranks = [0]
+    for query_rank in inventaire_ranks:
+        submit_bounded(
+            TOPIC_INVENTAIRE_EXECUTOR,
+            TOPIC_INVENTAIRE_SLOTS,
+            "inventaire",
+            _topic_inventaire_pages,
+            plan,
+            query_rank,
+            provider_lang,
+            filters,
+        )
+
+    pending = set(futures)
+    pages = []
+    failed_sources = set()
+    deadline = time.monotonic() + TOPIC_PROVIDER_WAIT_TIMEOUT
+    grace_deadline = None
+    while pending and time.monotonic() < deadline:
+        current_deadline = min(
+            deadline,
+            grace_deadline if grace_deadline is not None else deadline,
+        )
+        timeout = max(0, current_deadline - time.monotonic())
+        if timeout <= 0:
+            break
+        completed, pending = wait(
+            pending,
+            timeout=timeout,
+            return_when=FIRST_COMPLETED,
+        )
+        if not completed:
+            break
+        for future in completed:
+            source = futures[future]
+            try:
+                future_pages = future.result()
+            except Exception:
+                failed_sources.add(source)
+                continue
+            pages.extend(future_pages)
+            openlibrary_ready = any(
+                page.provider in {"openlibrary", "inventaire"}
+                and page.available
+                and page.candidates
+                for page in future_pages
+                if page.provider == "openlibrary"
+            )
+            inventaire_ready = (
+                any(
+                    page.provider == "inventaire"
+                    and page.available
+                    and page.candidates
+                    and page.query_rank == len(plan.queries) - 1
+                    for page in pages
+                )
+                or (
+                    not any(
+                        futures[pending_future] == "inventaire"
+                        for pending_future in pending
+                    )
+                    and any(
+                        page.provider == "inventaire"
+                        and page.available
+                        and page.candidates
+                        for page in pages
+                    )
+                )
+            )
+            if (openlibrary_ready or inventaire_ready) and grace_deadline is None:
+                grace_deadline = min(deadline, time.monotonic() + 1.35)
+        if grace_deadline is not None and time.monotonic() >= grace_deadline:
+            break
+    available_sources = {
+        page.provider for page in pages if page.available
+    }
+    partial = bool(saturated or pending or failed_sources or any(
+        not page.available or page.warnings for page in pages
+    ))
+    canonical_available = any(
+        page.provider == "openlibrary" and page.available
+        for page in pages
+    )
+    return pages, sorted(available_sources), partial, canonical_available
+
+
+def _topic_books_from_results(results, lang="en", language_filter="current"):
+    effective_language = (
+        lang if language_filter == "current" else language_filter
+    )
+    books = []
+    for result in results:
+        # Native supplemental cards require a direct Open Library work mapping.
+        # Chinese presentation additionally requires a Chinese language claim;
+        # English/current and Any may retain an unknown-language mapped work.
+        # Covers remain Open-Library-only; arbitrary provider images are never
+        # proxied.
+        if (
+            "openlibrary" not in result.sources
+            and (
+                "inventaire" not in result.sources
+                or (
+                    effective_language == "cn"
+                    and not {"chi", "zho", "zh", "cn"}.intersection(
+                        normalize_topic_text(value)
+                        for value in result.candidate.languages
+                    )
+                )
+            )
+        ):
+            continue
+        book = candidate_to_book(result)
+        cover_id = book.pop("cover_id", None)
+        book["cover_url"] = open_library_cover_url(cover_id)
+        book["ol_key"] = normalize_topic_work_key(book.get("ol_key"))
+        if not book["ol_key"] or not book.get("title") or not book.get("author"):
+            continue
+        remember_book_hint(book, lang)
+        books.append(book)
+    return canonicalize_book_covers(books)
+
+
+def normalize_topic_work_key(value):
+    match = re.fullmatch(r"/?works/(OL\d+W)", str(value or ""), re.I)
+    return f"/works/{match.group(1).upper()}" if match else ""
+
+
+def fetch_topic_discovery_payload(query, lang, filters):
+    filters = normalize_topic_filters(filters)
+    cached = cached_topic_discovery_payload(
+        query,
+        lang,
+        filters,
+        allow_stale=False,
+    )
+    if cached is not None:
+        return cached
+    stale_complete = cached_topic_discovery_payload(
+        query,
+        lang,
+        filters,
+        allow_stale=True,
+    )
+    plan = plan_topic_query(query, "topic")
+    pages, _available_sources, partial, canonical_available = _topic_provider_pages(
+        plan,
+        lang,
+        filters,
+    )
+    merged = merge_topic_candidates(
+        pages,
+        plan,
+        limit=200,
+        author_cap=200,
+        require_openlibrary=True,
+    )
+    merged = filter_topic_results(
+        merged,
+        book_type=filters["type"],
+        language=filters["language"],
+        current_language=lang,
+        published=filters["published"],
+        sort=filters["sort"],
+        author_cap=2,
+    )[:TOPIC_DISCOVERY_WINDOW]
+    books = _topic_books_from_results(merged, lang, filters["language"])
+    sources = sorted({
+        source
+        for book in books
+        for source in book.get("sources", [])
+        if source in {"openlibrary", "inventaire"}
+    })
+    retry_after = max(
+        openlibrary_status().get("retry_after", 0),
+        inventaire_status().get("retry_after", 0),
+    ) if partial else 0
+    if partial and stale_complete and not stale_complete.get("partial"):
+        fallback = dict(stale_complete)
+        fallback["stale"] = True
+        fallback["refresh_partial"] = True
+        fallback["retry_after"] = retry_after
+        return fallback
+    payload = {
+        "intent": "topic",
+        "topic_mode": True,
+        "display_query": plan.display_query,
+        "all_books": books,
+        "partial": partial,
+        "sources": sources,
+        "source_unavailable": bool(partial and not canonical_available and not books),
+        "retry_after": retry_after,
+        "filters": filters,
+        "expansion_version": TOPIC_EXPANSION_VERSION,
+        "ranker_version": TOPIC_RANKER_VERSION,
+        "snapshot_id": topic_discovery_snapshot_id(books),
+    }
+    # Persist only complete windows. Partial windows remain request-local so a
+    # provider recovery can immediately replace them; an outage is never stored
+    # as an authoritative empty result.
+    if not partial:
+        key = topic_discovery_cache_key(query, lang, filters)
+        cache_set(key, payload)
+        disk_cache_set(key, payload)
+    return payload
+
+
+def topic_discovery_snapshot_id(books):
+    identities = [
+        "\0".join((
+            str(book.get("ol_key") or ""),
+            normalize_topic_text(book.get("title")),
+            normalize_topic_text(book.get("author")),
+        ))
+        for book in books or []
+    ]
+    return hashlib.sha256("\n".join(identities).encode("utf-8")).hexdigest()[:20]
+
+
+def paginate_topic_discovery_payload(payload, page):
+    books = list(payload.get("all_books") or [])
+    if len(books) >= 12:
+        start_count = TOPIC_DISCOVERY_START_COUNT
+    else:
+        start_count = min(4, len(books))
+    start_here = books[:start_count] if page == 1 else []
+    explore = books[start_count:]
+    total_pages = max(
+        1,
+        (len(explore) + TOPIC_DISCOVERY_PAGE_SIZE - 1)
+        // TOPIC_DISCOVERY_PAGE_SIZE,
+    )
+    start = (page - 1) * TOPIC_DISCOVERY_PAGE_SIZE
+    paged = dict(payload)
+    paged.pop("all_books", None)
+    paged.update({
+        "start_here": start_here,
+        "books": explore[start:start + TOPIC_DISCOVERY_PAGE_SIZE],
+        "page": page,
+        "total_pages": total_pages,
+        "total": len(explore),
+        "snapshot_id": payload.get("snapshot_id") or topic_discovery_snapshot_id(books),
+    })
+    return paged
 
 def cached_discovery_books(q, page=1, lang=None):
     """Return discovery data without ever waiting on Open Library."""
@@ -2567,7 +3392,16 @@ def rate_limit_client_identity():
 
 def request_rate_limit_cost():
     if request.endpoint == "api_discover":
-        return 2
+        try:
+            if int(request.args.get("page", 1)) > 1:
+                return 1
+        except (TypeError, ValueError):
+            return 1
+        query = request.args.get("q", "")
+        plan = plan_topic_query(query, request.args.get("intent", ""))
+        # A cold topic request can perform three Open Library searches plus two
+        # Inventaire searches and their entity hydrations.
+        return 7 if plan.intent == "topic" else 2
     if request.endpoint == "api_similar":
         subject_count = len([
             value for value in request.args.getlist("subject")[:2] if value.strip()
@@ -2767,6 +3601,7 @@ def api_health():
         "service": "libflix",
         "database": database,
         "openlibrary": openlibrary_status(),
+        "inventaire": inventaire_status(),
         "cache": {
             "memory_entries": len(CACHE),
             "book_refreshes": len(BOOK_DETAIL_REFRESHING),
@@ -3133,17 +3968,59 @@ def discover(clean_mode, clean_lang):
         return preserve_query_redirect(clean_discover_url(mode, lang))
     if not q:
         return render_home(mode, lang, error="Enter a search query.")
+    if len(q) > 200:
+        return Response("Search query is too long", status=400, mimetype="text/plain")
 
     requested_page = max(1, int(request.args.get("page", 1)))
-    cached_result = cached_discovery_books(q, requested_page, lang)
-    initial_loading = cached_result is None
-    if cached_result is None:
-        books, total, total_pages = [], 0, max(1, requested_page)
-        page = requested_page - 1
+    requested_intent = request.args.get("intent", "")
+    query_plan = plan_topic_query(q, requested_intent)
+    topic_mode = query_plan.intent == "topic"
+    topic_filters = normalize_topic_filters(request.args)
+    start_here = []
+    partial = False
+    refresh_partial = False
+    snapshot_id = ""
+    sources = []
+    if topic_mode:
+        cached_payload = cached_topic_discovery_payload(
+            q,
+            lang,
+            topic_filters,
+            allow_stale=True,
+        )
+        initial_loading = cached_payload is None
+        if cached_payload is None:
+            books, total, total_pages = [], 0, max(1, requested_page)
+            page = requested_page - 1
+            search_unavailable = False
+        else:
+            paged_payload = paginate_topic_discovery_payload(
+                cached_payload,
+                requested_page,
+            )
+            books = paged_payload["books"]
+            start_here = paged_payload["start_here"]
+            total = paged_payload["total"]
+            total_pages = paged_payload["total_pages"]
+            partial = bool(paged_payload.get("partial"))
+            refresh_partial = bool(
+                paged_payload.get("stale")
+                or paged_payload.get("refresh_partial")
+            )
+            sources = paged_payload.get("sources") or []
+            snapshot_id = paged_payload.get("snapshot_id") or ""
+            search_unavailable = bool(paged_payload.get("source_unavailable"))
+            page = requested_page
     else:
-        books, total, total_pages = cached_result
-        page = requested_page
-    search_unavailable = total is None
+        cached_result = cached_discovery_books(q, requested_page, lang)
+        initial_loading = cached_result is None
+        if cached_result is None:
+            books, total, total_pages = [], 0, max(1, requested_page)
+            page = requested_page - 1
+        else:
+            books, total, total_pages = cached_result
+            page = requested_page
+        search_unavailable = total is None
     if search_unavailable:
         g.cache_control_override = "no-store"
     return render_template(
@@ -3158,6 +4035,14 @@ def discover(clean_mode, clean_lang):
         requested_page=requested_page,
         mode=mode,
         search_value=q,
+        topic_mode=topic_mode,
+        display_query=query_plan.display_query,
+        start_here=start_here,
+        partial=partial,
+        refresh_partial=refresh_partial,
+        snapshot_id=snapshot_id,
+        sources=sources,
+        active_filters=topic_filters,
     )
 
 @app.route("/api/discover")
@@ -3174,6 +4059,62 @@ def api_discover():
     if page < 1 or page > 100:
         return jsonify({"success": False, "error": "Invalid page"}), 400
     lang = normalize_book_lang(request.args.get("book_lang")) or get_book_lang()
+    query_plan = plan_topic_query(q, request.args.get("intent", ""))
+    if query_plan.intent == "topic":
+        filters = normalize_topic_filters(request.args)
+        if page > 1:
+            payload = cached_topic_discovery_payload(
+                q,
+                lang,
+                filters,
+                allow_stale=True,
+            )
+            if payload is None:
+                g.cache_control_override = "no-store"
+                return jsonify({
+                    "success": False,
+                    "error": "Topic snapshot is not ready. Load page 1 first.",
+                    "code": "snapshot_unavailable",
+                    "intent": "topic",
+                    "topic_mode": True,
+                    "display_query": query_plan.display_query,
+                }), 409
+            if payload.get("stale"):
+                payload["refresh_partial"] = True
+            requested_snapshot = request.args.get("snapshot", "").strip()
+            current_snapshot = payload.get("snapshot_id") or topic_discovery_snapshot_id(
+                payload.get("all_books") or []
+            )
+            if requested_snapshot and requested_snapshot != current_snapshot:
+                g.cache_control_override = "no-store"
+                return jsonify({
+                    "success": False,
+                    "error": "Topic results changed. Refreshing the first page.",
+                    "code": "snapshot_changed",
+                    "intent": "topic",
+                    "topic_mode": True,
+                    "display_query": query_plan.display_query,
+                    "snapshot_id": current_snapshot,
+                }), 409
+        else:
+            payload = fetch_topic_discovery_payload(q, lang, filters)
+        paged = paginate_topic_discovery_payload(payload, page)
+        if paged.get("partial") or paged.get("refresh_partial"):
+            g.cache_control_override = "no-store"
+        if paged.get("source_unavailable"):
+            return jsonify({
+                "success": False,
+                "error": "Book search is temporarily unavailable.",
+                "code": "source_unavailable",
+                "intent": "topic",
+                "topic_mode": True,
+                "display_query": query_plan.display_query,
+                "partial": True,
+                "sources": paged.get("sources") or [],
+                "retry_after": paged.get("retry_after") or 0,
+            }), 503
+        return jsonify({"success": True, "query": q, **paged})
+
     books, total, total_pages = fetch_discovery_books(q, page, lang)
     if total is None:
         g.cache_control_override = "no-store"
@@ -3185,6 +4126,8 @@ def api_discover():
     return jsonify({
         "success": True,
         "query": q,
+        "intent": "identity",
+        "topic_mode": False,
         "books": books,
         "page": page,
         "total_pages": total_pages,

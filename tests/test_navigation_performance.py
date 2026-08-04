@@ -58,6 +58,35 @@ class DiscoveryShellTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"Cached result", response.data)
 
+    def test_topic_partial_refresh_reconciles_the_window_and_reopens_pagination(self):
+        template = (Path(app.APP_DIR) / "templates" / "discover.html").read_text()
+        refresh = template.split("function refreshPartialResults()", 1)[1].split(
+            "function loadMore()", 1
+        )[0]
+
+        self.assertIn("startHereRow.replaceChildren();", refresh)
+        self.assertIn("bookGrid.replaceChildren();", refresh)
+        self.assertIn("pendingBooks = [];", refresh)
+        self.assertIn("finished = false;", refresh)
+        self.assertIn("scrollSentinel.style.display = '';", refresh)
+        self.assertIn("responseNeedsRefresh(data)", refresh)
+        self.assertIn("activePageRequest?.abort();", refresh)
+        self.assertIn("partialRefreshCount = 4;", refresh)
+        self.assertLess(
+            refresh.index("bookGrid.replaceChildren();"),
+            refresh.index("renderStartHere(starts, true);"),
+        )
+
+    def test_topic_page_requests_abort_on_navigation_and_partial_reconcile(self):
+        template = (Path(app.APP_DIR) / "templates" / "discover.html").read_text()
+
+        self.assertIn("let activePageRequest = null;", template)
+        self.assertIn("if (pageDisposed || activePageRequest !== controller) return;", template)
+        self.assertIn("activePageRequest?.abort();", template)
+        self.assertIn("pageDisposed = true;", template)
+        self.assertIn("const delays = [7000, 11000, 16000, 32000];", template)
+        self.assertIn("Number(data?.page) === 1", template)
+
 
 class SimilarRecommendationShellTests(unittest.TestCase):
     def test_book_page_supports_author_only_recommendations(self):

@@ -5,12 +5,21 @@
 LibFlix is a Flask app with two distinct data paths:
 
 1. **Discovery path:** Open Library powers browsing, shelves, category pages,
-   search discovery, book details, covers, and similar books.
+   strict identity search, book details, covers, and similar books. Topic
+   search combines Open Library candidates with bounded Inventaire enrichment,
+   but only after every candidate resolves to an Open Library work.
 2. **Download path:** the `downloaders/` package powers libgen search, download
    resolution, streaming, and Send to Kindle delivery.
 
-Discovery has a single backend. Open Library is the source for browsing,
-metadata, covers, similar books, and discovery search.
+Open Library is the canonical identity boundary between these paths. Inventaire
+can improve topic candidate recall or add source consensus, but it cannot create
+a native LibFlix book route, cover, detail record, or download identity.
+
+The product is intentionally stateless from the reader's perspective. There are
+no user accounts, personal library, reading history, reading-progress tracking,
+or personalized recommendations. SMTP settings remain local to the browser,
+and the server stores only bounded operational and Web Vital aggregates without
+raw URLs, payloads, or IP addresses.
 
 ## User-Facing Flow Map
 
@@ -81,20 +90,54 @@ Important behavior:
 
 ```text
 Navbar search form submits to /discover
-  -> Flask uses fetch_discovery_books(q, page, lang)
-  -> Open Library search results render as book cards
-  -> bottom scroll sentinel fetches /api/discover automatically
-  -> clicking a card opens /book/<work_id>
+  -> plan_topic_query(q, intent) selects topic or identity mode
+       -> ISBN / OL work id / quoted title / "Title by Author": identity
+       -> known broad topic or "books about ..." prefix: topic
+       -> explicit About / Title or author selection overrides detection
+  -> identity mode uses fetch_discovery_books(q, page, lang)
+       -> strict Open Library title/author relevance path
+  -> topic mode renders a local cached window or an immediate loading shell
+       -> /api/discover plans the raw topic plus at most two versioned aliases
+       -> Open Library and Inventaire searches run concurrently
+       -> Inventaire records require a valid Open Library-work P648 mapping
+       -> candidates pass a local relevance gate
+       -> weighted RRF, bounded quality signals, dedupe, and author cap rank them
+       -> page one separates Start here from the Explore window
+  -> bottom scroll sentinel fetches stable /api/discover pages automatically
+  -> clicking any card opens /book/<Open Library work id>
 ```
 
-This route searches Open Library discovery data only. It does not search the
-download source directly.
+The route never searches the download source directly. Both intents end at an
+Open Library work page; download discovery begins only after the user selects a
+book identity.
 
-Discovery uses Open Library's unqualified relevance query, then applies local
-language and identity-relevance guards to every record. Exact title/author
+Identity mode uses Open Library's unqualified relevance query, then applies
+local language and identity-relevance guards to every record. Exact title/author
 evidence ranks first; multi-token queries require at least two-thirds literal
 coverage, which removes unrelated popularity filler without hiding sparse exact
 works. Coverless matches use the standard placeholder rather than disappearing.
+
+Topic mode uses a deterministic, versioned expansion corpus with more than 30
+common topics. Each plan contains at most three normalized search terms and at
+most two Inventaire semantic claims, keeping fanout and caching predictable.
+Unknown topics stay on the identity path unless the user selects `About` or uses
+a topic prefix such as `books about`.
+
+Topic candidates must show subject, title, description, or approved semantic
+evidence before they can rank. Weighted reciprocal-rank fusion combines native
+provider and expansion ranks. Reading-log, Open Syllabus, rating, edition,
+cover, Inventaire popularity, and cross-source-consensus signals are bounded
+quality tie-breakers after that gate; they cannot admit unrelated filler. Work
+identity dedupes cross-source records and stable keys break remaining ties.
+Filters run before the final two-results-per-author diversity cap so discarded
+language, type, or publication-period records cannot starve valid matches.
+
+The topic UI shows up to six `Start here` cards, then a duplicate-free
+`Explore <topic>` grid. Cards display at most two factual reasons, such as a
+subject match, multiple-source agreement, `Widely read`, `Frequently assigned`,
+or `Highly rated`. A collapsed Filters control supports Type, Language,
+Published, and Best match / Newest sorting. The card action remains `Find an
+edition`; there is no direct-send shortcut before identity verification.
 
 ### Book Preview (`GET /book/<work_id>`)
 
@@ -167,6 +210,33 @@ BOOK_LANG_CONFIG = {
   `source` parameters from old links.
 - `shelf_query(topic, lang)` adds an Open Library language filter to each query.
 
+### Topic Discovery Planning And Ranking
+
+`topic_discovery.py` is provider-neutral and contains no Flask or network state.
+It validates and bounds provider payloads, while `app.py` owns transport,
+caching, timeouts, circuits, and API pagination.
+
+| Function | Responsibility |
+|---|---|
+| `plan_topic_query(query, intent)` | Detect identity/topic intent, honor an explicit override, strip supported topic prefixes, and build at most three deterministic versioned query terms |
+| `build_openlibrary_request(...)` | Build bounded Open Library subject requests with topic ranking fields |
+| `build_inventaire_request(...)` | Build bounded Inventaire work-text or approved semantic-claim requests |
+| `parse_openlibrary_payload(...)` | Normalize Open Library results with canonical work keys, subjects, descriptions, covers, and bounded quality signals |
+| `parse_inventaire_payload(...)` | Accept only work records with a valid Wikidata `P648` Open Library work mapping; reject edition and unresolved records |
+| `merge_topic_candidates(...)` | Merge by work identity, apply the relevance gate and weighted RRF, and add bounded quality/consensus tie-breakers |
+| `filter_topic_results(...)` | Apply type, language, publication-period, and Newest sorting, then enforce the final two-books-per-author cap |
+| `fetch_topic_discovery_payload(...)` | Coordinate concurrent provider pages, stale-complete fallback, complete-window caching, and app-facing Open Library cards |
+| `paginate_topic_discovery_payload(...)` | Split a cached ranked window into page-one `start_here` and stable 30-book Explore pages without duplicates |
+
+Open Library records carry their work identity directly. Inventaire records can
+participate only when `wdt:P648` normalizes to `OL...W`; `OL...M` edition ids,
+unknown ids, missing authors at render time, and arbitrary provider cover URLs
+never cross the canonical boundary. Supplemental-only cards still link to an
+Open Library work and must satisfy the selected language-safety checks.
+
+The expansion and ranker versions are included in cache keys and API responses.
+Changing either invalidates old merged windows without changing route shapes.
+
 ### CN Title Presentation
 
 Chinese catalogs often mix Han titles, pinyin, and translated English titles.
@@ -216,14 +286,31 @@ can be verified.
 | `dedupe_and_refill_shelves(shelves, mode, lang)` | Apply homepage shelf priority and top up later shelves |
 | `seen_keys_before_shelf(topic, mode, lang)` | Build exclusion keys from all earlier homepage shelves |
 | `fetch_shelf_page_books(topic, page, mode, lang)` | Return logical horizontal shelf pages after cross-shelf dedupe |
-| `fetch_discovery_books(q, page, lang)` | Paginated `/discover` JSON source |
+| `fetch_discovery_books(q, page, lang)` | Paginated strict Open Library identity-search source |
 | `fetch_shelves(mode, lang)` | Homepage shelf builder using parallel candidate prefetch plus top-to-bottom dedupe |
 
 The gateway uses a descriptive application user agent, spaces requests by at
 least `OPENLIBRARY_MIN_INTERVAL`, and opens a short process-local circuit after
 three consecutive failures. Expired SQLite values are not deleted during
-lookup; they remain available as stale fallback while at most two refresh tasks
-run in the background.
+lookup; they remain available as stale fallback without being promoted to a new
+memory timestamp. Refresh queues are hard-capped so work cannot accumulate
+without bound and recovery can retry after a circuit cooldown.
+
+### Inventaire Gateway
+
+`inventaire_get(path, params)` is separate from `ol_get`. It has its own request
+spacing, connect/read timeouts, in-flight request coalescing, refresh executor,
+three-failure circuit, and 60-second cooldown. Raw Inventaire responses are
+cached for six hours and can remain eligible as stale fallback for seven days.
+A failure in this gateway does not increment or open the Open Library circuit.
+Both gateways stream and reject decoded JSON above the configured byte cap,
+validate endpoint schemas before caching, and purge malformed cached entries.
+
+Topic discovery submits bounded work to both gateways concurrently. The merged
+request has an overall timeout (`TOPIC_PROVIDER_WAIT_TIMEOUT`, 10 seconds by
+default) and a short grace period after a useful provider result arrives, so a
+slow supplement cannot indefinitely hold the page. Provider availability is
+reported independently and a usable response may be explicitly `partial`.
 
 ### Download Helpers
 
@@ -293,21 +380,101 @@ Same shape as `/api/category/<topic>`. Used by horizontal homepage shelves.
 
 ### `GET /discover`
 
-Renders discovery results from Open Library.
+Renders auto-detected topic discovery or strict Open Library identity results.
+On a cold topic request, HTML returns immediately with a loading shell; the
+browser hydrates the ranked window from `/api/discover`.
 
 Params:
 
 | Param | Values | Purpose |
 |---|---|---|
-| `q` | string | Title, author, or subject-like discovery query |
-| `page` | integer | 1-based results page |
+| `q` | string | Title, author, identifier, or broad-topic query |
+| `intent` | `topic`, `identity` | Optional explicit override; omitted uses automatic detection |
+| `page` | integer | 1-based stable merged-window page |
+| `snapshot` | string | Page-2+ topic snapshot id supplied by the browser to prevent mixed rankings |
 | `mode` | `fiction`, `nonfiction` | Maintains navbar mode |
 | `book_lang` | `en`, `cn` | Language filter |
+| `type` | `any`, `nonfiction`, `fiction` | Topic-mode book-type filter |
+| `language` | `current`, `any`, `en`, `cn` | Topic-mode language filter |
+| `published` | `any`, `recent`, `classic` | Topic-mode publication-period filter |
+| `sort` | `best`, `newest` | Topic-mode ranking order |
 
 ### `GET /api/discover`
 
-JSON endpoint backing discover pagination. Returns the same book-card shape as
-category and shelf APIs.
+JSON endpoint backing discover hydration and pagination. Identity responses
+retain the existing book-card contract and add intent metadata:
+
+```json
+{
+  "success": true,
+  "query": "Deep Work",
+  "intent": "identity",
+  "topic_mode": false,
+  "books": [],
+  "page": 1,
+  "total_pages": 1,
+  "total": 0
+}
+```
+
+Topic responses add fields without removing or renaming the existing pagination
+fields:
+
+```json
+{
+  "success": true,
+  "query": "focus",
+  "intent": "topic",
+  "topic_mode": true,
+  "display_query": "focus",
+  "start_here": [
+    {
+      "title": "Deep Work",
+      "author": "Cal Newport",
+      "ol_key": "/works/OL17713267W",
+      "reasons": ["Subject: Attention", "Matched by multiple sources"],
+      "sources": ["inventaire", "openlibrary"]
+    }
+  ],
+  "books": [],
+  "page": 1,
+  "total_pages": 1,
+  "total": 0,
+  "partial": false,
+  "sources": ["inventaire", "openlibrary"],
+  "source_unavailable": false,
+  "retry_after": 0,
+  "snapshot_id": "8d8aef784c6dce81a2d9",
+  "filters": {
+    "type": "any",
+    "language": "current",
+    "published": "any",
+    "sort": "best"
+  },
+  "expansion_version": "topic-v1",
+  "ranker_version": "rrf-v1"
+}
+```
+
+`start_here` is populated only on page one and is excluded from `books` and
+`total`; `total` counts the locally merged Explore window, not the sum of
+provider totals. All pages are slices of the same cached ranked window, so a
+work cannot move between or repeat across pages during that window's lifetime.
+Page 2+ never triggers provider fanout: it requires a cached window and verifies
+the browser's `snapshot` id. A missing window or changed id returns a no-store
+409 so the browser reconciles page one instead of mixing rankings.
+Cards may add `reasons`, `sources`, `subjects`, `published_year`, `languages`,
+and ranking metadata; consumers must ignore unknown additive fields.
+
+When one provider is late or unavailable, a usable response can return
+`partial: true` plus the sources that contributed. Partial windows are not
+persisted as complete results and are always `Cache-Control: no-store`. If a
+complete cached window is stale while a refresh is partial, the complete window
+is returned with optional `stale` and `refresh_partial` flags. `retry_after`
+lets the browser wait past an open provider circuit instead of exhausting
+retries during cooldown. If no canonical result or complete fallback is usable,
+the endpoint returns HTTP 503 with `code: "source_unavailable"`, `partial: true`,
+and `Cache-Control: no-store`.
 
 ### `GET /api/book`
 
@@ -429,8 +596,9 @@ and store it under `LIBFLIX_DATA_DIR/covers`. Responses expose
 
 ### Health and browser timing
 
-- `GET /api/health` reports local cache, loaded shelves, Open Library circuit,
-  and Kindle-job state without adding a blocking external probe.
+- `GET /api/health` reports local cache, loaded shelves, independent Open
+  Library and Inventaire circuit state, and Kindle-job state without adding a
+  blocking external probe.
 - `POST /api/metrics/web-vitals` validates and records small LCP, CLS, and INP
   payloads sent by the browser.
 
@@ -443,7 +611,7 @@ and store it under `LIBFLIX_DATA_DIR/covers`. Responses expose
 | `_download_filters.html` | Shared collapsible download filter form |
 | `index.html` | Fixed-height hero, cover-stack carousel, homepage shelves, horizontal shelf infinite scroll |
 | `category.html` | Category grid and vertical infinite scroll |
-| `discover.html` | Open Library discovery result cards and vertical infinite scroll |
+| `discover.html` | Intent switch, topic Start here / Explore layout, reason chips, compact topic filters, identity cards, partial-source status, and vertical infinite scroll |
 | `book.html` | Preview spotlight, async description, similar shelf, inline edition results |
 | `search.html` | Direct download edition search page |
 | `results.html` | Older server-rendered download table fallback |
@@ -689,6 +857,8 @@ and WebKit scrollbar hiding rules.
 |---|---|---|---|
 | Open Library JSON | memory | `ol:{path}:{params}` | 1 hour fresh |
 | Open Library JSON | SQLite `api_cache.sqlite3` | SHA-256 of request key | 6 hours fresh; up to 90 days stale |
+| Inventaire JSON | memory + SQLite | `inventaire:{path}:{params}` | 6 hours fresh; up to 7 days stale |
+| Complete topic window | memory + SQLite | `topic-discover:<expansion>:<ranker>:<lang>:<query>:<filters>` | 30 minutes fresh; up to 24 hours stale |
 | Chinese title resolution | memory + SQLite | `chinese_title:v1:<ol_key>` | 30 days |
 | CN English display title | memory + SQLite | `english_title:v1:<ol_key>` | 30 days |
 | Assembled book detail | memory + SQLite | `book_detail:v5:<lang>:<work>` | 7 days fresh; up to 90 days stale |
@@ -713,11 +883,33 @@ All four language/mode shelf files are loaded before Flask begins serving.
 Network refresh is not part of startup: a stale requested shelf set schedules a
 single delayed background refresh guarded by `(language, mode)`.
 
+Topic cache keys include normalized query, active language, all four bounded
+filters, expansion version, and ranker version. The cache stores the complete
+ranked window before pagination, then page one takes up to six `Start here`
+items and all pages slice the remaining Explore list in 30-book chunks. This
+makes pagination stable; a content-derived snapshot id rejects cross-window
+page mixing, prevents cross-page duplicates, and avoids adding incompatible
+provider-reported totals.
+
+Only complete topic windows are persisted. A partial live response remains
+request-local so provider recovery can replace it immediately, and an empty
+outage is never cached as an authoritative empty search. A stale complete window
+remains preferable to a fresh partial refresh for up to 24 hours; response flags
+tell the browser when it is showing that fallback. A valid complete empty result
+can be cached because both source completion and canonical availability are
+known.
+
 The Open Library gateway spaces upstream calls, coalesces matching in-flight
 requests, and opens a 60-second circuit after three consecutive failures. A
 caller with stale data returns immediately during that circuit rather than
 adding another timeout. Background metadata refresh uses two workers and
-hard-capped pending sets for book details and recommendations.
+hard-capped pending sets for Open Library, Inventaire, book details, and
+recommendations.
+
+Inventaire uses an independent request clock, coalescing table, refresh pool,
+timeouts, stale window, failure count, and 60-second circuit. The topic
+coordinator can return useful Open Library results while Inventaire is degraded,
+or a stale complete merged window while either source refresh is incomplete.
 
 Shelf-cache startup also builds the lightweight book-hint index. Category,
 discovery, shelf, and similar-book API extraction extends that index during the
@@ -749,8 +941,9 @@ without delaying startup.
 - Every Flask response includes total request time in `Server-Timing`.
 - Open Library, download search, and cover endpoints add operation-specific
   timing entries.
-- `/api/health` reports local database, shelf, Open Library circuit, Kindle job,
-  and writable limiter/metrics storage state without a slow external probe.
+- `/api/health` reports local database, shelf, independent Open Library and
+  Inventaire circuit state, Kindle jobs, and writable limiter/metrics storage
+  without a slow external probe.
 - The persistent navbar records LCP, CLS, and INP when supported and sends a
   small beacon to `/api/metrics/web-vitals` when the page becomes hidden.
 - `security_runtime.py` stores bounded hourly aggregates in `metrics.sqlite3`
@@ -768,11 +961,26 @@ without delaying startup.
   `X-LibFlix-Client-IP` rewrite. See [Performance and resilience](docs/PERFORMANCE_AND_RESILIENCE.md)
   for tuning, failure behavior, and verification.
 
-## Discovery Source
+## Discovery Source Boundaries
 
-Open Library remains the only source used to discover, rank, or label browse
-cards. Douban is used only as an optional ISBN metadata fallback for the
-secondary Chinese title on a book page when a Chinese Open Library edition lacks
-Han characters. The language URL helper strips obsolete source parameters from
-older links so current routes stay focused on mode, language, category, and
-query state.
+Open Library remains the canonical source for homepage/category browsing, work
+identity, detail hydration, descriptions, covers, similar books, edition
+aliases, book routes, and the handoff into download matching. Strict title,
+author, ISBN, and Open Library-id discovery uses Open Library alone.
+
+Broad-topic discovery can also use Inventaire work search and a small approved
+set of semantic Wikidata subject claims. Inventaire contributes a candidate only
+when its `P648` claim resolves directly to an Open Library work. The local
+relevance gate and ranker may use provider rank, semantic agreement, and bounded
+popularity, but rendered identity and covers remain Open Library canonical.
+
+Douban is used only as an optional ISBN metadata fallback for the secondary
+Chinese title on a book page when a Chinese Open Library edition lacks Han
+characters. It is not a topic ranking source. The language URL helper strips
+obsolete source parameters from older links so current routes stay focused on
+mode, language, category, query, intent, and bounded filter state.
+
+No source creates a user profile. LibFlix has no accounts, personal library,
+reading history, reading-progress tracking, or personalized recommendation
+model; topic expansion and ranking are deterministic for the same query,
+language, filters, provider payloads, and versioned ranker.
