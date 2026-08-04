@@ -1814,6 +1814,20 @@ footer {
 
 .similar-loading {
   min-height: 198px !important;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--app-muted);
+  font-size: .84rem;
+}
+
+.spinner-book {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--app-line);
+  border-top-color: var(--app-text);
+  border-radius: 50%;
+  animation: appSpin .8s linear infinite;
 }
 
 .similar-empty {
@@ -1822,6 +1836,20 @@ footer {
   align-items: center;
   color: var(--app-muted);
   font-size: .84rem;
+}
+
+.similar-retry {
+  min-height: 132px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  color: var(--app-muted);
+  font-size: .84rem;
+}
+
+.similar-retry .download-retry {
+  margin-top: 12px;
 }
 
 @keyframes appSpin {

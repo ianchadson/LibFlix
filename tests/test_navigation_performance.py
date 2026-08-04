@@ -59,5 +59,46 @@ class DiscoveryShellTests(unittest.TestCase):
         self.assertIn(b"Cached result", response.data)
 
 
+class SimilarRecommendationShellTests(unittest.TestCase):
+    def test_book_page_supports_author_only_recommendations(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+
+        self.assertIn(
+            "similarSubjects.length || bookAuthor || bookAuthors.length",
+            template,
+        )
+        self.assertIn("subjects.slice(0, 2).forEach", template)
+        self.assertNotIn("similarVisible && similarSubjects.length", template)
+
+    def test_refreshing_recommendations_keep_polling_without_false_empty(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+
+        self.assertIn("similarRetryDeadline = Date.now() + 30000", template)
+        self.assertIn("if (data.refreshing && (!data.books || !data.books.length))", template)
+        self.assertIn("renderSimilarRetry('Recommendations are taking longer than expected.')", template)
+        self.assertNotIn("similarRetryCount < 2", template)
+        self.assertNotIn("No similar books are available.", template)
+
+    def test_similar_requests_start_in_background_and_abort_on_cleanup(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+
+        self.assertIn("requestSimilarIfReady(true), 500", template)
+        self.assertIn("activeDetailRequest?.abort();", template)
+        self.assertIn("activeSimilarRequest?.abort();", template)
+        self.assertIn("activeSimilarRequest !== controller", template)
+        self.assertIn("pageDisposed = true;", template)
+        self.assertIn("cache: 'no-store'", template)
+
+    def test_recommendation_retries_honor_server_delay_and_detail_failures(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+
+        self.assertIn("retryAfterMilliseconds(response)", template)
+        self.assertIn("scheduleSimilarRetry(error.retryAfterMs)", template)
+        self.assertIn("similarRetryCount >= 8", template)
+        self.assertIn("if (!hasSimilarSeed())", template)
+        self.assertIn("loadBookDetails();", template)
+        self.assertIn("Finding similar books…", template)
+
+
 if __name__ == "__main__":
     unittest.main()

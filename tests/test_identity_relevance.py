@@ -368,10 +368,27 @@ class SimilarBookRelevanceTests(unittest.TestCase):
             "cover_i": cover,
         }
 
+    def test_subject_selection_prefers_specific_topics_over_catalog_qualifiers(self):
+        subjects = [
+            "Businesspeople, juvenile literature",
+            "Business, juvenile literature",
+            "Business, biography",
+            "nyt:business-books=2016-05-08",
+            "Biography",
+            "Sporting goods industry",
+            "Nike (Firm)",
+        ]
+
+        self.assertEqual(
+            app.similar_subject_candidates(subjects),
+            ["Sporting goods industry", "Nike (Firm)"],
+        )
+
     def test_similar_books_require_shared_context_or_same_author(self):
         shared = self.record(
             "/works/OL2W", "The Innovators", "Walter Isaacson", 2
         )
+        shared["subject"] = ["Computer engineers", "Technology executives"]
         same_author = self.record(
             "/works/OL3W", "Einstein", "Walter Isaacson", 3
         )
@@ -399,6 +416,188 @@ class SimilarBookRelevanceTests(unittest.TestCase):
             )
 
         self.assertEqual(ol_get.call_count, app.SIMILAR_MAX_ORIGIN_QUERIES)
+        self.assertEqual(
+            [book["ol_key"] for book in books],
+            ["/works/OL2W", "/works/OL3W"],
+        )
+
+    def test_author_only_similar_books_return_same_author(self):
+        same_author = self.record(
+            "/works/OL2W", "Klara and the Sun", "Kazuo Ishiguro", 2
+        )
+
+        with patch.object(
+            app,
+            "ol_get",
+            return_value={"docs": [same_author]},
+        ) as ol_get:
+            books = app.build_similar_books(
+                "/works/OL1W",
+                [],
+                "en",
+                current_title="Never Let Me Go",
+                current_authors=["Kazuo Ishiguro"],
+            )
+
+        self.assertEqual(ol_get.call_count, 1)
+        self.assertEqual(
+            ol_get.call_args.args[1]["q"],
+            'author:"Kazuo Ishiguro" language:eng',
+        )
+        self.assertEqual([book["ol_key"] for book in books], ["/works/OL2W"])
+
+    def test_api_similar_accepts_author_only_seed(self):
+        with (
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_cache_get", return_value=None),
+            patch.object(app, "disk_cache_get_stale", return_value=None),
+            patch.object(app, "schedule_similar_refresh", return_value=True) as refresh,
+        ):
+            response = app.app.test_client().get("/api/similar", query_string={
+                "ol_key": "/works/OL1W",
+                "book_lang": "en",
+                "title": "Never Let Me Go",
+                "author": "Kazuo Ishiguro",
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["refreshing"])
+        refresh.assert_called_once()
+        self.assertEqual(refresh.call_args.args[2], [])
+        self.assertEqual(refresh.call_args.args[5], ["Kazuo Ishiguro"])
+
+    def test_similar_cache_key_uses_current_relevance_version(self):
+        cache_key = app.similar_cache_key(
+            "/works/OL1W",
+            ["Artificial intelligence"],
+            "en",
+            "The Age of AI",
+            ["Henry Kissinger"],
+        )
+
+        self.assertTrue(cache_key.startswith("similar:v5:"))
+
+    def test_confirmed_single_subject_candidates_backfill_after_strict_tier(self):
+        strict = self.record(
+            "/works/OL2W", "Strict intersection", "Different Author", 2
+        )
+        strict["subject"] = [
+            "Artificial intelligence",
+            "Technology and society",
+        ]
+        confirmed = self.record(
+            "/works/OL3W", "Machine Learning Foundations", "Another Author", 3
+        )
+        confirmed["subject"] = ["Artificial intelligence", "Computers"]
+        unconfirmed = self.record(
+            "/works/OL4W", "Unrelated Provider Result", "Another Author", 4
+        )
+
+        def open_library(_path, params):
+            query = params["q"]
+            if query.startswith('subject:"Artificial intelligence"'):
+                return {"docs": [strict, confirmed, unconfirmed]}
+            if query.startswith('subject:"Technology and society"'):
+                return {"docs": [strict]}
+            return {"docs": []}
+
+        with patch.object(app, "ol_get", side_effect=open_library):
+            books = app.build_similar_books(
+                "/works/OL1W",
+                ["Artificial intelligence", "Technology and society"],
+                "en",
+                current_title="The Age of AI",
+                current_authors=["Henry Kissinger"],
+            )
+
+        self.assertEqual(
+            [book["ol_key"] for book in books],
+            ["/works/OL2W", "/works/OL3W"],
+        )
+
+    def test_single_subject_backfill_does_not_dilute_three_strict_matches(self):
+        strict = [
+            self.record(f"/works/OL{index}W", f"Strict {index}", "Author", index)
+            for index in range(2, 5)
+        ]
+        for record in strict:
+            record["subject"] = [
+                "Artificial intelligence",
+                "Technology and society",
+            ]
+        loose = self.record(
+            "/works/OL5W", "Loose single-subject result", "Other Author", 5
+        )
+        loose["subject"] = ["Artificial intelligence"]
+
+        def open_library(_path, params):
+            if params["q"].startswith('subject:"Artificial intelligence"'):
+                return {"docs": [*strict, loose]}
+            if params["q"].startswith('subject:"Technology and society"'):
+                return {"docs": strict}
+            return {"docs": []}
+
+        with patch.object(app, "ol_get", side_effect=open_library):
+            books = app.build_similar_books(
+                "/works/OL1W",
+                ["Artificial intelligence", "Technology and society"],
+                "en",
+                current_title="The Age of AI",
+                current_authors=["Henry Kissinger"],
+            )
+
+        self.assertEqual(
+            [book["ol_key"] for book in books],
+            [book["key"] for book in strict],
+        )
+
+    def test_unconfirmed_dual_query_result_is_not_treated_as_related(self):
+        unrelated = self.record(
+            "/works/OL2W", "Labyrinths", "Jorge Luis Borges", 2
+        )
+        unrelated["subject"] = ["Speculative fiction", "Labyrinths"]
+
+        with patch.object(
+            app,
+            "ol_get",
+            return_value={"docs": [unrelated]},
+        ):
+            books = app.build_similar_books(
+                "/works/OL1W",
+                ["Economics", "Capital"],
+                "en",
+                current_title="The People's Marx",
+                current_authors=["Karl Marx"],
+            )
+
+        self.assertEqual(books, [])
+
+    def test_broad_single_subject_does_not_dilute_existing_strict_results(self):
+        strict = [
+            self.record("/works/OL2W", "The Neuroscience of Sleep", "A", 2),
+            self.record("/works/OL3W", "Sleep Medicine", "B", 3),
+        ]
+        for record in strict:
+            record["subject"] = ["sleep", "health & fitness"]
+        broad = self.record("/works/OL4W", "Goodnight Moon", "C", 4)
+        broad["subject"] = ["sleep", "juvenile fiction"]
+
+        def open_library(_path, params):
+            if params["q"].startswith('subject:"sleep"'):
+                return {"docs": [*strict, broad]}
+            if params["q"].startswith('subject:"health & fitness"'):
+                return {"docs": strict}
+            return {"docs": []}
+
+        with patch.object(app, "ol_get", side_effect=open_library):
+            books = app.build_similar_books(
+                "/works/OL1W",
+                ["sleep", "health & fitness"],
+                "en",
+                current_title="Why We Sleep",
+                current_authors=["Matthew Walker"],
+            )
+
         self.assertEqual(
             [book["ol_key"] for book in books],
             ["/works/OL2W", "/works/OL3W"],

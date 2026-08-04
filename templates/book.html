@@ -78,11 +78,12 @@
       <nav class="download-pagination" id="downloadPagination" aria-label="Download result pages" hidden></nav>
     </section>
 
-    <section class="similar-section" aria-labelledby="similarHeading">
+    <section class="similar-section" id="similarSection" aria-labelledby="similarHeading">
       <h2 class="shelf-title" id="similarHeading">More Like This</h2>
-      <div class="shelf-row" id="similarRow">
-        <div class="similar-loading" aria-label="Loading similar books">
-          <div class="spinner-book"></div>
+      <div class="shelf-row" id="similarRow" aria-live="polite" aria-busy="true">
+        <div class="similar-loading" role="status">
+          <div class="spinner-book" aria-hidden="true"></div>
+          <span>Finding similar books…</span>
         </div>
       </div>
     </section>
@@ -116,13 +117,20 @@
     let similarVisible = false;
     let similarRequested = false;
     let similarRetryCount = 0;
+    let similarRetryDeadline = 0;
+    let lastSimilarSeedSignature = '';
+    let activeDetailRequest = null;
+    let activeSimilarRequest = null;
+    let bookDetailRefreshing = {{ (not complete) | default(true) | tojson }};
+    let pageDisposed = false;
     let downloadRequested = false;
     let downloadState = 'idle';
     let activeDownloadQueryIndex = 0;
     let detailRetryCount = 0;
-    const detailRetryDeadline = Date.now() + 30000;
+    let detailRetryDeadline = Date.now() + 30000;
     let detailRetryTimer = null;
     let similarRetryTimer = null;
+    let similarWarmTimer = null;
     let similarObserver = null;
 
     function escapeHtml(value) {
@@ -321,17 +329,22 @@
     }
 
     function scheduleDetailRetry() {
-      if (Date.now() >= detailRetryDeadline) return false;
+      if (pageDisposed || Date.now() >= detailRetryDeadline) return false;
       detailRetryCount += 1;
       const delay = Math.min(800 + detailRetryCount * 450, 3000);
-      detailRetryTimer = window.setTimeout(loadBookDetails, delay);
+      detailRetryTimer = window.setTimeout(() => {
+        detailRetryTimer = null;
+        loadBookDetails();
+      }, delay);
       return true;
     }
 
     function applyBookDetails(data, allowRefreshRetry = true) {
-      if (!data?.success) return false;
+      if (pageDisposed || !data?.success) return false;
+      const previousSimilarSignature = similarSeedSignature();
       hydrateBookIdentity(data);
       const detailRefreshPending = Boolean(allowRefreshRetry && data.refreshing && scheduleDetailRetry());
+      bookDetailRefreshing = Boolean(data.refreshing);
       const skeleton = document.getElementById('descSkeleton');
       if (data.description) {
         bookDescription = data.description;
@@ -348,20 +361,36 @@
         skeleton.style.display = 'none';
         document.getElementById('descNone').style.display = 'block';
       }
-      if (data.similar_subjects?.length) {
+      if (Array.isArray(data.similar_subjects) && data.similar_subjects.length) {
         similarSubjects = data.similar_subjects;
-        requestSimilarIfReady();
+      }
+      const nextSimilarSignature = similarSeedSignature();
+      if (previousSimilarSignature !== nextSimilarSignature && lastSimilarSeedSignature) {
+        activeSimilarRequest?.abort();
+        activeSimilarRequest = null;
+        similarRequested = false;
+        similarRetryCount = 0;
+        similarRetryDeadline = 0;
+        if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
+        similarRetryTimer = null;
+      }
+      if (hasSimilarSeed()) {
+        renderSimilarLoading();
+        requestSimilarIfReady(true);
+      } else if (detailRefreshPending || data.refreshing) {
+        renderSimilarLoading();
       } else {
-        renderSimilarEmpty('No similar books are available.');
+        hideSimilarSection();
       }
       requestDownloadsIfReady();
       return true;
     }
 
     function loadBookDetails() {
+      if (pageDisposed) return;
       if (!olKey) {
         showNoDescription();
-        renderSimilarEmpty('No similar books are available.');
+        hideSimilarSection();
         requestDownloadsIfReady();
         return;
       }
@@ -376,13 +405,20 @@
         applyBookDetails(cachedPreview, false);
         return;
       }
-      fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang=' + encodeURIComponent(BOOK_LANG) + '&description_version=2', { cache: 'no-store' })
+      const controller = new AbortController();
+      activeDetailRequest?.abort();
+      activeDetailRequest = controller;
+      fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang=' + encodeURIComponent(BOOK_LANG) + '&description_version=2', {
+        cache: 'no-store',
+        signal: controller.signal,
+      })
         .then(response => response.json())
         .then(data => {
+          if (pageDisposed || activeDetailRequest !== controller) return;
           if (!data.success && data.refreshing && scheduleDetailRetry()) return;
           if (!applyBookDetails(data)) {
             showNoDescription();
-            renderSimilarEmpty('No similar books are available.');
+            renderSimilarRetry('Recommendations could not be loaded.');
             requestDownloadsIfReady();
             return;
           }
@@ -391,20 +427,113 @@
             window.LibFlixBookPreviewCache?.set(previewKey, data);
           }
         })
-        .catch(() => {
+        .catch(error => {
+          if (error.name === 'AbortError' || pageDisposed) return;
           if (scheduleDetailRetry()) return;
           showNoDescription();
-          renderSimilarEmpty('Similar books could not be loaded.');
+          bookDetailRefreshing = false;
+          renderSimilarRetry('Recommendations could not be loaded.');
           requestDownloadsIfReady();
+        })
+        .finally(() => {
+          if (activeDetailRequest === controller) activeDetailRequest = null;
         });
     }
 
-    function renderSimilarEmpty(message) {
-      document.getElementById('similarRow').innerHTML = '<div class="similar-empty">' + escapeHtml(message) + '</div>';
+    function hasSimilarSeed() {
+      return Boolean(similarSubjects.length || bookAuthor || bookAuthors.length);
+    }
+
+    function similarSeedSignature() {
+      return JSON.stringify({
+        subjects: similarSubjects.slice(0, 2),
+        author: String(bookAuthor || '').trim(),
+        authors: bookAuthors.slice(0, 3),
+      });
+    }
+
+    function showSimilarSection() {
+      document.getElementById('similarSection').hidden = false;
+    }
+
+    function hideSimilarSection() {
+      document.getElementById('similarSection').hidden = true;
+      document.getElementById('similarRow').setAttribute('aria-busy', 'false');
+      similarRetryDeadline = 0;
+      if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
+      similarRetryTimer = null;
+    }
+
+    function renderSimilarLoading(force = false) {
+      const row = document.getElementById('similarRow');
+      showSimilarSection();
+      row.setAttribute('aria-busy', 'true');
+      if (!force && row.querySelector('.book-card-link')) return;
+      row.innerHTML = '<div class="similar-loading" role="status"><div class="spinner-book" aria-hidden="true"></div><span>Finding similar books…</span></div>';
+    }
+
+    function renderSimilarRetry(message) {
+      const row = document.getElementById('similarRow');
+      showSimilarSection();
+      row.setAttribute('aria-busy', 'false');
+      row.innerHTML = '<div class="similar-retry" role="status"><span>' + escapeHtml(message) + '</span><button class="download-retry" type="button">Try again</button></div>';
+      row.querySelector('button').addEventListener('click', () => {
+        if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
+        similarRetryTimer = null;
+        renderSimilarLoading(true);
+        if (!hasSimilarSeed()) {
+          detailRetryCount = 0;
+          detailRetryDeadline = Date.now() + 30000;
+          bookDetailRefreshing = true;
+          loadBookDetails();
+          return;
+        }
+        similarRequested = false;
+        similarRetryCount = 0;
+        similarRetryDeadline = Date.now() + 30000;
+        requestSimilarIfReady(true);
+      });
+    }
+
+    function scheduleSimilarRetry(minimumDelay = 0) {
+      if (!similarRetryDeadline) similarRetryDeadline = Date.now() + 30000;
+      if (pageDisposed || similarRetryCount >= 8) return false;
+      similarRequested = false;
+      similarRetryCount += 1;
+      const backoff = Math.min(1600 + similarRetryCount * 700, 4000);
+      const delay = Math.max(backoff, Math.min(Number(minimumDelay) || 0, 60000));
+      if (minimumDelay > 0) {
+        similarRetryDeadline = Math.max(similarRetryDeadline, Date.now() + delay + 5000);
+      } else if (Date.now() >= similarRetryDeadline) {
+        return false;
+      }
+      if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
+      similarRetryTimer = window.setTimeout(() => {
+        similarRetryTimer = null;
+        requestSimilarIfReady(true);
+      }, delay);
+      return true;
+    }
+
+    function retryAfterMilliseconds(response) {
+      const value = response.headers.get('Retry-After');
+      if (!value) return 0;
+      const seconds = Number(value);
+      if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+      const retryAt = Date.parse(value);
+      return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : 0;
     }
 
     function fetchSimilar(subjects) {
+      if (pageDisposed || !hasSimilarSeed()) {
+        if (bookDetailRefreshing) renderSimilarLoading();
+        else hideSimilarSection();
+        return;
+      }
       similarRequested = true;
+      if (!similarRetryDeadline) similarRetryDeadline = Date.now() + 30000;
+      const requestSignature = similarSeedSignature();
+      lastSimilarSeedSignature = requestSignature;
       const params = new URLSearchParams({
         ol_key: olKey,
         book_lang: BOOK_LANG,
@@ -415,19 +544,52 @@
         ),
       });
       subjects.slice(0, 2).forEach(subject => params.append('subject', String(subject || '').slice(0, 120)));
-      fetch('/api/similar?' + params)
-        .then(response => response.json())
+      const controller = new AbortController();
+      activeSimilarRequest?.abort();
+      activeSimilarRequest = controller;
+      fetch('/api/similar?' + params, { cache: 'no-store', signal: controller.signal })
+        .then(async response => {
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            const error = new Error(data.error || 'Recommendations could not be loaded.');
+            error.retryable = response.status === 429 || response.status >= 500;
+            error.retryAfterMs = retryAfterMilliseconds(response);
+            throw error;
+          }
+          return data;
+        })
         .then(data => {
-          if (data.refreshing && (!data.books || !data.books.length) && similarRetryCount < 2) {
-            similarRequested = false;
-            similarRetryCount += 1;
-            similarRetryTimer = window.setTimeout(requestSimilarIfReady, similarRetryCount * 1800);
+          if (
+            pageDisposed
+            || activeSimilarRequest !== controller
+            || requestSignature !== lastSimilarSeedSignature
+          ) return;
+          if (data.refreshing && (!data.books || !data.books.length)) {
+            renderSimilarLoading();
+            if (scheduleSimilarRetry()) return;
+            renderSimilarRetry('Recommendations are taking longer than expected.');
             return;
           }
-          if (!data.success || !data.books.length) {
-            renderSimilarEmpty('No similar books are available.');
+          if (!data.success) {
+            if (scheduleSimilarRetry()) {
+              renderSimilarLoading();
+              return;
+            }
+            renderSimilarRetry(data.error || 'Recommendations could not be loaded.');
             return;
           }
+          if (!data.books?.length) {
+            if (bookDetailRefreshing && scheduleSimilarRetry()) {
+              renderSimilarLoading();
+              return;
+            }
+            hideSimilarSection();
+            return;
+          }
+          similarRetryDeadline = 0;
+          similarRetryCount = 0;
+          if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
+          similarRetryTimer = null;
           const html = data.books.map(book => {
             const href = bookUrl(book);
             const title = escapeHtml(book.title || 'Untitled');
@@ -437,14 +599,33 @@
               : '<div class="placeholder">?</div>';
             return '<a href="' + href + '" class="book-card-link"><div class="book-card" data-ol-key="' + escapeHtml(book.ol_key || '') + '" data-title="' + title + '" data-author="' + author + '">' + cover + '<div class="info"><div class="t">' + title + '</div>' + (author ? '<div class="a">' + author + '</div>' : '') + '</div></div></a>';
           }).join('');
-          document.getElementById('similarRow').innerHTML = html;
-          window.LibFlixCoverLoader?.register(document.getElementById('similarRow'));
+          const row = document.getElementById('similarRow');
+          showSimilarSection();
+          row.setAttribute('aria-busy', 'false');
+          row.innerHTML = html;
+          window.LibFlixCoverLoader?.register(row);
         })
-        .catch(() => renderSimilarEmpty('Similar books could not be loaded.'));
+        .catch(error => {
+          if (
+            error.name === 'AbortError'
+            || pageDisposed
+            || activeSimilarRequest !== controller
+          ) return;
+          if (error.retryable !== false && scheduleSimilarRetry(error.retryAfterMs)) {
+            renderSimilarLoading();
+            return;
+          }
+          renderSimilarRetry('Recommendations could not be loaded.');
+        })
+        .finally(() => {
+          if (activeSimilarRequest === controller) activeSimilarRequest = null;
+        });
     }
 
-    function requestSimilarIfReady() {
-      if (!similarRequested && similarVisible && similarSubjects.length) fetchSimilar(similarSubjects);
+    function requestSimilarIfReady(force = false) {
+      if (!pageDisposed && !similarRetryTimer && !similarRequested && (force || similarVisible) && hasSimilarSeed()) {
+        fetchSimilar(similarSubjects);
+      }
     }
 
     function getSearchParams(page, queryIndex) {
@@ -592,13 +773,18 @@
     }
 
     loadBookDetails();
+    similarWarmTimer = window.setTimeout(() => requestSimilarIfReady(true), 500);
     if (BOOK_LANG !== 'cn' && downloadTitle.trim() && bookTitle !== 'Book') doSearch(1, 0);
     if (document.getElementById('descText').textContent.trim()) requestAnimationFrame(updateDescriptionClamp);
 
     window.LibFlixPageCleanup = () => {
+      pageDisposed = true;
       if (activeSearch) activeSearch.abort();
+      activeDetailRequest?.abort();
+      activeSimilarRequest?.abort();
       if (detailRetryTimer) window.clearTimeout(detailRetryTimer);
       if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
+      if (similarWarmTimer) window.clearTimeout(similarWarmTimer);
       similarObserver?.disconnect();
     };
   </script>

@@ -136,9 +136,10 @@ KNOWN_WORK_METADATA = {
 }
 GENERIC_SIMILAR_SUBJECTS = {
     "action/adventure", "biography", "business", "competition", "contests",
-    "fantasy", "fiction", "games", "history", "independence",
+    "fantasy", "fiction", "games", "health & fitness", "history", "independence",
     "interdependence", "interpersonal relations", "juvenile fiction",
-    "juvenile works", "open library staff picks", "personal narratives",
+    "juvenile works", "new york times bestseller", "open library staff picks",
+    "personal narratives",
     "poverty", "psychology", "science", "self-help", "sisters", "survival",
     "teen fiction", "television programs",
 }
@@ -1030,6 +1031,7 @@ def similar_subject_candidates(subjects):
     if series:
         return series[:1]
     candidates = []
+    catalog_qualified = []
     seen = set()
     for subject in subjects:
         normalized = subject.casefold()
@@ -1042,10 +1044,19 @@ def similar_subject_candidates(subjects):
         ):
             continue
         seen.add(normalized)
-        candidates.append(subject)
-        if len(candidates) == 2:
-            break
-    return candidates or subjects[:1]
+        target = catalog_qualified if any(
+            qualifier in normalized
+            for qualifier in (
+                "juvenile literature",
+                ", biography",
+                ", fiction",
+                ", history",
+                ", personal narratives",
+            )
+        ) else candidates
+        target.append(subject)
+    selected = [*candidates, *catalog_qualified]
+    return selected[:2] or subjects[:1]
 
 def resolve_chinese_title(ol_key):
     if not re.fullmatch(r"/works/OL\d+W", ol_key or ""):
@@ -3219,7 +3230,7 @@ def similar_cache_key(ol_key, subjects, lang, current_title="", current_authors=
         normalize_match_text(value)
         for value in bounded_identity_values([current_title, current_authors], limit=7)
     )
-    return f"similar:v4:{lang}:{ol_key}:{normalized}:{identity}"
+    return f"similar:v5:{lang}:{ol_key}:{normalized}:{identity}"
 
 def build_similar_books(
     ol_key,
@@ -3275,12 +3286,35 @@ def build_similar_books(
                 "book": book,
                 "record": record,
                 "matches": 0,
+                "confirmed_subject_matches": 0,
+                "confirmed_specific_subject_matches": 0,
                 "author_source": False,
                 "order": sequence,
             })
             if key not in seen_in_source:
                 if source[0] == "subject":
-                    entry["matches"] += 1
+                    source_subject = normalize_match_text(source[1])
+                    record_subjects = {
+                        normalize_match_text(subject)
+                        for subject in bounded_identity_values(
+                            record.get("subject"),
+                            limit=40,
+                        )
+                    }
+                    if source_subject and source_subject in record_subjects:
+                        entry["matches"] += 1
+                        entry["confirmed_subject_matches"] += 1
+                        if (
+                            str(source[1]).strip().casefold() not in GENERIC_SIMILAR_SUBJECTS
+                            and len([
+                                term for term in re.findall(
+                                    r"[a-z0-9]+",
+                                    str(source[1]).casefold(),
+                                )
+                                if term not in {"and", "of", "the"}
+                            ]) >= 2
+                        ):
+                            entry["confirmed_specific_subject_matches"] += 1
                 else:
                     entry["author_source"] = True
                 seen_in_source.add(key)
@@ -3330,11 +3364,17 @@ def build_similar_books(
         candidates.values(),
         key=lambda entry: (-candidate_rank(entry), entry["order"]),
     )
-    for entry in ranked:
+
+    def append_candidate(entry):
         book = entry["book"]
         title_key = normalize_title(book.get("title", ""))
         if not title_key or title_key in seen_titles:
-            continue
+            return False
+        seen_titles.add(title_key)
+        books.append(book)
+        return True
+
+    for entry in ranked:
         if required_subject_matches > 1 and not (
             entry["matches"] >= required_subject_matches
             or entry.get("author_score", 0) >= 180
@@ -3344,10 +3384,20 @@ def build_similar_books(
             continue
         if not entry["matches"] and entry.get("author_score", 0) < 180:
             continue
-        seen_titles.add(title_key)
-        books.append(book)
-        if len(books) == 12:
+        append_candidate(entry)
+        if len(books) >= 12:
             break
+
+    # Preserve the strict intersection/same-author tier above, then fill an
+    # otherwise sparse shelf with candidates whose returned Open Library record
+    # explicitly confirms one of the selected multi-token subject sources.
+    if required_subject_matches > 1 and len(books) < 3:
+        for entry in ranked:
+            if not entry.get("confirmed_specific_subject_matches"):
+                continue
+            append_candidate(entry)
+            if len(books) >= 6:
+                break
     return (books, complete) if with_status else books
 
 def similar_empty_cache_key(cache_key):
@@ -3433,8 +3483,8 @@ def api_similar():
         parse_bounded_json_list(request.args.get("author_aliases"), 6),
     ], limit=6)
     lang = get_book_lang()
-    if not subjects:
-        return jsonify({"success": False, "error": "No subject"})
+    if not subjects and not current_authors:
+        return jsonify({"success": False, "error": "No subject or author"})
     if not re.fullmatch(r"/works/OL\d+W", ol_key):
         return jsonify({"success": False, "error": "Invalid Open Library work"}), 400
     cache_key = similar_cache_key(
