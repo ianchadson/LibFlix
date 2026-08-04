@@ -40,6 +40,9 @@
     .inf-loading { text-align: center; padding: 1.5rem; color: #666; display: none; }
     .inf-loading .spinner-sm { width: 28px; height: 28px; border: 3px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto; }
     .scroll-sentinel { height: 1px; }
+    .initial-results-loading { min-height:220px; display:flex; align-items:center; justify-content:center; gap:10px; color:#777; font-size:.82rem; }
+    .initial-results-loading .spinner-sm { width:28px; height:28px; border:3px solid rgba(229,9,20,.2); border-top-color:#e50914; border-radius:50%; animation:spin .8s linear infinite; }
+    .initial-results-loading a { color:#fff; font-weight:700; }
     @media (max-width: 992px) {
       .cat-tab { font-size: .7rem; padding: 2px 8px; }
       .navbar-brand { font-size: 1.1rem; }
@@ -63,12 +66,16 @@
     </section>
 
     <div class="book-grid" id="bookGrid">
-      {% for book in books %}
+      {% for book in books[:12] %}
       {% include "_book_card.html" %}
       {% endfor %}
     </div>
 
-    {% if not books %}
+    {% if initial_loading | default(false) %}
+    <div class="initial-results-loading" id="initialResultsLoading" role="status" aria-live="polite">
+      <span class="spinner-sm" aria-hidden="true"></span><span>Finding books</span>
+    </div>
+    {% elif not books %}
     <div class="empty-state" id="emptyState">
       {% if search_unavailable %}
       Book search is temporarily unavailable.<a href="{{ request.url }}">Try again</a>
@@ -88,12 +95,18 @@
     const QUERY = {{ query | tojson }};
     const MODE = {{ mode | tojson if mode else 'nonfiction' | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
+    const INITIAL_BATCH_SIZE = 12;
+    const REQUESTED_PAGE = {{ requested_page | default(page) | int }};
+    let initialLoading = {{ (initial_loading | default(false)) | tojson }};
+    let pendingBooks = {{ books[12:] | tojson }};
     let currentPage = {{ page | int }};
     let totalPages = {{ total_pages | int }};
     let loading = false;
-    let finished = currentPage >= totalPages;
+    let finished = !initialLoading && currentPage >= totalPages && !pendingBooks.length;
     let observer = null;
     let fillTimer = null;
+    let meaningfulScroll = false;
+    const scrollOrigin = window.scrollY;
     const scrollSentinel = document.getElementById('scrollSentinel');
     const infLoading = document.getElementById('infLoading');
 
@@ -111,7 +124,7 @@
     }
 
     function setLoading(on) {
-      infLoading.style.display = on ? 'block' : 'none';
+      infLoading.style.display = on && !initialLoading ? 'block' : 'none';
     }
 
     function finishLoading() {
@@ -130,33 +143,83 @@
         card.className = 'book-card-link';
         const imgFallback = 'this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';';
         card.innerHTML = '<div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">' +
-          (b.cover_url ? '<div class="cover-skeleton"></div><img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + imgFallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>' : '<div class="placeholder">?</div>') +
+          (b.cover_url ? '<div class="cover-skeleton"></div><img data-cover-src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + imgFallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>' : '<div class="placeholder">?</div>') +
           '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' +
           (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') +
           '</div></div>';
         grid.appendChild(card);
       }
+      window.LibFlixCoverLoader?.register(grid);
+    }
+
+    function renderNextBatch() {
+      if (!pendingBooks.length) return 0;
+      const batch = pendingBooks.splice(0, INITIAL_BATCH_SIZE);
+      renderBooks(batch);
+      if (!pendingBooks.length && currentPage >= totalPages) finishLoading();
+      return batch.length;
+    }
+
+    function showEmptyResults(message, retry = false) {
+      document.getElementById('initialResultsLoading')?.remove();
+      if (document.getElementById('bookGrid').children.length) return;
+      const empty = document.createElement('div');
+      empty.className = 'empty-state';
+      empty.id = 'emptyState';
+      empty.textContent = message;
+      if (retry) {
+        const link = document.createElement('a');
+        link.href = window.location.href;
+        link.textContent = 'Try again';
+        empty.appendChild(link);
+      }
+      document.getElementById('bookGrid').insertAdjacentElement('afterend', empty);
     }
 
     function loadMore() {
-      if (loading || finished || currentPage >= totalPages) return;
+      if (loading || finished) return;
+      if (renderNextBatch()) return;
+      if (!meaningfulScroll && !initialLoading) return;
+      const nextPage = initialLoading ? REQUESTED_PAGE : currentPage + 1;
+      if (!initialLoading && currentPage >= totalPages) {
+        finishLoading();
+        return;
+      }
       loading = true;
       setLoading(true);
-      const nextPage = currentPage + 1;
       fetch('/api/discover?q=' + encodeURIComponent(QUERY) + '&page=' + nextPage + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
         .then(r => r.json())
         .then(data => {
           if (!data.success || !data.books.length) {
-            totalPages = nextPage;
+            initialLoading = false;
+            totalPages = Number(data.total_pages) || nextPage;
+            showEmptyResults(data.success
+              ? 'No books found. Try a different title or author.'
+              : 'Book search is temporarily unavailable.', !data.success);
             finishLoading();
             return;
           }
-          renderBooks(data.books);
+          pendingBooks.push(...data.books);
           currentPage = data.page || nextPage;
           totalPages = data.total_pages || totalPages;
-          if (currentPage >= totalPages) finishLoading();
+          initialLoading = false;
+          document.getElementById('initialResultsLoading')?.remove();
+          renderNextBatch();
         })
-        .catch(() => {})
+        .catch(() => {
+          initialLoading = false;
+          const initial = document.getElementById('initialResultsLoading');
+          if (initial) {
+            initial.replaceChildren();
+            const message = document.createElement('span');
+            message.textContent = 'Book search is temporarily unavailable.';
+            const retry = document.createElement('a');
+            retry.href = window.location.href;
+            retry.textContent = 'Try again';
+            initial.append(message, retry);
+          }
+          finishLoading();
+        })
         .finally(() => {
           loading = false;
           setLoading(false);
@@ -169,24 +232,26 @@
     }
 
     function maybeLoadMore() {
+      if (Math.abs(window.scrollY - scrollOrigin) >= Math.min(180, window.innerHeight * .22)) meaningfulScroll = true;
       if (nearPageBottom()) loadMore();
     }
 
     function fillViewportIfNeeded() {
-      if (!finished && document.documentElement.scrollHeight <= window.innerHeight + 120) {
-        loadMore();
+      if (!finished && pendingBooks.length && document.documentElement.scrollHeight <= window.innerHeight + 120) {
+        if (renderNextBatch()) fillTimer = window.setTimeout(fillViewportIfNeeded, 60);
       }
     }
 
     if ('IntersectionObserver' in window && scrollSentinel) {
       observer = new IntersectionObserver(entries => {
-        if (entries.some(entry => entry.isIntersecting)) loadMore();
+        if (entries.some(entry => entry.isIntersecting) && (pendingBooks.length || meaningfulScroll)) loadMore();
       }, { rootMargin: '700px 0px' });
       observer.observe(scrollSentinel);
     }
 
     window.addEventListener('scroll', maybeLoadMore, { passive: true });
     window.addEventListener('resize', fillViewportIfNeeded);
+    if (initialLoading) loadMore();
     fillTimer = window.setTimeout(fillViewportIfNeeded, 250);
     window.LibFlixPageCleanup = () => {
       observer?.disconnect();

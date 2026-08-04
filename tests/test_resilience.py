@@ -1,3 +1,4 @@
+import io
 import os
 import sqlite3
 import tempfile
@@ -70,7 +71,7 @@ class CrossLanguageDetailTests(TemporaryCacheTest):
             "success": True,
             "title": "Steve Jobs",
             "description": "A complete cached English description.",
-            "cover_url": "/olcover/12374726/M",
+            "cover_url": "/olcover/12374726/M.webp",
             "subjects": ["Biography"],
             "similar_subjects": ["Biography"],
             "complete": True,
@@ -79,7 +80,7 @@ class CrossLanguageDetailTests(TemporaryCacheTest):
         detail = app.fallback_book_detail("OL16085155W", "cn")
 
         self.assertEqual(detail["description"], "A complete cached English description.")
-        self.assertEqual(detail["cover_url"], "/olcover/12374726/M")
+        self.assertEqual(detail["cover_url"], "/olcover/12374726/M.webp")
         self.assertEqual(detail["subjects"], ["Biography"])
         self.assertFalse(detail["complete"])
 
@@ -416,10 +417,19 @@ class DiscoveryFallbackTests(TemporaryCacheTest):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"temporarily unavailable", response.data)
         self.assertIn(b"Try again", response.data)
-        self.assertEqual(response.headers["Cache-Control"], "no-store")
+        self.assertIn("private", response.headers["Cache-Control"])
 
 
 class CoverSelectionTests(unittest.TestCase):
+    def test_legacy_cached_cover_urls_are_upgraded_to_canonical_webp(self):
+        books = app.canonicalize_book_covers([
+            {"title": "Legacy", "cover_url": "/olcover/12345/M"},
+            {"title": "Archive", "cover_url": "/iacover/example-id/S"},
+        ])
+
+        self.assertEqual(books[0]["cover_url"], "/olcover/12345/M.webp")
+        self.assertEqual(books[1]["cover_url"], "/iacover/example-id/M.webp")
+
     def test_negative_cover_sentinel_is_not_a_cover(self):
         record = {
             "key": "/works/OL1W",
@@ -450,16 +460,18 @@ class CoverSelectionTests(unittest.TestCase):
 
         book = app.extract_book(record, "en", allow_missing_cover=False)
 
-        self.assertEqual(book["cover_url"], "/olcover/14757696/M")
+        self.assertEqual(book["cover_url"], "/olcover/14757696/M.webp")
 
 
 class CoverFailureCacheTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         app.COVER_FAILURES.clear()
+        app.COVER_VALIDATED_FILES.clear()
 
     def tearDown(self):
         app.COVER_FAILURES.clear()
+        app.COVER_VALIDATED_FILES.clear()
         self.tempdir.cleanup()
 
     def test_archive_not_found_image_is_rejected_and_negatively_cached(self):
@@ -584,6 +596,162 @@ class CoverFailureCacheTests(unittest.TestCase):
         self.assertEqual(result, (None, False))
         self.assertNotIn(cache_path, app.COVER_FAILURES)
         get.assert_not_called()
+
+    def test_cover_failure_marker_is_shared_between_workers(self):
+        cache_path = os.path.join(self.tempdir.name, "cover.webp")
+        app.remember_cover_failure(cache_path)
+        app.COVER_FAILURES.clear()
+
+        self.assertTrue(app.recent_cover_failure(cache_path))
+
+        marker = app.cover_failure_marker_path(cache_path)
+        old = time.time() - app.COVER_NEGATIVE_TTL - 1
+        os.utime(marker, (old, old))
+        app.COVER_FAILURES.clear()
+        self.assertFalse(app.recent_cover_failure(cache_path))
+        self.assertFalse(os.path.exists(marker))
+
+
+class CoverPipelineTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.original_cover_dir = app.COVER_CACHE_DIR
+        app.COVER_CACHE_DIR = self.tempdir.name
+        app.COVER_FAILURES.clear()
+        app.COVER_VALIDATED_FILES.clear()
+
+    def tearDown(self):
+        app.COVER_CACHE_DIR = self.original_cover_dir
+        app.COVER_FAILURES.clear()
+        app.COVER_VALIDATED_FILES.clear()
+        self.tempdir.cleanup()
+
+    @staticmethod
+    def source_image_bytes():
+        output = io.BytesIO()
+        app.Image.new("RGB", (800, 1200), "navy").save(output, format="JPEG")
+        return output.getvalue()
+
+    @staticmethod
+    def image_response(content, url):
+        class ImageResponse:
+            headers = {"Content-Type": "image/jpeg"}
+
+            @staticmethod
+            def raise_for_status():
+                return None
+
+        response = ImageResponse()
+        response.content = content
+        response.url = url
+        return response
+
+    @unittest.skipIf(app.Image is None, "Pillow is required for optimized cover tests")
+    def test_large_openlibrary_fetch_generates_all_variants_once(self):
+        source_url = "https://covers.openlibrary.org/b/id/123-L.jpg"
+        response = self.image_response(self.source_image_bytes(), source_url)
+        with patch.object(app.SESSION, "get", return_value=response) as get:
+            result = app.ensure_cover_cached("openlibrary", "123", "L", source_url)
+            medium = app.ensure_cover_cached(
+                "openlibrary",
+                "123",
+                "M",
+                "https://covers.openlibrary.org/b/id/123-M.jpg",
+            )
+
+        self.assertEqual(result, (app.cover_cache_path("openlibrary", "123", "L"), False))
+        self.assertEqual(medium, (app.cover_cache_path("openlibrary", "123", "M"), True))
+        get.assert_called_once()
+        for size in ("S", "M", "L"):
+            self.assertTrue(app.cover_cache_file_is_valid(app.cover_cache_path("openlibrary", "123", size)))
+
+    @unittest.skipIf(app.Image is None, "Pillow is required for optimized cover tests")
+    def test_medium_openlibrary_fetch_does_not_create_low_quality_large_variant(self):
+        source_url = "https://covers.openlibrary.org/b/id/456-M.jpg"
+        response = self.image_response(self.source_image_bytes(), source_url)
+        with patch.object(app.SESSION, "get", return_value=response):
+            app.ensure_cover_cached("openlibrary", "456", "M", source_url)
+
+        self.assertTrue(os.path.exists(app.cover_cache_path("openlibrary", "456", "S")))
+        self.assertTrue(os.path.exists(app.cover_cache_path("openlibrary", "456", "M")))
+        self.assertFalse(os.path.exists(app.cover_cache_path("openlibrary", "456", "L")))
+
+    @unittest.skipIf(app.Image is None, "Pillow is required for optimized cover tests")
+    def test_successful_validation_fingerprint_avoids_reopening_image(self):
+        cache_path = app.cover_cache_path("openlibrary", "789", "M")
+        app.write_optimized_cover(self.source_image_bytes(), cache_path, "M")
+        app.COVER_VALIDATED_FILES.clear()
+        image_open = app.Image.open
+
+        with patch.object(app.Image, "open", wraps=image_open) as open_image:
+            self.assertTrue(app.cover_cache_file_is_valid(cache_path))
+            self.assertTrue(app.cover_cache_file_is_valid(cache_path))
+
+        self.assertEqual(open_image.call_count, 1)
+
+    def test_identity_lock_is_shared_by_all_sizes(self):
+        medium = app.cover_cache_path("openlibrary", "same", "M")
+        large = app.cover_cache_path("openlibrary", "same", "L")
+
+        self.assertEqual(
+            app.cover_identity_lock_path("openlibrary", "same", medium),
+            app.cover_identity_lock_path("openlibrary", "same", large),
+        )
+
+    def test_extension_cover_routes_are_canonical_without_redirects(self):
+        md5 = "a" * 32
+        download_url = app.download_cover_url(md5, "123000")
+        self.assertEqual(download_url, f"/cover/{md5}/S.webp?dir=123000")
+        self.assertEqual(app.open_library_cover_url(123, "M"), "/olcover/123/M.webp")
+        self.assertEqual(app.archive_cover_url("archive-id", "M"), "/iacover/archive-id/M.webp")
+
+        with patch.object(app, "cached_cover_response", return_value=("cover", 200)):
+            client = app.app.test_client()
+            for url in (
+                download_url,
+                "/olcover/123/M.webp",
+                "/iacover/archive-id/M.webp",
+            ):
+                response = client.get(url, follow_redirects=False)
+                self.assertEqual(response.status_code, 200, url)
+                self.assertNotIn("Location", response.headers, url)
+
+    def test_warm_plan_covers_every_trending_book_and_possible_hero(self):
+        shelves = [{
+            "name": "Trending",
+            "books": [
+                {"cover_url": app.open_library_cover_url(1000 + index)}
+                for index in range(20)
+            ],
+        }]
+
+        jobs = app.cover_warm_jobs_for_shelves(shelves)
+
+        self.assertEqual(jobs[:16], [(str(1000 + index), "L") for index in range(16)])
+        self.assertEqual(jobs[16:], [(str(1000 + index), "M") for index in range(20)])
+
+    def test_warm_marker_is_written_only_after_batch_finishes(self):
+        marker = os.path.join(self.tempdir.name, ".warm-complete")
+        marker_seen_during_warm = []
+
+        def warm(*_args, **_kwargs):
+            marker_seen_during_warm.append(os.path.exists(marker))
+            return ("cover", False)
+
+        with patch.object(app, "ensure_cover_cached", side_effect=warm):
+            completed = app._run_cover_warm_batch([("123", "L")], marker)
+
+        self.assertTrue(completed)
+        self.assertEqual(marker_seen_during_warm, [False])
+        self.assertTrue(os.path.exists(marker))
+
+    def test_failed_warm_batch_does_not_write_completion_marker(self):
+        marker = os.path.join(self.tempdir.name, ".warm-complete")
+        with patch.object(app, "ensure_cover_cached", return_value=(None, False)):
+            completed = app._run_cover_warm_batch([("missing", "L")], marker)
+
+        self.assertFalse(completed)
+        self.assertFalse(os.path.exists(marker))
 
 
 class BookApiFallbackTests(unittest.TestCase):

@@ -96,9 +96,8 @@ No API key is required. Open Library is the only discovery backend.
   `Trending` across fiction and non-fiction. Cached shelf labels are normalized
   at render time so older `New & Popular` cache files do not leak into the UI.
 - **Progressively hydrated shelves** - the homepage sends stable shelf skeletons
-  in the initial document, then loads a complete 40-book row as each shelf
-  approaches the viewport. Rows never appear artificially short, while distant
-  shelves add no initial card or image cost.
+  in the initial document, then appends 12-card batches as each shelf approaches
+  the viewport or row end. Distant shelves add no initial card or image cost.
 - **Shelf-order dedupe** - books shown in an earlier homepage shelf are removed
   from all later shelves. Later shelves are refilled from deeper Open Library
   pages where possible so rows stay useful without repeating entries.
@@ -168,8 +167,10 @@ No API key is required. Open Library is the only discovery backend.
   Delivery runs as a background job, survives page navigation, and restores its
   latest status when the user returns. Interrupted source transfers resume from
   their verified byte offset instead of restarting or silently accepting a
-  partial file. SMTP credentials stay in process memory and are never written
-  to the job database.
+  partial file. Verified source files are reused for 24 hours, SMTP setup runs in
+  parallel with preparation, and upload progress reports real bytes, rate, and
+  ETA from the streamed SMTP transfer. SMTP credentials stay in process memory
+  and are never written to the job database.
 - **Kindle-ready book preparation** - immediately before upload, LibFlix applies
   the clean Open Library title to the attachment. EPUB files also receive
   missing author, language, publisher, date, description, work identifier, and
@@ -182,7 +183,9 @@ No API key is required. Open Library is the only discovery backend.
 - **Kindle-aware recommendations** - the best candidate is selected by title,
   author, language, format, file sanity, and metadata quality. The chosen row
   explains its strongest signals, while English mode rejects Chinese
-  title/author metadata and heavily demotes Chinese publisher branding.
+  title/author metadata and heavily demotes Chinese publisher branding. Among
+  equally accurate matches, the smallest plausible EPUB is selected and marked
+  `Fastest to Kindle`.
 
 ### Download Search
 
@@ -219,8 +222,8 @@ No API key is required. Open Library is the only discovery backend.
 - **Persistent optimized covers** - Open Library and download-result covers pass
   through a validated local cache. When Pillow is available, LibFlix stores
   compact size-specific WebP thumbnails; repeat requests are served from disk
-  with long browser caching. The first visible shelf is warmed in the
-  background once per day.
+  and canonical `.webp` URLs can be cached by the CDN. Likely hero covers and
+  the full Trending shelf are warmed in the background once per day.
 - **On-demand hero metadata** - only the active hero description is requested;
   later descriptions hydrate when their book becomes active.
 - **Local-first book pages** - cached card hints and assembled book details
@@ -259,8 +262,9 @@ No API key is required. Open Library is the only discovery backend.
 | `/api/kindle/jobs` | Start a background Send to Kindle delivery |
 | `/api/kindle/jobs/<job_id>` | Poll incremental delivery status |
 | `/api/sendtokindle` | Compatibility endpoint for synchronous/streaming delivery |
-| `/cover/<md5>/<size>` | Cached download-result cover |
-| `/olcover/<cover_id>/<size>` | Cached Open Library cover |
+| `/cover/<md5>/<size>.webp` | Canonical cached download-result cover |
+| `/olcover/<cover_id>/<size>.webp` | Canonical cached Open Library cover |
+| `/iacover/<archive_id>/<size>.webp` | Canonical cached Internet Archive cover |
 | `/api/health` | Local cache, source, and job health summary |
 | `/api/metrics/web-vitals` | Lightweight browser performance metric receiver |
 
@@ -273,12 +277,22 @@ No API key is required. Open Library is the only discovery backend.
 | `LIBFLIX_CONTACT` | repository URL | Contact value included in the Open Library user agent |
 | `OPENLIBRARY_MIN_INTERVAL` | `1.05` seconds | Minimum process-wide interval between upstream Open Library requests |
 | `OPENLIBRARY_CONNECT_TIMEOUT` | `3` seconds | Open Library connection timeout |
-| `OPENLIBRARY_READ_TIMEOUT` | `8` seconds | Open Library response timeout |
+| `OPENLIBRARY_READ_TIMEOUT` | `15` seconds | Open Library response timeout |
+| `KINDLE_SOURCE_CACHE_TTL` | `86400` seconds | Idle lifetime for a verified EPUB/PDF source copy |
+| `KINDLE_SOURCE_CACHE_MAX_BYTES` | `5368709120` | Shared source-cache byte quota |
+| `KINDLE_PDF_METADATA_MAX_BYTES` | `20971520` | Largest PDF rewritten solely to improve metadata |
+| `KINDLE_RELAY_HOST` | empty | Optional managed SMTP relay hostname |
+| `KINDLE_RELAY_PORT` | `587` | Managed relay TLS submission port |
+| `KINDLE_RELAY_USER` | empty | Managed relay username |
+| `KINDLE_RELAY_PASSWORD` | empty | Managed relay password |
+| `KINDLE_RELAY_SENDER` | relay username | Approved From address used by the managed relay |
 
-Runtime Send to Kindle settings are configured in the browser and stored in
-localStorage. The SMTP password is sent only when starting a delivery, remains
-in process memory for that job, and is never stored in SQLite. SMTP targets are
-restricted to public addresses on secure submission ports.
+Without a managed relay, Send to Kindle settings are configured in the browser
+and stored in localStorage. The SMTP password is sent only when starting a
+delivery, remains in process memory for that job, and is never stored in SQLite.
+SMTP targets are restricted to public addresses on secure submission ports.
+When the required `KINDLE_RELAY_*` values are present, the server uses that
+relay and browser SMTP credentials are unnecessary.
 
 These improvements are application-code changes. They do not depend on, or
 require changes to, Cloudflare configuration.
@@ -295,7 +309,9 @@ requests. They are ignored by git.
 | `shelf_cache*.json` | Historical and current shelf cache files ignored by git |
 | `covers/openlibrary/...` | Size-specific cached Open Library covers |
 | `covers/downloads/...` | Size-specific cached download-result covers |
-| `covers/.warm-started` | Daily first-shelf cover warm marker |
+| `covers/.warm-complete` | Daily successful hero/trending cover warm marker |
+| `kindle-source-cache/...` | Validated 24-hour EPUB/PDF source cache |
+| `kindle-delivery.lock` | Cross-worker Send to Kindle queue lock |
 
 Legacy `api_cache.json` data is migrated once into SQLite and removed after a
 successful migration. Shelf files and book hints are loaded before serving;
@@ -327,7 +343,7 @@ Useful local checks:
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 -m py_compile app.py downloaders/base.py downloaders/libgen.py
+python3 -m py_compile app.py book_preparation.py kindle_delivery.py downloaders/base.py downloaders/libgen.py
 python3 app.py
 ```
 

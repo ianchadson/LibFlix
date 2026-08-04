@@ -54,7 +54,6 @@
     <nav class="download-pagination" id="downloadPagination" aria-label="Download result pages" hidden></nav>
   </main>
 
-  <script data-page-script src="{{ url_for('static', filename='download-ui.js', v=asset_version) }}"></script>
   <script data-page-script>
     const MODE = {{ mode | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
@@ -153,7 +152,11 @@
     let sendingMd5 = null;
     window.sendToKindle = function (md5, title, extension, button, edition = {}) {
       const settings = window.getKindleSettings?.();
-      if (!settings) {
+      const managedRelay = window.LibFlixManagedKindleRelay === true;
+      if (!settings?.kindle || (!managedRelay && (!settings?.host || !settings?.sender || !settings?.pass))) {
+        window.LibFlixRememberPendingKindle?.(() => {
+          window.sendToKindle(md5, title, extension, button, edition);
+        });
         window.openKindleModal?.();
         window.LibFlixNotify?.('Add Kindle delivery settings first');
         return;
@@ -173,11 +176,13 @@
           cover_url: edition.coverUrl || '',
           ext: extension,
           kindle_email: settings.kindle,
-          smtp_host: settings.host,
-          smtp_port: parseInt(settings.port, 10) || 587,
-          smtp_user: settings.sender,
-          smtp_pass: settings.pass,
-          sender_email: settings.sender,
+          ...(managedRelay ? {} : {
+            smtp_host: settings.host,
+            smtp_port: parseInt(settings.port, 10) || 587,
+            smtp_user: settings.sender,
+            smtp_pass: settings.pass,
+            sender_email: settings.sender,
+          }),
         },
       })
         .catch(error => window.LibFlixNotify?.('Kindle delivery failed: ' + error.message, 'error'))

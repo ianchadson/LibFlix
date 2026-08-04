@@ -182,7 +182,7 @@
       <div class="hero-bg-layer active">
         <div class="hero-bg-cover" {% if hero.cover_url %}style="background-image:url('{{ hero.cover_url | size_url('L') }}')"{% endif %}></div>
         <div class="hero-bg-strip">
-          {% for hero_book in hero_books[:7] %}
+          {% for hero_book in hero_books[:5] %}
           {% if hero_book.cover_url %}
           <div class="hero-bg-mini" style="background-image:url('{{ hero_book.cover_url | size_url('M') }}')"></div>
           {% endif %}
@@ -278,6 +278,10 @@
     let heroCycleTimer = null;
     let pageActive = true;
     const heroDescriptionRequests = new Map();
+    const heroDescriptionRetryCounts = new Map();
+    const heroDescriptionRetryTimers = new Set();
+    const heroPrefetchImages = new Map();
+    let heroPrefetchHandle = null;
 
     function esc(s) {
       const d = document.createElement('div');
@@ -285,9 +289,17 @@
       return d.innerHTML;
     }
 
+    function localHeroCoverSrc(url, size) {
+      const value = String(url || '');
+      const match = value.match(/^(\/(?:olcover\/\d+|iacover\/[A-Za-z0-9_.-]+))(?:\/[SML])?(\.webp)?(\?.*)?$/);
+      if (!match) return '';
+      return match[1] + '/' + size + (match[2] || '') + (match[3] || '');
+    }
+
     function heroCoverSrc(url) {
       if (!url) return '';
-      if (/^\/olcover\/\d+(?:\/[SML])?$/.test(url)) return url.replace(/\/[SML]$/, '') + '/L';
+      const local = localHeroCoverSrc(url, 'L');
+      if (local) return local;
       if (url.startsWith('/')) return url;
       if (url.includes('covers.openlibrary.org/b/id/')) return url.replace(/-[SML]\.jpg(?:\?.*)?$/, '-L.jpg');
       return url.replace(/zoom=\d+/, 'zoom=5');
@@ -295,7 +307,8 @@
 
     function heroCoverMediumSrc(url) {
       if (!url) return '';
-      if (/^\/olcover\/\d+(?:\/[SML])?$/.test(url)) return url.replace(/\/[SML]$/, '') + '/M';
+      const local = localHeroCoverSrc(url, 'M');
+      if (local) return local;
       if (url.startsWith('/')) return url;
       if (url.includes('covers.openlibrary.org/b/id/')) return url.replace(/-[SML]\.jpg(?:\?.*)?$/, '-M.jpg');
       return url.replace(/zoom=\d+/, 'zoom=3');
@@ -335,7 +348,7 @@
     function heroBackdropHtml() {
       const visible = visibleHeroItems().map(item => item.book);
       const activeCover = heroCoverSrc((visible[0] || {}).cover_url || '');
-      const minis = visible.concat(HERO_BOOKS).slice(0, 7).map(book => {
+      const minis = visible.slice(0, 5).map(book => {
         const cover = heroCoverMediumSrc(book.cover_url || '');
         return cover ? '<div class="hero-bg-mini" style="background-image:' + cssUrl(cover) + '"></div>' : '';
       }).join('');
@@ -475,10 +488,18 @@
             }
           }
           if (data.refreshing && !book.description && pageActive) {
-            window.setTimeout(() => {
+            const retryCount = heroDescriptionRetryCounts.get(book.ol_key) || 0;
+            const retryDelays = [3600, 9000, 20000];
+            if (retryCount >= retryDelays.length) return book.description;
+            heroDescriptionRetryCounts.set(book.ol_key, retryCount + 1);
+            const retryTimer = window.setTimeout(() => {
+              heroDescriptionRetryTimers.delete(retryTimer);
               heroDescriptionRequests.delete(book.ol_key);
               hydrateHeroDescription(index);
-            }, 2400);
+            }, retryDelays[retryCount]);
+            heroDescriptionRetryTimers.add(retryTimer);
+          } else if (book.description) {
+            heroDescriptionRetryCounts.delete(book.ol_key);
           }
           return book.description;
         })
@@ -530,6 +551,7 @@
         dot.classList.toggle('active', i === heroIndex);
         dot.setAttribute('aria-current', i === heroIndex ? 'true' : 'false');
       });
+      scheduleNextHeroCoverPrefetch();
     }
 
     function buildHeroDots() {
@@ -549,7 +571,32 @@
     function scheduleHeroCycle() {
       if (HERO_BOOKS.length < 2) return;
       if (heroCycleTimer) clearInterval(heroCycleTimer);
+      heroDescriptionRetryTimers.forEach(timer => window.clearTimeout(timer));
+      heroDescriptionRetryTimers.clear();
       heroCycleTimer = setInterval(() => renderHero(heroIndex + 1), 8500);
+    }
+
+    function scheduleNextHeroCoverPrefetch() {
+      if (!HERO_BOOKS.length) return;
+      if (heroPrefetchHandle !== null) {
+        if ('cancelIdleCallback' in window) window.cancelIdleCallback(heroPrefetchHandle);
+        else window.clearTimeout(heroPrefetchHandle);
+      }
+      const run = () => {
+        heroPrefetchHandle = null;
+        if (!pageActive) return;
+        const nextIndex = (heroIndex + 1) % HERO_BOOKS.length;
+        const source = heroCoverSrc(HERO_BOOKS[nextIndex]?.cover_url || '');
+        if (!source || heroPrefetchImages.has(source)) return;
+        const image = new Image();
+        image.fetchPriority = 'low';
+        image.decoding = 'async';
+        image.src = source;
+        heroPrefetchImages.set(source, image);
+      };
+      heroPrefetchHandle = 'requestIdleCallback' in window
+        ? window.requestIdleCallback(run, { timeout: 1800 })
+        : window.setTimeout(run, 850);
     }
 
     buildHeroDots();
@@ -609,46 +656,22 @@
       return keys;
     }
 
-    function cardKeys(card) {
-      return bookKeys({
+    const SHELF_BATCH_SIZE = 12;
+    const claimedBookKeys = new Set();
+    const shelfQueues = new WeakMap();
+    document.querySelectorAll('.shelf .book-card').forEach(card => {
+      bookKeys({
         ol_key: card.dataset.olKey || '',
         title: card.dataset.title || '',
-        author: card.dataset.author || ''
-      });
-    }
+        author: card.dataset.author || '',
+      }).forEach(key => claimedBookKeys.add(key));
+    });
 
-    function enforceShelfPriority() {
-      const seen = new Set();
-      let removed = 0;
-      document.querySelectorAll('.shelf').forEach(shelf => {
-        shelf.querySelectorAll('.book-card').forEach(card => {
-          const keys = cardKeys(card);
-          if (keys.some(key => seen.has(key))) {
-            const wrapper = card.closest('a');
-            if (wrapper) wrapper.remove();
-            else card.remove();
-            removed += 1;
-            return;
-          }
-          keys.forEach(key => seen.add(key));
-        });
-      });
-      return removed;
-    }
-
-    function filterIncomingBooks(shelf, books) {
-      const shelves = Array.from(document.querySelectorAll('.shelf'));
-      const shelfIndex = shelves.indexOf(shelf);
-      const blocked = new Set();
-      shelves.slice(0, shelfIndex + 1).forEach(activeShelf => {
-        activeShelf.querySelectorAll('.book-card').forEach(card => {
-          cardKeys(card).forEach(key => blocked.add(key));
-        });
-      });
+    function claimIncomingBooks(books) {
       return (books || []).filter(book => {
         const keys = bookKeys(book);
-        if (keys.some(key => blocked.has(key))) return false;
-        keys.forEach(key => blocked.add(key));
+        if (keys.some(key => claimedBookKeys.has(key))) return false;
+        keys.forEach(key => claimedBookKeys.add(key));
         return true;
       });
     }
@@ -657,15 +680,36 @@
       const href = bookUrl(b);
       const fallback = 'this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';';
       const cover = b.cover_url
-        ? '<div class="cover-skeleton"></div><img src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>'
+        ? '<div class="cover-skeleton"></div><img data-cover-src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none">?</div>'
         : '<div class="placeholder">?</div>';
       return '<a href="' + href + '" class="book-card-link"><div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">' + cover + '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' + (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') + '</div></div></a>';
     }
 
+    function shelfQueue(shelf) {
+      if (!shelfQueues.has(shelf)) shelfQueues.set(shelf, []);
+      return shelfQueues.get(shelf);
+    }
+
+    function appendShelfBatch(shelf) {
+      const queue = shelfQueue(shelf);
+      if (!queue.length) return 0;
+      const batch = queue.splice(0, SHELF_BATCH_SIZE);
+      const row = shelf.querySelector('.shelf-row');
+      const btn = shelf.querySelector('.shelf-more-btn');
+      if (btn) btn.insertAdjacentHTML('beforebegin', batch.map(bookCardHtml).join(''));
+      else row?.insertAdjacentHTML('beforeend', batch.map(bookCardHtml).join(''));
+      window.LibFlixCoverLoader?.register(row);
+      if (!queue.length && Number(shelf.dataset.page || '0') >= Number(shelf.dataset.totalPages || '25')) {
+        if (btn) btn.style.display = 'none';
+      }
+      return batch.length;
+    }
+
     function loadShelfMore(shelf) {
       if (!shelf || shelf.dataset.loading === '1') return;
+      if (appendShelfBatch(shelf)) return;
       const topic = shelf.dataset.topic;
-      const nextPage = Number(shelf.dataset.page || '1') + 1;
+      const nextPage = Number(shelf.dataset.page || '0') + 1;
       const totalPages = Number(shelf.dataset.totalPages || '25');
       if (!topic || nextPage > totalPages) return;
       shelf.dataset.loading = '1';
@@ -681,7 +725,7 @@
             if (btn) btn.style.display = 'none';
             return;
           }
-          const incoming = filterIncomingBooks(shelf, data.books);
+          const incoming = claimIncomingBooks(data.books);
           shelf.dataset.page = String(data.page);
           shelf.dataset.totalPages = String(data.total_pages || totalPages);
           if (!incoming.length) {
@@ -689,12 +733,8 @@
             else setTimeout(() => maybeLoadShelfMore(shelf), 60);
             return;
           }
-          const row = shelf.querySelector('.shelf-row');
-          if (btn) btn.insertAdjacentHTML('beforebegin', incoming.map(bookCardHtml).join(''));
-          else row.insertAdjacentHTML('beforeend', incoming.map(bookCardHtml).join(''));
-          const removed = enforceShelfPriority();
-          if (removed) setTimeout(() => document.querySelectorAll('.shelf').forEach(primeShelf), 80);
-          if (data.page >= data.total_pages && btn) btn.style.display = 'none';
+          shelfQueue(shelf).push(...incoming);
+          appendShelfBatch(shelf);
         })
         .finally(() => {
           shelf.dataset.loading = '0';
@@ -707,8 +747,8 @@
       if (!shelf || shelf.dataset.loading === '1') return;
       const row = shelf.querySelector('.shelf-row');
       const totalPages = Number(shelf.dataset.totalPages || '25');
-      const currentPage = Number(shelf.dataset.page || '1');
-      if (!row || currentPage >= totalPages) return;
+      const currentPage = Number(shelf.dataset.page || '0');
+      if (!row || (currentPage >= totalPages && !shelfQueue(shelf).length)) return;
       const remaining = row.scrollWidth - row.clientWidth - row.scrollLeft;
       if (remaining < Math.max(360, row.clientWidth * 0.35)) loadShelfMore(shelf);
     }
@@ -721,8 +761,6 @@
         loadShelfMore(shelf);
       }
     }
-
-    enforceShelfPriority();
 
     document.querySelectorAll('.shelf').forEach(shelf => {
       const row = shelf.querySelector('.shelf-row');
@@ -743,6 +781,10 @@
     window.LibFlixPageCleanup = () => {
       pageActive = false;
       if (heroCycleTimer) clearInterval(heroCycleTimer);
+      if (heroPrefetchHandle !== null) {
+        if ('cancelIdleCallback' in window) window.cancelIdleCallback(heroPrefetchHandle);
+        else window.clearTimeout(heroPrefetchHandle);
+      }
       shelfObserver.disconnect();
       window.removeEventListener('resize', fitHeroTitle);
       if (window.fitHeroTitle === fitHeroTitle) delete window.fitHeroTitle;

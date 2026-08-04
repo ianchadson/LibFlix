@@ -51,7 +51,7 @@
       ? '/download/' + encodeURIComponent(book.md5) + '?filename=' + encodeURIComponent(filename)
       : '';
     const cover = book.cover_url
-      ? '<span class="edition-cover-loading" aria-hidden="true"></span><img class="edition-cover" src="' + escapeHtml(book.cover_url) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="edition-cover-placeholder" hidden aria-hidden="true">' + escapeHtml((title[0] || '?').toUpperCase()) + '</div>'
+      ? '<span class="edition-cover-loading" aria-hidden="true"></span><img class="edition-cover" data-cover-src="' + escapeHtml(book.cover_url) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="edition-cover-placeholder" hidden aria-hidden="true">' + escapeHtml((title[0] || '?').toUpperCase()) + '</div>'
       : '<div class="edition-cover-placeholder" aria-hidden="true">' + escapeHtml((title[0] || '?').toUpperCase()) + '</div>';
     const metadata = [
       '<span class="edition-format ' + escapeHtml(format) + '">' + escapeHtml(format) + '</span>',
@@ -102,6 +102,7 @@
       : '';
     container.innerHTML = primary + others;
     container.hidden = !visibleBooks.length;
+    window.LibFlixCoverLoader?.register(container);
     wireActions(container);
     resumeKindleJobs(container);
     return visibleBooks.length;
@@ -129,7 +130,7 @@
 
       const kindle = event.target.closest('.edition-kindle[data-md5]');
       if (!kindle) return;
-      const existingJob = window.sessionStorage.getItem(kindleJobStorageKey(kindle.dataset.md5));
+      const existingJob = storedKindleJobId(kindle.dataset.md5);
       if (existingJob) {
         deliverToKindle({
           button: kindle,
@@ -182,6 +183,110 @@
     return panel;
   }
 
+  const ACTIVE_KINDLE_JOBS_KEY = 'libflix.kindleActiveJobs.v1';
+  const activeJobPolls = new Map();
+  let globalTrayHideTimer = null;
+
+  function progressPresentation(event) {
+    const stage = String(event?.stage || '');
+    if (event?.type === 'complete') return { hasProgress: true, value: 100, label: 'Sent' };
+    if (event?.type === 'error') return { hasProgress: false, value: 0, label: 'Failed' };
+    const totalBytes = Number(event?.upload_total_bytes ?? event?.total_bytes);
+    const sentBytes = Number(event?.uploaded_bytes ?? event?.bytes_sent);
+    const isUpload = /upload|sending to kindle/i.test(stage);
+    if (isUpload && Number.isFinite(totalBytes) && totalBytes > 0 && Number.isFinite(sentBytes) && sentBytes >= 0) {
+      const ratio = Math.max(0, Math.min(1, sentBytes / totalBytes));
+      const value = 75 + (ratio * 24);
+      return { hasProgress: true, value, label: Math.round(ratio * 100) + '% uploaded' };
+    }
+    const numeric = Number(event?.display_progress ?? event?.progress);
+    if (isUpload) return { hasProgress: false, value: 0, label: 'Uploading' };
+    if (event?.progress !== null && event?.progress !== undefined && Number.isFinite(numeric)) {
+      return { hasProgress: true, value: numeric, label: Math.round(numeric) + '%' };
+    }
+    return { hasProgress: false, value: 0, label: 'Working' };
+  }
+
+  function readActiveKindleJobs() {
+    try {
+      const parsed = JSON.parse(window.sessionStorage.getItem(ACTIVE_KINDLE_JOBS_KEY) || '{}');
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function writeActiveKindleJobs(jobs) {
+    try {
+      window.sessionStorage.setItem(ACTIVE_KINDLE_JOBS_KEY, JSON.stringify(jobs));
+    } catch {}
+  }
+
+  function rememberActiveKindleJob(md5, jobId, metadata = {}) {
+    if (!md5 || !jobId) return;
+    const jobs = readActiveKindleJobs();
+    jobs[String(md5).toLowerCase()] = {
+      jobId,
+      title: metadata.canonical_title || metadata.title || 'Book',
+      startedAt: Date.now(),
+    };
+    writeActiveKindleJobs(jobs);
+    try {
+      window.sessionStorage.setItem(kindleJobStorageKey(md5), jobId);
+    } catch {}
+  }
+
+  function forgetActiveKindleJob(md5, jobId = '') {
+    if (!md5) return;
+    const key = String(md5).toLowerCase();
+    const jobs = readActiveKindleJobs();
+    if (!jobId || jobs[key]?.jobId === jobId) delete jobs[key];
+    writeActiveKindleJobs(jobs);
+    try {
+      window.sessionStorage.removeItem(kindleJobStorageKey(md5));
+    } catch {}
+  }
+
+  function updateGlobalKindleTray(event, metadata = {}) {
+    const tray = document.getElementById('kindleGlobalTray');
+    if (!tray || !event) return;
+    if (globalTrayHideTimer) window.clearTimeout(globalTrayHideTimer);
+    globalTrayHideTimer = null;
+    const presentation = progressPresentation(event);
+    const title = document.getElementById('kindleGlobalTrayTitle');
+    const stage = document.getElementById('kindleGlobalTrayStage');
+    const value = document.getElementById('kindleGlobalTrayValue');
+    const detail = document.getElementById('kindleGlobalTrayDetail');
+    const track = document.getElementById('kindleGlobalTrayTrack');
+    const fill = document.getElementById('kindleGlobalTrayFill');
+    tray.hidden = false;
+    tray.classList.toggle('indeterminate', !presentation.hasProgress && event.type === 'progress');
+    tray.classList.toggle('complete', event.type === 'complete');
+    tray.classList.toggle('error', event.type === 'error' || event.success === false);
+    if (title) title.textContent = event.title || metadata.title || metadata.canonical_title || 'Book';
+    if (stage) stage.textContent = event.stage || 'Sending to Kindle';
+    if (value) value.textContent = presentation.label;
+    if (detail) {
+      detail.textContent = event.detail || event.error || '';
+      detail.hidden = !detail.textContent;
+    }
+    if (track && fill) {
+      if (presentation.hasProgress) {
+        const bounded = Math.max(0, Math.min(100, Math.round(presentation.value)));
+        fill.style.width = bounded + '%';
+        track.setAttribute('aria-valuenow', String(bounded));
+        track.removeAttribute('aria-valuetext');
+      } else {
+        fill.style.width = '';
+        track.removeAttribute('aria-valuenow');
+        track.setAttribute('aria-valuetext', presentation.label);
+      }
+    }
+    if (event.type === 'complete') {
+      globalTrayHideTimer = window.setTimeout(() => { tray.hidden = true; }, 8000);
+    }
+  }
+
   function updateKindleProgress(panel, event) {
     if (!panel || !event) return;
     const stage = panel.querySelector('.kindle-progress-stage');
@@ -189,25 +294,24 @@
     const track = panel.querySelector('.kindle-progress-track');
     const fill = panel.querySelector('.kindle-progress-fill');
     const detail = panel.querySelector('.kindle-progress-detail');
-    const progress = Number(event.progress);
-    const hasProgress = event.progress !== null && event.progress !== undefined && Number.isFinite(progress);
+    const presentation = progressPresentation(event);
 
     stage.textContent = event.stage || 'Sending to Kindle';
     detail.textContent = event.detail || '';
     detail.hidden = !event.detail;
-    panel.classList.toggle('indeterminate', !hasProgress && event.type === 'progress');
+    panel.classList.toggle('indeterminate', !presentation.hasProgress && event.type === 'progress');
     panel.classList.toggle('complete', event.type === 'complete');
     panel.classList.toggle('error', event.type === 'error');
 
-    if (hasProgress) {
-      const bounded = Math.max(0, Math.min(100, Math.round(progress)));
+    if (presentation.hasProgress) {
+      const bounded = Math.max(0, Math.min(100, Math.round(presentation.value)));
       fill.style.width = bounded + '%';
-      value.textContent = bounded + '%';
+      value.textContent = presentation.label;
       track.setAttribute('aria-valuenow', String(bounded));
       track.removeAttribute('aria-valuetext');
     } else {
       fill.style.width = '';
-      value.textContent = event.type === 'error' ? 'Failed' : 'Working';
+      value.textContent = presentation.label;
       track.removeAttribute('aria-valuenow');
       track.setAttribute('aria-valuetext', event.stage || 'Working');
     }
@@ -272,6 +376,8 @@
   async function pollKindleJob(jobId, onEvent) {
     let cursor = 0;
     let failures = 0;
+    let idlePolls = 0;
+    const pollingStartedAt = performance.now();
     while (true) {
       try {
         const response = await fetch('/api/kindle/jobs/' + encodeURIComponent(jobId) + '?cursor=' + cursor, {
@@ -285,6 +391,8 @@
           throw error;
         }
         failures = 0;
+        const receivedEvents = Array.isArray(data.events) ? data.events.length : 0;
+        idlePolls = receivedEvents ? 0 : idlePolls + 1;
         cursor = Number(data.cursor) || cursor;
         for (const event of data.events || []) {
           onEvent(event);
@@ -303,7 +411,11 @@
           error.definitive = true;
           throw error;
         }
-        await wait(700);
+        const elapsed = performance.now() - pollingStartedAt;
+        const foregroundDelay = elapsed < 5000
+          ? Math.min(180 + (idlePolls * 35), 320)
+          : (elapsed < 20000 ? 420 : 700);
+        await wait(document.hidden ? Math.max(1000, foregroundDelay) : foregroundDelay);
       } catch (error) {
         if (error.kindleEvent || error.definitive) throw error;
         failures += 1;
@@ -322,13 +434,40 @@
     }
   }
 
+  function observeKindleJob(jobId, onEvent) {
+    let active = activeJobPolls.get(jobId);
+    if (!active) {
+      active = { listeners: new Set(), lastEvent: null, promise: null };
+      activeJobPolls.set(jobId, active);
+      active.promise = pollKindleJob(jobId, event => {
+        active.lastEvent = event;
+        active.listeners.forEach(listener => {
+          try { listener(event); } catch {}
+        });
+      }).finally(() => {
+        if (activeJobPolls.get(jobId) === active) activeJobPolls.delete(jobId);
+      });
+    }
+    active.listeners.add(onEvent);
+    if (active.lastEvent) onEvent(active.lastEvent);
+    return active.promise.finally(() => active.listeners.delete(onEvent));
+  }
+
   function kindleJobStorageKey(md5) {
     return 'libflix.kindleJob.' + String(md5 || '').toLowerCase();
   }
 
+  function storedKindleJobId(md5) {
+    try {
+      return window.sessionStorage.getItem(kindleJobStorageKey(md5)) || '';
+    } catch {
+      return '';
+    }
+  }
+
   function resumeKindleJobs(container) {
     container?.querySelectorAll('.edition-kindle[data-md5]').forEach(button => {
-      const jobId = window.sessionStorage.getItem(kindleJobStorageKey(button.dataset.md5));
+      const jobId = storedKindleJobId(button.dataset.md5);
       if (!jobId || button.dataset.resuming === 'true') return;
       button.dataset.resuming = 'true';
       deliverToKindle({ button, payload: { md5: button.dataset.md5 }, jobId })
@@ -343,7 +482,12 @@
     if (!button.dataset.originalAriaLabel) button.dataset.originalAriaLabel = button.getAttribute('aria-label') || 'Send to Kindle';
 
     const panel = createKindleProgress(button);
-    updateKindleProgress(panel, { type: 'progress', stage: 'Preparing delivery', progress: 0 });
+    const trayMetadata = {
+      title: payload.canonical_title || payload.title || button.dataset.title || 'Book',
+    };
+    const initialEvent = { type: 'progress', stage: 'Preparing delivery', progress: 0 };
+    updateKindleProgress(panel, initialEvent);
+    updateGlobalKindleTray(initialEvent, trayMetadata);
     button.classList.remove('sent');
     button.classList.add('sending');
     button.setAttribute('aria-busy', 'true');
@@ -363,11 +507,19 @@
           throw new Error(created.error || 'Kindle delivery could not be started');
         }
         jobId = created.job_id;
-        window.sessionStorage.setItem(kindleJobStorageKey(payload.md5), jobId);
+        rememberActiveKindleJob(payload.md5, jobId, payload);
       } else {
-        updateKindleProgress(panel, { type: 'progress', stage: 'Restoring delivery status', progress: null });
+        const restoringEvent = { type: 'progress', stage: 'Restoring delivery status', progress: null };
+        const stored = readActiveKindleJobs()[String(payload.md5 || '').toLowerCase()];
+        if (stored?.title) trayMetadata.title = stored.title;
+        if (!stored && payload.md5) rememberActiveKindleJob(payload.md5, jobId, trayMetadata);
+        updateKindleProgress(panel, restoringEvent);
+        updateGlobalKindleTray(restoringEvent, trayMetadata);
       }
-      const completed = await pollKindleJob(jobId, event => updateKindleProgress(panel, event));
+      const completed = await observeKindleJob(jobId, event => {
+        updateKindleProgress(panel, event);
+        updateGlobalKindleTray(event, trayMetadata);
+      });
       const cleanedTitle = completed.title || payload.canonical_title || payload.title || button.dataset.title || 'Book';
       const elapsedSeconds = Number(completed.elapsed_seconds) > 0
         ? Number(completed.elapsed_seconds)
@@ -375,7 +527,8 @@
       button.classList.add('sent');
       button.innerHTML = icons.check + '<span>Sent</span>';
       button.setAttribute('aria-label', 'Sent to Kindle');
-      window.sessionStorage.removeItem(kindleJobStorageKey(payload.md5));
+      updateGlobalKindleTray({ ...completed, type: 'complete', stage: completed.stage || 'Sent to Kindle', progress: 100 }, { title: cleanedTitle });
+      forgetActiveKindleJob(payload.md5, jobId);
       window.LibFlixNotify?.('Sent to Kindle', 'success', {
         title: cleanedTitle,
         detail: 'Completed in ' + formatElapsedTime(elapsedSeconds),
@@ -383,14 +536,16 @@
       return { ...completed, title: cleanedTitle, elapsed_seconds: elapsedSeconds };
     } catch (error) {
       const failure = error.kindleEvent || {};
-      updateKindleProgress(panel, {
+      const failureEvent = {
         type: 'error',
         stage: failure.stage || (error.retryable ? 'Status connection interrupted' : 'Delivery failed'),
         progress: null,
         detail: error.retryable
           ? 'The delivery may still be running. Use Check status to reconnect.'
           : error.message,
-      });
+      };
+      updateKindleProgress(panel, failureEvent);
+      updateGlobalKindleTray(failureEvent, trayMetadata);
       panel?.setAttribute('role', 'alert');
       if (error.retryable && jobId) {
         button.innerHTML = icons.send + '<span>Check status</span>';
@@ -398,7 +553,7 @@
       } else {
         button.innerHTML = button.dataset.originalHtml;
         button.setAttribute('aria-label', button.dataset.originalAriaLabel);
-        if (payload.md5) window.sessionStorage.removeItem(kindleJobStorageKey(payload.md5));
+        if (payload.md5) forgetActiveKindleJob(payload.md5, jobId);
       }
       throw error;
     } finally {
@@ -454,6 +609,32 @@
     return 'Downloads could not be checked right now. Try again in a moment.';
   }
 
+  function restoreGlobalKindleJobs() {
+    const jobs = readActiveKindleJobs();
+    Object.entries(jobs).forEach(([md5, metadata]) => {
+      if (!metadata?.jobId) return;
+      const trayMetadata = { title: metadata.title || 'Book' };
+      updateGlobalKindleTray(
+        { type: 'progress', stage: 'Restoring delivery status', progress: null },
+        trayMetadata,
+      );
+      observeKindleJob(metadata.jobId, event => updateGlobalKindleTray(event, trayMetadata))
+        .then(() => forgetActiveKindleJob(md5, metadata.jobId))
+        .catch(error => {
+          const failure = error.kindleEvent || {};
+          updateGlobalKindleTray({
+            type: 'error',
+            stage: failure.stage || (error.retryable ? 'Status connection interrupted' : 'Delivery failed'),
+            progress: null,
+            detail: error.retryable
+              ? 'The delivery may still be running. Open this book and choose Check status.'
+              : error.message,
+          }, trayMetadata);
+          if (!error.retryable) forgetActiveKindleJob(md5, metadata.jobId);
+        });
+    });
+  }
+
   window.LibFlixDownloads = {
     checkIcon: icons.check,
     cleanFilename,
@@ -463,4 +644,5 @@
     renderEditions,
     renderPagination,
   };
+  restoreGlobalKindleJobs();
 })();

@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-08-04 - End-to-end latency pass
+
+### Faster browsing and covers
+
+- Reduced internal navigation responses to page-specific HTML, cancelled
+  superseded requests, and restored per-history-entry scroll positions.
+- Moved homepage, category, and discovery hydration to 12-card batches and
+  deferred covers until they are within one viewport.
+- Added canonical `.webp` cover URLs, cross-worker request coalescing, shared
+  negative caching, single-fetch variant fan-out, and complete hero/trending
+  background warming.
+- Made cold discovery render immediately and hydrate through its API with a
+  visible retry state when the source is unavailable.
+
+### Faster Send to Kindle
+
+- Promoted the smallest EPUB within the strongest accuracy tier as `Fastest to
+  Kindle` and the default best match.
+- Added atomic validated source-file reuse with a 24-hour TTL and 5 GiB LRU
+  quota, including format, byte-count, and MD5 verification.
+- Started SMTP and cover preparation in parallel with source work, streamed MIME
+  attachments directly to SMTP, exposed byte/rate/ETA progress, and retried one
+  interrupted upload with the same message id.
+- Added a persistent global delivery tray, faster adaptive status polling, and
+  optional server-managed relay configuration.
+- Avoided cosmetic-only EPUB rewrites and full metadata rewrites for PDFs over
+  20 MiB.
+
 ## 2026-08-02 - Resilient search for newly catalogued books
 
 ### Fixed

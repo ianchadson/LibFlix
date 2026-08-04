@@ -11,13 +11,16 @@ class KindleJobTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.original_database = app.API_SQLITE_CACHE
         self.original_ready = app.SQLITE_CACHE_READY
+        self.original_delivery_lock = app.KINDLE_DELIVERY_LOCK_FILE
         app.API_SQLITE_CACHE = os.path.join(self.tempdir.name, "jobs.sqlite3")
+        app.KINDLE_DELIVERY_LOCK_FILE = os.path.join(self.tempdir.name, "kindle-delivery.lock")
         app.SQLITE_CACHE_READY = False
         app.initialize_disk_cache()
 
     def tearDown(self):
         app.API_SQLITE_CACHE = self.original_database
         app.SQLITE_CACHE_READY = self.original_ready
+        app.KINDLE_DELIVERY_LOCK_FILE = self.original_delivery_lock
         self.tempdir.cleanup()
 
     def test_job_events_are_visible_across_database_connections(self):
@@ -60,6 +63,11 @@ class KindleJobTests(unittest.TestCase):
             "title": "Book",
             "ext": "epub",
             "kindle_email": "reader@kindle.com",
+            "smtp_host": "smtp.user.example",
+            "smtp_port": 465,
+            "smtp_user": "user@example.com",
+            "smtp_pass": "user-secret",
+            "sender_email": "user@example.com",
             "smtp_host": "smtp.example.com",
             "smtp_port": 587,
             "smtp_user": "sender@example.com",
@@ -68,7 +76,7 @@ class KindleJobTests(unittest.TestCase):
         public_dns = [(2, 1, 6, "", ("8.8.8.8", 587))]
         with (
             app.app.test_client() as client,
-            patch.object(app.socket, "getaddrinfo", return_value=public_dns),
+            patch.object(app.socket, "getaddrinfo", return_value=public_dns) as getaddrinfo,
             patch.object(app.KINDLE_EXECUTOR, "submit") as submit,
         ):
             response = client.post("/api/kindle/jobs", json=payload)
@@ -118,6 +126,62 @@ class KindleJobTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("EPUB or PDF", response.get_json()["error"])
+        submit.assert_not_called()
+
+    def test_managed_relay_keeps_existing_user_smtp_optional(self):
+        payload = {
+            "md5": "a" * 32,
+            "title": "Book",
+            "ext": "epub",
+            "kindle_email": "reader@kindle.com",
+        }
+        public_dns = [(2, 1, 6, "", ("8.8.8.8", 587))]
+        with (
+            patch.object(app, "KINDLE_RELAY_HOST", "smtp.relay.example"),
+            patch.object(app, "KINDLE_RELAY_PORT", "587"),
+            patch.object(app, "KINDLE_RELAY_USER", "relay@example.com"),
+            patch.object(app, "KINDLE_RELAY_PASSWORD", "relay-secret"),
+            patch.object(app, "KINDLE_RELAY_SENDER", "books@example.com"),
+            patch.object(app.socket, "getaddrinfo", return_value=public_dns) as getaddrinfo,
+            patch.object(app.KINDLE_EXECUTOR, "submit") as submit,
+            app.app.test_client() as client,
+        ):
+            response = client.post("/api/kindle/jobs", json=payload)
+
+        self.assertEqual(response.status_code, 202)
+        submitted_payload = submit.call_args.args[2]
+        self.assertNotIn("relay-secret", repr(submitted_payload))
+        self.assertNotIn("user-secret", repr(submitted_payload))
+        self.assertNotIn("smtp_pass", submitted_payload)
+        self.assertNotIn("smtp_host", submitted_payload)
+        getaddrinfo.assert_called_once_with(
+            "smtp.relay.example",
+            587,
+            type=app.socket.SOCK_STREAM,
+        )
+
+    def test_invalid_managed_relay_port_does_not_fall_back_to_user_smtp(self):
+        payload = {
+            "md5": "a" * 32,
+            "title": "Book",
+            "ext": "epub",
+            "kindle_email": "reader@kindle.com",
+        }
+        with (
+            patch.object(app, "KINDLE_RELAY_HOST", "smtp.relay.example"),
+            patch.object(app, "KINDLE_RELAY_PORT", "not-a-port"),
+            patch.object(app, "KINDLE_RELAY_USER", "relay@example.com"),
+            patch.object(app, "KINDLE_RELAY_PASSWORD", "relay-secret"),
+            patch.object(app, "KINDLE_RELAY_SENDER", "books@example.com"),
+            patch.object(app.socket, "getaddrinfo") as getaddrinfo,
+            patch.object(app.KINDLE_EXECUTOR, "submit") as submit,
+            app.app.test_client() as client,
+        ):
+            response = client.post("/api/kindle/jobs", json=payload)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json()["error"], "SMTP port must be a number")
+        getaddrinfo.assert_not_called()
         submit.assert_not_called()
 
 

@@ -1,4 +1,4 @@
-import re, os, io, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3, unicodedata, uuid, ipaddress, socket
+import re, os, io, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3, unicodedata, uuid, ipaddress, socket, fcntl
 from contextlib import contextmanager
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, quote, urlencode, urlsplit, parse_qs
@@ -12,6 +12,12 @@ from flask import Flask, render_template, request, Response, stream_with_context
 from opencc import OpenCC
 
 from book_preparation import prepare_book_for_kindle
+from kindle_delivery import (
+    KindleSourceCache,
+    SourceFileError,
+    stream_smtp_attachment,
+    validate_source_file,
+)
 
 try:
     from PIL import Image, UnidentifiedImageError
@@ -45,6 +51,18 @@ SHELF_DISK_CACHE = os.path.join(DATA_DIR, "shelf_cache.json")
 API_DISK_CACHE = os.path.join(DATA_DIR, "api_cache.json")
 API_SQLITE_CACHE = os.path.join(DATA_DIR, "api_cache.sqlite3")
 COVER_CACHE_DIR = os.path.join(DATA_DIR, "covers")
+KINDLE_SOURCE_CACHE_DIR = os.path.join(DATA_DIR, "kindle-source-cache")
+KINDLE_DELIVERY_LOCK_FILE = os.path.join(DATA_DIR, "kindle-delivery.lock")
+KINDLE_SOURCE_CACHE_TTL = max(0, int(os.environ.get("KINDLE_SOURCE_CACHE_TTL", "86400")))
+KINDLE_SOURCE_CACHE_MAX_BYTES = max(
+    0,
+    int(os.environ.get("KINDLE_SOURCE_CACHE_MAX_BYTES", str(5 * 1024**3))),
+)
+KINDLE_RELAY_HOST = os.environ.get("KINDLE_RELAY_HOST", "").strip()
+KINDLE_RELAY_PORT = os.environ.get("KINDLE_RELAY_PORT", "587").strip()
+KINDLE_RELAY_USER = os.environ.get("KINDLE_RELAY_USER", "").strip()
+KINDLE_RELAY_PASSWORD = os.environ.get("KINDLE_RELAY_PASSWORD", "")
+KINDLE_RELAY_SENDER = os.environ.get("KINDLE_RELAY_SENDER", "").strip()
 SHELF_REFRESH_TTL = 21600
 OL_BOOK_FIELDS = "key,title,author_name,cover_i,cover_id,language,editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id"
 OL_LIST_FIELDS = "key,title,author_name,cover_i,cover_id,language"
@@ -78,7 +96,7 @@ KNOWN_WORK_METADATA = {
         "localized_title": "史蒂夫·乔布斯传",
         "download_title": "史蒂夫·乔布斯传",
         "author": "Walter Isaacson",
-        "cover_url": "/olcover/12374726/M",
+        "cover_url": "/olcover/12374726/M.webp",
     },
 }
 GENERIC_SIMILAR_SUBJECTS = {
@@ -217,10 +235,13 @@ SIMILAR_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="similar
 COVER_LOCK_STRIPES = tuple(threading.Lock() for _ in range(64))
 COVER_STATE_LOCK = threading.Lock()
 COVER_FAILURES = {}
+COVER_VALIDATED_FILES = {}
 COVER_NEGATIVE_TTL = 300
 COVER_FAILURE_LIMIT = 4096
+COVER_VALIDATION_LIMIT = 8192
 COVER_ORIGIN_SEMAPHORE = threading.BoundedSemaphore(4)
 COVER_WARM_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="cover-warm")
+COVER_WARM_COORDINATOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cover-warm-batch")
 ARCHIVE_DESCRIPTION_LOCKS = tuple(threading.Lock() for _ in range(32))
 ARCHIVE_DESCRIPTION_MAX_IDENTIFIERS = 2
 KINDLE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="kindle-delivery")
@@ -639,7 +660,7 @@ def open_library_cover_url(cover_id, size="M"):
     if not cover_id:
         return ""
     size = size if size in ("S", "M", "L") else "M"
-    return f"/olcover/{cover_id}/{size}"
+    return f"/olcover/{cover_id}/{size}.webp"
 
 def edition_archive_identifier(edition):
     values = edition.get("ocaid") or []
@@ -656,17 +677,26 @@ def archive_cover_url(identifier, size="M"):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", identifier):
         return ""
     size = size if size in ("S", "M", "L") else "M"
-    return f"/iacover/{identifier}/{size}"
+    return f"/iacover/{identifier}/{size}.webp"
 
 def localize_cover_url(url, size="M"):
     url = str(url or "")
-    local = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", url)
-    archive = re.fullmatch(r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML])?", url)
+    local = re.fullmatch(r"/olcover/(\d+)(?:/[SML](?:\.webp)?)?", url)
+    archive = re.fullmatch(r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML](?:\.webp)?)?", url)
     if archive:
         return archive_cover_url(archive.group(1), size)
     remote = re.search(r"covers\.openlibrary\.org/b/id/(\d+)-[SML]\.jpg", url)
     match = local or remote
     return open_library_cover_url(match.group(1), size) if match else url
+
+def canonicalize_book_covers(books, size="M"):
+    """Upgrade cached legacy cover paths at every JSON/HTML boundary."""
+    normalized = []
+    for book in books or []:
+        book_copy = dict(book)
+        book_copy["cover_url"] = localize_cover_url(book_copy.get("cover_url", ""), size)
+        normalized.append(book_copy)
+    return normalized
 
 def edition_language_codes(edition):
     codes = set()
@@ -1146,7 +1176,8 @@ def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
     cache_set(ckey, result)
     return result
 
-def fetch_discovery_books(q, page=1, lang=None):
+def cached_discovery_books(q, page=1, lang=None):
+    """Return discovery data without ever waiting on Open Library."""
     lang = lang or DEFAULT_BOOK_LANG
     ckey = f"discover:v6:{lang}:{q}:{page}"
     cached = cache_get(ckey, 900)
@@ -1154,6 +1185,16 @@ def fetch_discovery_books(q, page=1, lang=None):
         cached = disk_cache_get(ckey, 900)
         if cached is not None:
             cache_set(ckey, cached)
+    if cached is not None:
+        books, total, total_pages = cached
+        return canonicalize_book_covers(books), total, total_pages
+    return cached
+
+
+def fetch_discovery_books(q, page=1, lang=None):
+    lang = lang or DEFAULT_BOOK_LANG
+    ckey = f"discover:v6:{lang}:{q}:{page}"
+    cached = cached_discovery_books(q, page, lang)
     if cached is not None:
         return cached
 
@@ -1366,27 +1407,61 @@ def is_kindle_delivery_format(extension):
     extension = re.sub(r"[^a-z0-9]", "", str(extension or "").casefold())
     return extension in KINDLE_DELIVERY_FORMATS
 
-def book_score(book, target_title="", target_author="", preferred_language=""):
+def kindle_accuracy_score(book, target_title="", target_author="", preferred_language=""):
     score = title_match_score(book.title, target_title)
     score += author_match_score(book.author, target_author)
-    fmt_scores = {"epub": 160, "pdf": 70, "txt": 12, "djvu": -20, "chm": -30}
-    score += fmt_scores.get(book.ext.lower(), 0)
     if preferred_language:
         score += 80 if book_matches_language(book, preferred_language) else -200
-    score += source_metadata_language_penalty(book, preferred_language)
+    return score + source_metadata_language_penalty(book, preferred_language)
+
+def kindle_delivery_size_score(book):
+    """Prefer smaller files without overruling meaningful title/author evidence."""
+    size_bytes = parse_size_bytes(book.size)
+    extension = (book.ext or "").casefold()
+    if not size_bytes:
+        return 0
+    if extension == "epub":
+        if size_bytes < 50000 or size_bytes > 50 * 1024 * 1024:
+            return -140
+        size_mb = size_bytes / (1024 * 1024)
+        return max(0, 62 - round(max(0, size_mb - 0.5) * 3))
+    if extension == "pdf":
+        if size_bytes < 100000 or size_bytes > 100 * 1024 * 1024:
+            return -130
+        size_mb = size_bytes / (1024 * 1024)
+        return max(0, 30 - round(max(0, size_mb - 1.0)))
+    return 12 if size_bytes <= 25 * 1024 * 1024 else 0
+
+def fastest_kindle_candidate(books, target_title="", target_author="", preferred_language=""):
+    accurate_books = [book for book in books if is_kindle_delivery_format(book.ext)]
+    if not accurate_books:
+        return None
+    best_accuracy = max(
+        kindle_accuracy_score(book, target_title, target_author, preferred_language)
+        for book in accurate_books
+    )
+    candidates = [
+        book for book in books
+        if (book.ext or "").casefold() == "epub"
+        and 50000 <= parse_size_bytes(book.size) <= 50 * 1024 * 1024
+        and kindle_accuracy_score(book, target_title, target_author, preferred_language)
+            >= best_accuracy - 40
+    ]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda book: parse_size_bytes(book.size))
+
+def book_score(book, target_title="", target_author="", preferred_language=""):
+    score = kindle_accuracy_score(book, target_title, target_author, preferred_language)
+    fmt_scores = {"epub": 160, "pdf": 70, "txt": 12, "djvu": -20, "chm": -30}
+    score += fmt_scores.get(book.ext.lower(), 0)
     try:
         y = int(book.year)
         if 1900 <= y <= 2030:
             score += max(0, min(20, round((y - 1980) * 0.4)))
     except (TypeError, ValueError):
         pass
-    bytes_val = parse_size_bytes(book.size)
-    if book.ext.lower() == "epub" and (bytes_val < 50000 or bytes_val > 50 * 1024 * 1024):
-        score -= 140
-    elif book.ext.lower() == "pdf" and (bytes_val < 100000 or bytes_val > 100 * 1024 * 1024):
-        score -= 130
-    elif bytes_val:
-        score += 30 if bytes_val <= 25 * 1024 * 1024 else 12
+    score += kindle_delivery_size_score(book)
     if book.publisher.strip():
         score += 12
     try:
@@ -1398,7 +1473,14 @@ def book_score(book, target_title="", target_author="", preferred_language=""):
         score += 6
     return score
 
-def recommendation_reasons(book, target_title="", target_author="", preferred_language=""):
+def recommendation_reasons(
+    book,
+    target_title="",
+    target_author="",
+    preferred_language="",
+    *,
+    fastest_to_kindle=False,
+):
     reasons = []
     title_score = title_match_score(book.title, target_title)
     author_score = author_match_score(book.author, target_author)
@@ -1408,12 +1490,14 @@ def recommendation_reasons(book, target_title="", target_author="", preferred_la
         reasons.append("Strong title match")
     if target_author and author_score >= 180:
         reasons.append("Author match")
-    if preferred_language and book_matches_language(book, preferred_language):
-        reasons.append(preferred_language)
     if extension == "epub":
         reasons.append("Kindle-ready EPUB")
     elif extension == "pdf":
         reasons.append("Readable PDF")
+    if fastest_to_kindle:
+        reasons.append("Fastest to Kindle")
+    if preferred_language and book_matches_language(book, preferred_language):
+        reasons.append(preferred_language)
     if size_bytes and size_bytes <= 25 * 1024 * 1024:
         reasons.append("Easy to send")
     try:
@@ -1435,11 +1519,20 @@ def dedup(books, scorer=None):
     return best
 
 def rank_download_books(books, target_title="", target_author="", preferred_language=""):
-    scorer = lambda book: book_score(
-        book,
+    fastest = fastest_kindle_candidate(
+        books,
         target_title=target_title,
         target_author=target_author,
         preferred_language=preferred_language,
+    )
+    scorer = lambda book: (
+        book_score(
+            book,
+            target_title=target_title,
+            target_author=target_author,
+            preferred_language=preferred_language,
+        )
+        + (55 if book is fastest else 0)
     )
     return [
         book for _, book in sorted(
@@ -1905,6 +1998,7 @@ def get_book_detail(work_id, lang=None):
             detail,
             alternate_canonical_book_detail(work_id, lang),
         )
+        detail["cover_url"] = localize_cover_url(detail.get("cover_url", ""))
         if cache_state == "stale" or not detail.get("complete"):
             schedule_book_detail_refresh(work_id, lang)
         return detail, cache_state
@@ -1919,6 +2013,35 @@ def start_request_timing():
     g.request_started_at = time.perf_counter()
     g.server_timings = []
 
+
+def compact_partial_navigation(resp):
+    """Strip the persistent shell from app-navigation HTML responses."""
+    if (
+        request.headers.get("X-LibFlix-Navigation") != "partial"
+        or request.method not in ("GET", "HEAD")
+        or resp.status_code >= 400
+        or resp.mimetype != "text/html"
+    ):
+        return resp
+    try:
+        document = BeautifulSoup(resp.get_data(as_text=True), "html.parser")
+        for tag in document.find_all("style"):
+            if not tag.has_attr("data-page-style"):
+                tag.decompose()
+        for tag in document.find_all("script"):
+            if not tag.has_attr("data-page-script"):
+                tag.decompose()
+        for selector in (".skip-link", "#appTransition", "#kindleModal", "#appToast"):
+            for node in document.select(selector):
+                node.decompose()
+        resp.set_data(str(document))
+        resp.headers["X-LibFlix-Partial"] = "1"
+        resp.headers["Vary"] = "X-LibFlix-Navigation"
+    except (TypeError, ValueError):
+        # A complete document is always a valid client fallback.
+        pass
+    return resp
+
 @app.route("/language/<lang>")
 def switch_language(lang):
     lang = normalize_book_lang(lang)
@@ -1932,6 +2055,7 @@ def switch_language(lang):
 
 @app.after_request
 def cache_headers(resp):
+    resp = compact_partial_navigation(resp)
     if getattr(g, "request_started_at", None) is not None:
         add_server_timing("app", g.request_started_at, description=request.endpoint or "request")
     if getattr(g, "server_timings", None):
@@ -2050,6 +2174,9 @@ def inject_book_context():
         "discover_url": clean_discover_url,
         "book_url": book_url,
         "asset_version": asset_version,
+        "kindle_managed_relay": bool(
+            KINDLE_RELAY_HOST and KINDLE_RELAY_USER and KINDLE_RELAY_PASSWORD
+        ),
     }
 
 @app.template_filter("size_url")
@@ -2057,18 +2184,18 @@ def size_url(url, size="M"):
     if not url:
         return url
     zoom = {"S": "1", "M": "3", "L": "5"}.get(size, "3")
-    local_cover = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", url)
+    local_cover = re.fullmatch(r"/olcover/(\d+)(?:/[SML](?:\.webp)?)?", url)
     if local_cover:
-        return f"/olcover/{local_cover.group(1)}/{size}"
+        return open_library_cover_url(local_cover.group(1), size)
     archive_cover = re.fullmatch(
-        r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML])?",
+        r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML](?:\.webp)?)?",
         url,
     )
     if archive_cover:
-        return f"/iacover/{archive_cover.group(1)}/{size}"
+        return archive_cover_url(archive_cover.group(1), size)
     remote_cover = re.search(r"covers\.openlibrary\.org/b/id/(\d+)-[SML]\.jpg", url)
     if remote_cover:
-        return f"/olcover/{remote_cover.group(1)}/{size}"
+        return open_library_cover_url(remote_cover.group(1), size)
     if url.startswith("/"):
         return f"{url.rstrip('/')}/{size}"
     if "zoom=" in url:
@@ -2130,6 +2257,7 @@ def schedule_shelf_refresh(mode="nonfiction", lang=None, delay=3):
             if shelves:
                 cache_set(f"shelves_{lang}_{mode}", shelves)
                 disk_save_shelves(shelves, mode, lang)
+                schedule_cover_warm(cover_warm_jobs_for_shelves(shelves), force=True)
         finally:
             with SHELF_REFRESH_LOCK:
                 SHELF_REFRESHING.discard(refresh_key)
@@ -2144,7 +2272,10 @@ def normalize_shelf_labels(shelves, mode="nonfiction"):
         shelf_copy["books"] = []
         for book in shelf.get("books", []):
             book_copy = dict(book)
-            match = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", book_copy.get("cover_url", ""))
+            match = re.fullmatch(
+                r"/olcover/(\d+)(?:/[SML](?:\.webp)?)?",
+                book_copy.get("cover_url", ""),
+            )
             if not match:
                 match = re.search(
                     r"covers\.openlibrary\.org/b/id/(\d+)-[SML]\.jpg",
@@ -2177,6 +2308,7 @@ def get_shelves(mode="nonfiction", lang=None):
     shelves = normalize_shelf_labels(shelves, mode)
     cache_set(ckey, shelves)
     disk_save_shelves(shelves, mode, lang)
+    schedule_cover_warm(cover_warm_jobs_for_shelves(shelves), force=True)
     return shelves
 
 def dedupe_and_refill_shelves(shelves, mode="nonfiction", lang=None):
@@ -2330,8 +2462,15 @@ def discover(clean_mode, clean_lang):
     if not q:
         return render_home(mode, lang, error="Enter a search query.")
 
-    page = int(request.args.get("page", 1))
-    books, total, total_pages = fetch_discovery_books(q, page, lang)
+    requested_page = max(1, int(request.args.get("page", 1)))
+    cached_result = cached_discovery_books(q, requested_page, lang)
+    initial_loading = cached_result is None
+    if cached_result is None:
+        books, total, total_pages = [], 0, max(1, requested_page)
+        page = requested_page - 1
+    else:
+        books, total, total_pages = cached_result
+        page = requested_page
     search_unavailable = total is None
     if search_unavailable:
         g.cache_control_override = "no-store"
@@ -2343,6 +2482,8 @@ def discover(clean_mode, clean_lang):
         page=page,
         total_pages=total_pages,
         search_unavailable=search_unavailable,
+        initial_loading=initial_loading,
+        requested_page=requested_page,
         mode=mode,
         search_value=q,
     )
@@ -2353,7 +2494,7 @@ def api_discover():
     if not q:
         return jsonify({"success": False, "error": "No query provided"})
     page = int(request.args.get("page", 1))
-    lang = get_book_lang()
+    lang = normalize_book_lang(request.args.get("book_lang")) or get_book_lang()
     books, total, total_pages = fetch_discovery_books(q, page, lang)
     if total is None:
         g.cache_control_override = "no-store"
@@ -2538,10 +2679,12 @@ def api_similar():
     cache_key = similar_cache_key(ol_key, subjects, lang)
     payload = cache_get(cache_key, SIMILAR_FRESH_TTL) or disk_cache_get(cache_key, SIMILAR_FRESH_TTL)
     if payload:
+        payload = {**payload, "books": canonicalize_book_covers(payload.get("books", []))}
         add_server_timing("similar", duration=0, description="cache")
         return jsonify(payload)
     stale = disk_cache_get_stale(cache_key, SIMILAR_STALE_TTL)
     if stale:
+        stale = {**stale, "books": canonicalize_book_covers(stale.get("books", []))}
         schedule_similar_refresh(cache_key, ol_key, subjects, lang)
         add_server_timing("similar", duration=0, description="stale")
         g.cache_control_override = "private, max-age=15"
@@ -2616,6 +2759,16 @@ def api_cn_display_titles():
                 titles[ol_key] = title
     return jsonify({"success": True, "titles": titles})
 
+def download_cover_url(md5, cover_dir, size="S"):
+    md5 = str(md5 or "").lower()
+    cover_dir = str(cover_dir or "")
+    size = size if size in ("S", "M", "L") else "S"
+    if not re.fullmatch(r"[a-f0-9]{32}", md5):
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,48}", cover_dir):
+        return ""
+    return f"/cover/{md5}/{size}.webp?{urlencode({'dir': cover_dir})}"
+
 @app.route("/api/search")
 def api_search():
     q = request.args.get("q", "").strip()
@@ -2638,7 +2791,7 @@ def api_search():
     target_title = request.args.get("target_title", "").strip() or q
     target_author = request.args.get("target_author", "").strip()
     result_cache_key = (
-        f"download_search:v7:{q}:{sort}:{order}:{limit}:{page}:"
+        f"download_search:v8:{q}:{sort}:{order}:{limit}:{page}:"
         f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}"
     )
     cached_result = cache_get(result_cache_key, 900)
@@ -2702,15 +2855,20 @@ def api_search():
             continue
         filtered.append(b)
     books = filtered
-    scorer = lambda book: book_score(
-        book,
+    _, scorer = rank_download_books(
+        books,
         target_title=target_title,
         target_author=target_author,
         preferred_language=lang_filter or "",
     )
     if dedup_on:
         books = dedup(books, scorer)
-    best_book = max(books, key=scorer) if books else None
+    fastest_book = fastest_kindle_candidate(
+        books,
+        target_title=target_title,
+        target_author=target_author,
+        preferred_language=lang_filter or "",
+    )
     if sort == "best_match":
         books, scorer = rank_download_books(
             books,
@@ -2718,20 +2876,33 @@ def api_search():
             target_author=target_author,
             preferred_language=lang_filter or "",
         )
+        if fastest_book in books:
+            books = [fastest_book] + [book for book in books if book is not fastest_book]
+        best_book = fastest_book or (max(books, key=scorer) if books else None)
+    else:
+        _, scorer = rank_download_books(
+            books,
+            target_title=target_title,
+            target_author=target_author,
+            preferred_language=lang_filter or "",
+        )
+        best_book = max(books, key=scorer) if books else None
 
     total_pages = (total + limit - 1) // limit if total else 1
     result_books = []
     for i, b in enumerate(books):
         d = b.to_dict(i + 1 + (page - 1) * limit)
         cover_dir = getattr(b, "cover_dir", "")
-        d["cover_url"] = f"/cover/{d['md5']}/S?dir={cover_dir}" if cover_dir and d['md5'] else ""
+        d["cover_url"] = download_cover_url(d["md5"], cover_dir)
         d["recommendation_reasons"] = recommendation_reasons(
             b,
             target_title=target_title,
             target_author=target_author,
             preferred_language=lang_filter or "",
+            fastest_to_kindle=b is fastest_book,
         )
         d["kindle_compatible"] = is_kindle_delivery_format(b.ext)
+        d["fastest_to_kindle"] = b is fastest_book
         d["best_match"] = b is best_book
         result_books.append(d)
     result = {
@@ -2840,9 +3011,33 @@ def cover_cache_path(namespace, identity, size):
     extension = "webp" if Image is not None else "jpg"
     return os.path.join(COVER_CACHE_DIR, namespace, digest[:2], f"{digest}.{extension}")
 
-def cover_lock(cache_path):
-    digest = hashlib.sha256(cache_path.encode("utf-8")).digest()
-    return COVER_LOCK_STRIPES[int.from_bytes(digest[:2], "big") % len(COVER_LOCK_STRIPES)]
+def cover_identity_lock_path(namespace, identity, cache_path):
+    cache_root = os.path.abspath(COVER_CACHE_DIR)
+    candidate = os.path.abspath(cache_path)
+    try:
+        lock_root = cache_root if os.path.commonpath((cache_root, candidate)) == cache_root else os.path.dirname(candidate)
+    except ValueError:
+        lock_root = os.path.dirname(candidate)
+    digest = hashlib.sha256(f"{namespace}:{identity}".encode("utf-8")).hexdigest()
+    return os.path.join(lock_root, ".locks", digest[:2], f"{digest}.lock")
+
+@contextmanager
+def filesystem_lock(lock_path):
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    with open(lock_path, "a+b") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+@contextmanager
+def cover_lock(lock_path):
+    digest = hashlib.sha256(lock_path.encode("utf-8")).digest()
+    stripe = COVER_LOCK_STRIPES[int.from_bytes(digest[:2], "big") % len(COVER_LOCK_STRIPES)]
+    with stripe:
+        with filesystem_lock(lock_path):
+            yield
 
 def _prune_cover_failures_locked(now):
     for path, failed_at in list(COVER_FAILURES.items()):
@@ -2854,12 +3049,38 @@ def _prune_cover_failures_locked(now):
         for path in oldest:
             COVER_FAILURES.pop(path, None)
 
+def cover_failure_marker_path(cache_path):
+    if not os.path.isabs(cache_path):
+        return ""
+    cache_root = os.path.abspath(COVER_CACHE_DIR)
+    candidate = os.path.abspath(cache_path)
+    try:
+        marker_root = cache_root if os.path.commonpath((cache_root, candidate)) == cache_root else os.path.dirname(candidate)
+    except ValueError:
+        marker_root = os.path.dirname(candidate)
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
+    return os.path.join(marker_root, ".failures", digest[:2], f"{digest}.failed")
+
 def recent_cover_failure(cache_path):
     now = time.time()
     with COVER_STATE_LOCK:
         _prune_cover_failures_locked(now)
         failed_at = COVER_FAILURES.get(cache_path, 0)
-        return bool(failed_at and now - failed_at < COVER_NEGATIVE_TTL)
+        if failed_at and now - failed_at < COVER_NEGATIVE_TTL:
+            return True
+    marker = cover_failure_marker_path(cache_path)
+    if not marker:
+        return False
+    try:
+        failed_at = os.path.getmtime(marker)
+        if now - failed_at < COVER_NEGATIVE_TTL:
+            with COVER_STATE_LOCK:
+                COVER_FAILURES[cache_path] = failed_at
+            return True
+        os.unlink(marker)
+    except OSError:
+        pass
+    return False
 
 def remember_cover_failure(cache_path):
     now = time.time()
@@ -2870,48 +3091,142 @@ def remember_cover_failure(cache_path):
             if oldest is not None:
                 COVER_FAILURES.pop(oldest, None)
         COVER_FAILURES[cache_path] = now
+    marker = cover_failure_marker_path(cache_path)
+    if not marker:
+        return
+    temporary = ""
+    try:
+        os.makedirs(os.path.dirname(marker), exist_ok=True)
+        temporary = f"{marker}.{uuid.uuid4().hex}.tmp"
+        with open(temporary, "w") as marker_file:
+            marker_file.write(str(now))
+        os.replace(temporary, marker)
+    except OSError:
+        pass
+    finally:
+        try:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
+        except OSError:
+            pass
 
 def clear_cover_failure(cache_path):
     with COVER_STATE_LOCK:
         COVER_FAILURES.pop(cache_path, None)
+    marker = cover_failure_marker_path(cache_path)
+    if marker:
+        try:
+            os.unlink(marker)
+        except OSError:
+            pass
+
+def cover_file_fingerprint(cache_path):
+    stat = os.stat(cache_path)
+    return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+
+def forget_validated_cover(cache_path):
+    with COVER_STATE_LOCK:
+        COVER_VALIDATED_FILES.pop(cache_path, None)
+
+def remember_validated_cover(cache_path, fingerprint=None):
+    try:
+        fingerprint = fingerprint or cover_file_fingerprint(cache_path)
+    except OSError:
+        return
+    with COVER_STATE_LOCK:
+        if cache_path not in COVER_VALIDATED_FILES and len(COVER_VALIDATED_FILES) >= COVER_VALIDATION_LIMIT:
+            COVER_VALIDATED_FILES.pop(next(iter(COVER_VALIDATED_FILES)), None)
+        COVER_VALIDATED_FILES[cache_path] = fingerprint
 
 def cover_cache_file_is_valid(cache_path):
     try:
-        if os.path.getsize(cache_path) <= 100:
+        fingerprint = cover_file_fingerprint(cache_path)
+        if fingerprint[2] <= 100:
+            forget_validated_cover(cache_path)
             return False
+        with COVER_STATE_LOCK:
+            if COVER_VALIDATED_FILES.get(cache_path) == fingerprint:
+                return True
         if Image is None:
+            remember_validated_cover(cache_path, fingerprint)
             return True
         with Image.open(cache_path) as source:
-            source.verify()
-        with Image.open(cache_path) as source:
-            return (
+            dimensions_valid = (
                 source.width >= 40
                 and source.height >= 60
                 and source.width <= source.height * 1.5
                 and source.height <= source.width * 3.5
             )
+            if not dimensions_valid:
+                forget_validated_cover(cache_path)
+                return False
+            source.verify()
+        remember_validated_cover(cache_path, fingerprint)
+        return True
     except (OSError, UnidentifiedImageError):
+        forget_validated_cover(cache_path)
         return False
 
-def write_optimized_cover(content, cache_path, size):
+def _replace_cover_file(cache_path, writer):
     os.makedirs(os.path.dirname(cache_path), exist_ok=True)
     temporary = f"{cache_path}.{uuid.uuid4().hex}.tmp"
+    try:
+        writer(temporary)
+        os.replace(temporary, cache_path)
+        remember_validated_cover(cache_path)
+    finally:
+        try:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        except OSError:
+            pass
+
+def write_optimized_cover_variants(content, targets):
+    targets = list(dict.fromkeys(targets))
+    if not targets:
+        return
     if Image is None:
-        with open(temporary, "wb") as output:
-            output.write(content)
-    else:
-        with Image.open(io.BytesIO(content)) as source:
-            if (
-                source.width < 40
-                or source.height < 60
-                or source.width > source.height * 1.5
-                or source.height > source.width * 3.5
-            ):
-                raise UnidentifiedImageError("Cover image has invalid dimensions")
-            source.thumbnail(cover_dimensions(size), Image.Resampling.LANCZOS)
-            converted = source.convert("RGB")
-            converted.save(temporary, format="WEBP", quality=82, method=4)
-    os.replace(temporary, cache_path)
+        def write_original(temporary):
+            with open(temporary, "wb") as output:
+                output.write(content)
+
+        for index, (cache_path, _size) in enumerate(targets):
+            try:
+                _replace_cover_file(cache_path, write_original)
+            except OSError:
+                if index == 0:
+                    raise
+        return
+
+    with Image.open(io.BytesIO(content)) as source:
+        if (
+            source.width < 40
+            or source.height < 60
+            or source.width > source.height * 1.5
+            or source.height > source.width * 3.5
+        ):
+            raise UnidentifiedImageError("Cover image has invalid dimensions")
+        source.load()
+        converted = source.convert("RGB")
+        for index, (cache_path, size) in enumerate(targets):
+            try:
+                def save_variant(temporary, requested_size=size):
+                    variant = converted.copy()
+                    variant.thumbnail(cover_dimensions(requested_size), Image.Resampling.LANCZOS)
+                    variant.save(temporary, format="WEBP", quality=82, method=4)
+                _replace_cover_file(cache_path, save_variant)
+            except OSError:
+                if index == 0:
+                    raise
+
+def write_optimized_cover(content, cache_path, size):
+    write_optimized_cover_variants(content, [(cache_path, size)])
+
+def cover_variant_sizes(namespace, requested_size):
+    sizes = ("S", "M", "L")
+    if namespace == "openlibrary":
+        return sizes[:sizes.index(requested_size) + 1]
+    return sizes
 
 def ensure_cover_cached(namespace, identity, size, source_url, referer=""):
     size = size if size in ("S", "M", "L") else "M"
@@ -2922,42 +3237,51 @@ def ensure_cover_cached(namespace, identity, size, source_url, referer=""):
         return cache_path, True
     if recent_cover_failure(cache_path):
         return None, False
-    if not hit:
-        with cover_lock(cache_path):
-            hit = cover_cache_file_is_valid(cache_path)
-            if not hit:
-                if recent_cover_failure(cache_path):
-                    return None, False
-                try:
-                    if os.path.exists(cache_path):
-                        os.unlink(cache_path)
-                except OSError:
-                    pass
-                headers = {"Referer": referer} if referer else {}
-                origin_slot = COVER_ORIGIN_SEMAPHORE.acquire(timeout=2)
-                if not origin_slot:
-                    return None, False
-                try:
-                    response = SESSION.get(
-                        source_url,
-                        timeout=(3, 10),
-                        headers=headers,
-                    )
-                    response.raise_for_status()
-                    if (
-                        len(response.content) <= 100
-                        or not response.headers.get("Content-Type", "").lower().startswith("image/")
-                        or urlsplit(response.url).path.endswith("/images/notfound.png")
-                    ):
-                        raise UnidentifiedImageError("Cover source returned no usable image")
-                    write_optimized_cover(response.content, cache_path, size)
-                except (requests.RequestException, OSError, UnidentifiedImageError):
-                    remember_cover_failure(cache_path)
-                    return None, hit
-                finally:
-                    COVER_ORIGIN_SEMAPHORE.release()
+    lock_path = cover_identity_lock_path(namespace, identity, cache_path)
+    with cover_lock(lock_path):
+        hit = cover_cache_file_is_valid(cache_path)
+        if hit:
+            clear_cover_failure(cache_path)
+            return cache_path, True
+        if recent_cover_failure(cache_path):
+            return None, False
+        try:
+            if os.path.exists(cache_path):
+                os.unlink(cache_path)
+                forget_validated_cover(cache_path)
+        except OSError:
+            pass
+        headers = {"Referer": referer} if referer else {}
+        origin_slot = COVER_ORIGIN_SEMAPHORE.acquire(timeout=2)
+        if not origin_slot:
+            return None, False
+        try:
+            response = SESSION.get(
+                source_url,
+                timeout=(3, 10),
+                headers=headers,
+            )
+            response.raise_for_status()
+            if (
+                len(response.content) <= 100
+                or not response.headers.get("Content-Type", "").lower().startswith("image/")
+                or urlsplit(response.url).path.endswith("/images/notfound.png")
+            ):
+                raise UnidentifiedImageError("Cover source returned no usable image")
+            targets = [(cache_path, size)]
+            for variant_size in cover_variant_sizes(namespace, size):
+                variant_path = cover_cache_path(namespace, identity, variant_size)
+                if variant_path == cache_path or cover_cache_file_is_valid(variant_path):
+                    continue
+                targets.append((variant_path, variant_size))
+            write_optimized_cover_variants(response.content, targets)
+        except (requests.RequestException, OSError, UnidentifiedImageError):
+            remember_cover_failure(cache_path)
+            return None, False
+        finally:
+            COVER_ORIGIN_SEMAPHORE.release()
     clear_cover_failure(cache_path)
-    return cache_path, hit
+    return cache_path, False
 
 def cached_cover_response(namespace, identity, size, source_url, referer=""):
     started = time.perf_counter()
@@ -2975,8 +3299,12 @@ def cached_cover_response(namespace, identity, size, source_url, referer=""):
     add_server_timing("cover", started, description="hit" if hit else "miss")
     return response
 
-@app.route("/cover/<md5>", defaults={"size": "S"})
+@app.route("/cover/<md5>")
+def cover_default(md5):
+    return cover(md5, "S")
+
 @app.route("/cover/<md5>/<size>")
+@app.route("/cover/<md5>/<size>.webp")
 def cover(md5, size):
     if not re.fullmatch(r"[a-fA-F0-9]{32}", md5):
         return "", 404
@@ -2988,6 +3316,7 @@ def cover(md5, size):
 
 @app.route("/olcover/<int:cover_id>")
 @app.route("/olcover/<int:cover_id>/<size>")
+@app.route("/olcover/<int:cover_id>/<size>.webp")
 def olcover(cover_id, size="M"):
     if cover_id <= 0 or cover_id > 100_000_000:
         return "", 404
@@ -2997,6 +3326,7 @@ def olcover(cover_id, size="M"):
 
 @app.route("/iacover/<identifier>")
 @app.route("/iacover/<identifier>/<size>")
+@app.route("/iacover/<identifier>/<size>.webp")
 def iacover(identifier, size="M"):
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", identifier):
         return "", 404
@@ -3040,7 +3370,7 @@ def _kindle_cover_bytes(cover_url):
     parsed = urlsplit(str(cover_url or "").strip())
     if parsed.scheme or parsed.netloc:
         return b""
-    open_library_match = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", parsed.path)
+    open_library_match = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?(?:\.webp)?", parsed.path)
     if open_library_match:
         cover_id = open_library_match.group(1)
         cached = _cached_cover_variant("openlibrary", cover_id)
@@ -3056,7 +3386,7 @@ def _kindle_cover_bytes(cover_url):
         return _cover_file_as_jpeg(cache_path)
 
     archive_match = re.fullmatch(
-        r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML])?",
+        r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML])?(?:\.webp)?",
         parsed.path,
     )
     if archive_match:
@@ -3072,7 +3402,7 @@ def _kindle_cover_bytes(cover_url):
         )
         return _cover_file_as_jpeg(cache_path)
 
-    download_match = re.fullmatch(r"/cover/([a-fA-F0-9]{32})(?:/[SML])?", parsed.path)
+    download_match = re.fullmatch(r"/cover/([a-fA-F0-9]{32})(?:/[SML])?(?:\.webp)?", parsed.path)
     cover_dir = (parse_qs(parsed.query).get("dir") or [""])[0]
     if download_match and re.fullmatch(r"[A-Za-z0-9_.-]{1,48}", cover_dir):
         md5 = download_match.group(1).lower()
@@ -3093,10 +3423,48 @@ def _kindle_cover_bytes(cover_url):
 
 
 def _kindle_progress(stage, progress=None, detail=""):
-    event = {"type": "progress", "stage": stage, "progress": progress}
+    event = {
+        "type": "progress",
+        "stage": stage,
+        "progress": progress,
+        "timestamp": round(time.time(), 3),
+    }
     if detail:
         event["detail"] = detail
     return event
+
+
+class KindleProgressTracker:
+    def __init__(self):
+        self.started_at = time.perf_counter()
+        self.stage_started_at = self.started_at
+        self.stage = ""
+        self.stage_durations = {}
+
+    def event(self, stage, progress=None, detail=""):
+        now = time.perf_counter()
+        if stage != self.stage:
+            if self.stage:
+                self.stage_durations[self.stage] = round(
+                    self.stage_durations.get(self.stage, 0)
+                    + now - self.stage_started_at,
+                    3,
+                )
+            self.stage = stage
+            self.stage_started_at = now
+        event = _kindle_progress(stage, progress, detail)
+        event["elapsed_seconds"] = round(now - self.started_at, 3)
+        event["stage_elapsed_seconds"] = round(now - self.stage_started_at, 3)
+        return event
+
+    def durations(self):
+        durations = dict(self.stage_durations)
+        if self.stage:
+            durations[self.stage] = round(
+                durations.get(self.stage, 0) + time.perf_counter() - self.stage_started_at,
+                3,
+            )
+        return durations
 
 
 RESOLVE_HEARTBEAT_SECONDS = 4
@@ -3104,14 +3472,17 @@ DOWNLOAD_MAX_ATTEMPTS = 4
 DOWNLOAD_READ_TIMEOUT = 60
 
 
-def _resolve_download_progress(md5):
+def _resolve_download_progress(md5, emit=None, abort_check=None):
+    emit = emit or _kindle_progress
     with ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(DOWNLOADER.resolve_download, md5)
         while True:
             try:
                 return future.result(timeout=RESOLVE_HEARTBEAT_SECONDS)
             except FutureTimeoutError:
-                yield _kindle_progress("Finding book file", None, "Waiting for the download source")
+                if abort_check:
+                    abort_check()
+                yield emit("Finding book file", None, "Waiting for the download source")
 
 
 def _format_transfer_size(value):
@@ -3124,7 +3495,16 @@ def _format_transfer_size(value):
         size /= 1024
 
 
-def _download_book_progress(url, destination):
+def _download_book_progress(
+    url,
+    destination,
+    *,
+    md5="",
+    extension="",
+    emit=None,
+    abort_check=None,
+):
+    emit = emit or _kindle_progress
     downloaded = os.path.getsize(destination) if os.path.exists(destination) else 0
     total_bytes = 0
     last_reported_progress = 10
@@ -3138,6 +3518,8 @@ def _download_book_progress(url, destination):
             headers["Range"] = f"bytes={resume_at}-"
         response = None
         try:
+            if abort_check:
+                abort_check()
             response = SESSION.get(
                 url,
                 stream=True,
@@ -3152,6 +3534,14 @@ def _download_book_progress(url, destination):
                 )
                 complete_size = int(complete_range.group(1)) if complete_range else 0
                 if complete_size and downloaded == complete_size:
+                    if md5 and extension:
+                        validation = validate_source_file(
+                            destination,
+                            md5,
+                            extension,
+                            expected_size=complete_size,
+                        )
+                        return downloaded, complete_size, validation
                     return downloaded, complete_size
                 with open(destination, "wb"):
                     pass
@@ -3159,6 +3549,13 @@ def _download_book_progress(url, destination):
                 total_bytes = 0
                 raise requests.RequestException("Download range was no longer valid")
             response.raise_for_status()
+            content_type = response.headers.get("content-type", "").casefold()
+            if "text/html" in content_type or "application/xhtml" in content_type:
+                with open(destination, "wb"):
+                    pass
+                downloaded = 0
+                total_bytes = 0
+                raise SourceFileError("Download source returned a web page")
 
             append = False
             content_range = response.headers.get("content-range", "")
@@ -3188,6 +3585,8 @@ def _download_book_progress(url, destination):
                 for chunk in response.iter_content(chunk_size=65536):
                     if not chunk:
                         continue
+                    if abort_check:
+                        abort_check()
                     output.write(chunk)
                     downloaded += len(chunk)
                     if total_bytes:
@@ -3195,21 +3594,35 @@ def _download_book_progress(url, destination):
                         if current >= last_reported_progress + 2:
                             last_reported_progress = current
                             detail = f"{_format_transfer_size(downloaded)} of {_format_transfer_size(total_bytes)}"
-                            yield _kindle_progress("Downloading book", current, detail)
+                            yield emit("Downloading book", current, detail)
                     elif downloaded - last_reported_bytes >= 1024 * 1024:
                         last_reported_bytes = downloaded
-                        yield _kindle_progress(
+                        yield emit(
                             "Downloading book",
                             None,
                             f"{_format_transfer_size(downloaded)} downloaded",
                         )
-            if total_bytes and downloaded < total_bytes:
+            if total_bytes and downloaded != total_bytes:
                 raise requests.exceptions.ChunkedEncodingError(
                     f"Download ended at {downloaded} of {total_bytes} bytes"
                 )
+            if md5 and extension:
+                validation = validate_source_file(
+                    destination,
+                    md5,
+                    extension,
+                    expected_size=total_bytes,
+                )
+                return downloaded, total_bytes, validation
             return downloaded, total_bytes
-        except (requests.RequestException, OSError) as error:
+        except (requests.RequestException, OSError, SourceFileError) as error:
             last_error = error
+            if isinstance(error, SourceFileError):
+                try:
+                    with open(destination, "wb"):
+                        pass
+                except OSError:
+                    pass
             try:
                 downloaded = os.path.getsize(destination)
             except OSError:
@@ -3219,8 +3632,17 @@ def _download_book_progress(url, destination):
             detail = f"Continuing from {_format_transfer_size(downloaded)}"
             if total_bytes:
                 detail += f" of {_format_transfer_size(total_bytes)}"
-            yield _kindle_progress("Resuming book download", None, detail)
+            yield emit("Resuming book download", None, detail)
             time.sleep(min(attempt, 3))
+            if md5:
+                DOWNLOADER.invalidate_download(md5)
+                refreshed_url = yield from _resolve_download_progress(
+                    md5,
+                    emit=emit,
+                    abort_check=abort_check,
+                )
+                if refreshed_url:
+                    url = refreshed_url
         finally:
             if response is not None:
                 try:
@@ -3237,6 +3659,9 @@ def _open_smtp_connection(host, port, timeout=45):
     if int(port) == 465:
         server = smtplib.SMTP_SSL(host, port, timeout=timeout, context=ssl.create_default_context())
         server.ehlo()
+        if server.sock:
+            import socket
+            server.sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         return server
     server = smtplib.SMTP(host, port, timeout=timeout)
     try:
@@ -3261,16 +3686,121 @@ def _close_smtp_connection(server):
         server.close()
 
 
-def _send_message_progress(server, message, attachment_size):
-    detail = f"Uploading {_format_transfer_size(attachment_size)} attachment"
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(server.send_message, message)
-        while True:
-            try:
-                future.result(timeout=4)
-                return
-            except FutureTimeoutError:
-                yield _kindle_progress("Uploading to email", None, detail)
+def _format_eta(seconds):
+    seconds = max(0, int(round(seconds or 0)))
+    if seconds < 60:
+        return f"{seconds}s left"
+    minutes, remainder = divmod(seconds, 60)
+    return f"{minutes}m {remainder}s left" if remainder else f"{minutes}m left"
+
+
+def _send_attachment_progress(
+    server,
+    *,
+    sender,
+    recipient,
+    title,
+    author,
+    extension,
+    attachment_path,
+    filename,
+    message_id,
+    emit=None,
+):
+    emit = emit or _kindle_progress
+    body_lines = [f"Book sent from LibFlix.\n\nTitle: {title}"]
+    if author:
+        body_lines.append(f"Author: {author}")
+    body_lines.append(f"Format: {extension.upper()}")
+    mime_subtype = {
+        "epub": "epub+zip",
+        "pdf": "pdf",
+    }.get(extension, "octet-stream")
+    for update in stream_smtp_attachment(
+        server,
+        sender=sender,
+        recipient=recipient,
+        subject=f"Sent by LibFlix: {title}",
+        body="\n".join(body_lines),
+        attachment_path=attachment_path,
+        filename=filename,
+        mime_subtype=mime_subtype,
+        message_id=message_id,
+    ):
+        fraction = update.sent / max(update.total, 1)
+        progress = 80 + min(19, int(fraction * 19))
+        detail = (
+            f"{_format_transfer_size(update.sent)} of {_format_transfer_size(update.total)}"
+            f" · {_format_transfer_size(update.rate)}/s · {_format_eta(update.eta_seconds)}"
+        )
+        event = emit("Uploading to email", progress, detail)
+        event.update({
+            "uploaded_bytes": int(update.sent),
+            "upload_total_bytes": int(update.total),
+            "upload_rate_bytes_per_second": round(float(update.rate), 1),
+            "upload_eta_seconds": round(float(update.eta_seconds), 1),
+        })
+        yield event
+
+
+def _configured_kindle_relay():
+    if not (KINDLE_RELAY_HOST and KINDLE_RELAY_USER and KINDLE_RELAY_PASSWORD):
+        return None
+    try:
+        port = int(KINDLE_RELAY_PORT)
+    except (TypeError, ValueError):
+        # Preserve the invalid value so payload validation can report the
+        # relay configuration error instead of asking for user SMTP details.
+        port = KINDLE_RELAY_PORT
+    return {
+        "host": KINDLE_RELAY_HOST,
+        "port": port,
+        "user": KINDLE_RELAY_USER,
+        "password": KINDLE_RELAY_PASSWORD,
+        "sender": KINDLE_RELAY_SENDER or KINDLE_RELAY_USER,
+        "managed": True,
+    }
+
+
+def _kindle_smtp_configuration(data):
+    relay = _configured_kindle_relay()
+    if relay:
+        return relay
+    return {
+        "host": str(data.get("smtp_host") or "").strip(),
+        "port": data.get("smtp_port", 587),
+        "user": str(data.get("smtp_user") or "").strip(),
+        "password": data.get("smtp_pass") or "",
+        "sender": str(data.get("sender_email") or data.get("smtp_user") or "").strip(),
+        "managed": False,
+    }
+
+
+def _open_authenticated_smtp(configuration, cancel_event=None):
+    started = time.perf_counter()
+    server = None
+    try:
+        server = _open_smtp_connection(configuration["host"], configuration["port"])
+        server.login(configuration["user"], configuration["password"])
+        if cancel_event and cancel_event.is_set():
+            raise RuntimeError("Delivery preparation was cancelled")
+        return server, round(time.perf_counter() - started, 3)
+    except Exception:
+        _close_smtp_connection(server)
+        raise
+
+
+def _future_failure(future):
+    if future and future.done():
+        future.result()
+
+
+def _kindle_source_cache():
+    return KindleSourceCache(
+        KINDLE_SOURCE_CACHE_DIR,
+        ttl=KINDLE_SOURCE_CACHE_TTL,
+        max_bytes=KINDLE_SOURCE_CACHE_MAX_BYTES,
+    )
 
 
 def _kindle_delivery_error(error):
@@ -3288,47 +3818,90 @@ def _kindle_delivery_error(error):
 
 
 def _send_to_kindle_events(data):
-    import smtplib, tempfile
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.base import MIMEBase
-    from email.mime.text import MIMEText
-    from email import encoders
+    import smtplib
 
-    md5 = data.get("md5", "")
+    md5 = str(data.get("md5") or "").casefold()
     ext = re.sub(r"[^a-z0-9]", "", data.get("ext", "epub").lower()) or "epub"
     kindle_email = data.get("kindle_email", "").strip()
-    smtp_host = data.get("smtp_host", "").strip()
-    smtp_port = data.get("smtp_port", 587)
-    smtp_user = data.get("smtp_user", "").strip()
-    smtp_pass = data.get("smtp_pass", "")
-    sender_email = data.get("sender_email", smtp_user)
+    smtp_configuration = _kindle_smtp_configuration(data)
+    source_cache = _kindle_source_cache()
+    tracker = KindleProgressTracker()
     tmp_path = None
     prepared_path = None
+    source_path = ""
+    server = None
+    smtp_future = None
+    cover_future = None
+    parallel_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="kindle-warm")
+    parallel_cancel = threading.Event()
+    parallel_durations = {}
     progress = 3
-    delivery_started = time.perf_counter()
+    message_id = f"<libflix-{md5}-{uuid.uuid4().hex}@fomalhaut.app>"
+
+    def timed_cover_load():
+        started = time.perf_counter()
+        value = _kindle_cover_bytes(data.get("cover_url"))
+        return value, round(time.perf_counter() - started, 3)
 
     try:
-        yield _kindle_progress("Preparing delivery", progress)
-        yield _kindle_progress("Finding book file", None, "Checking the download source")
-        dl_url = yield from _resolve_download_progress(md5)
-        if not dl_url:
-            raise RuntimeError("The download source did not return a file link.")
+        smtp_future = parallel_executor.submit(
+            _open_authenticated_smtp,
+            smtp_configuration,
+            parallel_cancel,
+        )
+        if ext == "epub" and data.get("cover_url"):
+            cover_future = parallel_executor.submit(timed_cover_load)
 
-        progress = 10
-        yield _kindle_progress("Connecting to book source", progress)
-        yield _kindle_progress("Downloading book", progress, "Starting transfer")
-        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tmp:
-            tmp_path = tmp.name
-        downloaded, total_bytes = yield from _download_book_progress(dl_url, tmp_path)
+        yield tracker.event("Preparing delivery", progress, "Starting secure delivery tasks")
+        source_path = source_cache.get(md5, ext)
+        source_cache_hit = bool(source_path)
+        if source_cache_hit:
+            progress = 65
+            yield tracker.event(
+                "Book file ready",
+                progress,
+                "Using a recent verified copy",
+            )
+        else:
+            yield tracker.event("Finding book file", None, "Checking the download source")
+            dl_url = yield from _resolve_download_progress(
+                md5,
+                emit=tracker.event,
+                abort_check=lambda: _future_failure(smtp_future),
+            )
+            if not dl_url:
+                raise RuntimeError("The download source did not return a file link.")
+
+            progress = 10
+            yield tracker.event("Connecting to book source", progress)
+            yield tracker.event("Downloading book", progress, "Starting transfer")
+            tmp_path = source_cache.temporary_path(md5, ext)
+            downloaded, total_bytes, validation = yield from _download_book_progress(
+                dl_url,
+                tmp_path,
+                md5=md5,
+                extension=ext,
+                emit=tracker.event,
+                abort_check=lambda: _future_failure(smtp_future),
+            )
+            source_path = source_cache.commit(tmp_path, md5, ext, validation)
+            if source_path != tmp_path:
+                tmp_path = None
 
         progress = 68
-        yield _kindle_progress("Polishing book details", progress, "Checking title, metadata, and cover")
+        yield tracker.event("Polishing book details", progress, "Checking title, metadata, and cover")
         identifier = ""
         ol_key = str(data.get("ol_key") or "").strip()
         if re.fullmatch(r"/works/OL\d+W", ol_key):
             identifier = f"https://openlibrary.org{ol_key}"
+        cover_bytes = b""
+        if cover_future:
+            try:
+                cover_bytes, parallel_durations["cover_fetch"] = cover_future.result()
+            except Exception:
+                cover_bytes = b""
         prepared = prepare_book_for_kindle(
-            tmp_path,
+            source_path,
             ext,
             {
                 "canonical_title": data.get("canonical_title") or data.get("title"),
@@ -3340,7 +3913,7 @@ def _send_to_kindle_events(data):
                 "description": data.get("description"),
                 "identifier": identifier,
             },
-            cover_loader=lambda: _kindle_cover_bytes(data.get("cover_url")),
+            cover_loader=(lambda: cover_bytes) if cover_future else None,
         )
         if prepared.temporary:
             prepared_path = prepared.path
@@ -3358,86 +3931,97 @@ def _send_to_kindle_events(data):
         if not detail_parts:
             detail_parts.append("Clean filename ready")
         progress = 74
-        yield _kindle_progress("Building Kindle delivery", progress, "; ".join(detail_parts))
-
-        msg = MIMEMultipart()
-        msg["From"] = sender_email
-        msg["To"] = kindle_email
-        msg["Subject"] = f"Sent by LibFlix: {title}"
-
-        body_lines = [f"Book sent from LibFlix.\n\nTitle: {title}"]
-        if prepared.author:
-            body_lines.append(f"Author: {prepared.author}")
-        body_lines.append(f"Format: {ext.upper()}")
-        body = MIMEText("\n".join(body_lines))
-        msg.attach(body)
-
-        mime_subtype = {
-            "epub": "epub+zip",
-            "pdf": "pdf",
-            "mobi": "x-mobipocket-ebook",
-            "azw": "vnd.amazon.ebook",
-            "azw3": "vnd.amazon.ebook",
-        }.get(ext, "octet-stream")
-        with open(attachment_path, "rb") as f:
-            attachment = MIMEBase("application", mime_subtype)
-            attachment.set_payload(f.read())
-            encoders.encode_base64(attachment)
-            attachment.add_header(
-                "Content-Disposition",
-                "attachment",
-                filename=("utf-8", "", prepared.filename),
-            )
-            msg.attach(attachment)
+        yield tracker.event("Building Kindle delivery", progress, "; ".join(detail_parts))
 
         progress = 80
-        yield _kindle_progress("Connecting to email", progress)
-        server = _open_smtp_connection(smtp_host, smtp_port)
+        yield tracker.event("Connecting to email", progress, "Finalising the secure connection")
+        server, parallel_durations["smtp_connect_and_login"] = smtp_future.result()
+        smtp_future = None
         try:
-            progress = 86
-            yield _kindle_progress("Signing in securely", progress)
-            server.login(smtp_user, smtp_pass)
-            progress = 92
-            yield _kindle_progress("Sending to Kindle", progress, f"Uploading {_format_transfer_size(attachment_size)} attachment")
+            code, _ = server.noop()
+            if code != 250:
+                raise smtplib.SMTPServerDisconnected("Warm email connection expired")
+            yield tracker.event(
+                "Sending to Kindle",
+                progress,
+                f"Uploading {_format_transfer_size(attachment_size)} attachment",
+            )
             try:
-                yield from _send_message_progress(server, msg, attachment_size)
+                yield from _send_attachment_progress(
+                    server,
+                    sender=smtp_configuration["sender"],
+                    recipient=kindle_email,
+                    title=title,
+                    author=prepared.author,
+                    extension=ext,
+                    attachment_path=attachment_path,
+                    filename=prepared.filename,
+                    message_id=message_id,
+                    emit=tracker.event,
+                )
             except (smtplib.SMTPServerDisconnected, TimeoutError, ConnectionError, OSError):
                 _close_smtp_connection(server)
                 server = None
-                yield _kindle_progress("Reconnecting to email", None, "The first upload connection was interrupted")
-                server = _open_smtp_connection(smtp_host, smtp_port)
-                server.login(smtp_user, smtp_pass)
-                yield from _send_message_progress(server, msg, attachment_size)
+                yield tracker.event("Reconnecting to email", None, "The first upload connection was interrupted")
+                server, reconnect_duration = _open_authenticated_smtp(smtp_configuration)
+                parallel_durations["smtp_reconnect"] = reconnect_duration
+                yield from _send_attachment_progress(
+                    server,
+                    sender=smtp_configuration["sender"],
+                    recipient=kindle_email,
+                    title=title,
+                    author=prepared.author,
+                    extension=ext,
+                    attachment_path=attachment_path,
+                    filename=prepared.filename,
+                    message_id=message_id,
+                    emit=tracker.event,
+                )
         finally:
             _close_smtp_connection(server)
+            server = None
 
         progress = 100
-        yield {
+        complete = tracker.event("Sent to Kindle", progress)
+        complete.update({
             "type": "complete",
             "success": True,
-            "stage": "Sent to Kindle",
-            "progress": progress,
             "title": title,
-            "elapsed_seconds": round(time.perf_counter() - delivery_started, 2),
-        }
+            "attachment_bytes": attachment_size,
+            "source_cache_hit": source_cache_hit,
+            "stage_durations": tracker.durations(),
+            "parallel_durations": parallel_durations,
+        })
+        yield complete
     except smtplib.SMTPAuthenticationError:
-        yield {
+        failed = tracker.event("Sign-in failed", progress)
+        failed.update({
             "type": "error",
             "success": False,
-            "stage": "Sign-in failed",
-            "progress": progress,
             "error": "SMTP auth failed. For Gmail, use an App Password.",
-        }
+            "stage_durations": tracker.durations(),
+        })
+        yield failed
     except Exception as e:
         app.logger.warning("Kindle delivery failed at %s%% (%s): %s", progress, type(e).__name__, e)
-        yield {
+        failed = tracker.event("Delivery failed", progress)
+        failed.update({
             "type": "error",
             "success": False,
-            "stage": "Delivery failed",
-            "progress": progress,
             "error": _kindle_delivery_error(e),
-        }
+            "stage_durations": tracker.durations(),
+        })
+        yield failed
     finally:
+        parallel_cancel.set()
+        _close_smtp_connection(server)
+        if smtp_future and smtp_future.done():
+            try:
+                warmed_server, _ = smtp_future.result()
+            except Exception:
+                warmed_server = None
+            _close_smtp_connection(warmed_server)
+        parallel_executor.shutdown(wait=False, cancel_futures=True)
         for path in {tmp_path, prepared_path}:
             if not path:
                 continue
@@ -3446,8 +4030,18 @@ def _send_to_kindle_events(data):
             except OSError:
                 pass
 
+def _valid_delivery_email(value):
+    value = str(value or "").strip()
+    if len(value) > 320 or re.search(r"[\s\x00-\x1f\x7f]", value):
+        return False
+    return bool(re.fullmatch(r"[^@]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,63}", value))
+
+
 def validate_kindle_payload(data):
-    required = ("md5", "kindle_email", "smtp_host", "smtp_user", "smtp_pass")
+    relay = _configured_kindle_relay()
+    required = ("md5", "kindle_email")
+    if not relay:
+        required += ("smtp_host", "smtp_user", "smtp_pass")
     if not all(data.get(field) for field in required):
         return "Missing required fields"
     if not re.fullmatch(r"[a-fA-F0-9]{32}", str(data.get("md5", ""))):
@@ -3455,15 +4049,20 @@ def validate_kindle_payload(data):
     extension = re.sub(r"[^a-z0-9]", "", str(data.get("ext", "epub")).casefold()) or "epub"
     if not is_kindle_delivery_format(extension):
         return "This file type is not supported by Send to Kindle; use EPUB or PDF"
+    smtp_configuration = _kindle_smtp_configuration(data)
     try:
-        port = int(data.get("smtp_port", 587))
+        port = int(smtp_configuration["port"])
     except (TypeError, ValueError):
         return "SMTP port must be a number"
     if port not in (465, 587, 2525):
         return "Use a secure SMTP port: 465, 587, or 2525"
-    host = str(data.get("smtp_host", "")).strip().rstrip(".")
+    host = str(smtp_configuration["host"]).strip().rstrip(".")
     if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", host):
         return "Invalid SMTP hostname"
+    if not _valid_delivery_email(data.get("kindle_email")):
+        return "Invalid Kindle email address"
+    if not _valid_delivery_email(smtp_configuration.get("sender")):
+        return "Invalid sender email address"
     try:
         addresses = {
             item[4][0]
@@ -3492,8 +4091,13 @@ def validate_kindle_payload(data):
         data[field] = re.sub(r"\s+", " ", value).strip()[:limit]
     if data["ol_key"] and not re.fullmatch(r"/works/OL\d+W", data["ol_key"]):
         data["ol_key"] = ""
-    data["smtp_port"] = port
-    data["smtp_host"] = host
+    if not smtp_configuration.get("managed"):
+        data["smtp_port"] = port
+        data["smtp_host"] = host
+        data["sender_email"] = smtp_configuration["sender"]
+    else:
+        for field in ("smtp_host", "smtp_port", "smtp_user", "smtp_pass", "sender_email"):
+            data.pop(field, None)
     data["ext"] = extension
     return ""
 
@@ -3501,7 +4105,7 @@ def kindle_job_create():
     initialize_disk_cache()
     job_id = uuid.uuid4().hex
     now = time.time()
-    queued = [{"type": "progress", "stage": "Queued for delivery", "progress": 1}]
+    queued = [_kindle_progress("Queued for delivery", 1)]
     with disk_cache_connection(timeout=5) as connection:
         connection.execute(
             "INSERT INTO kindle_jobs(job_id, created_at, updated_at, status, events) "
@@ -3544,6 +4148,7 @@ def kindle_job_get(job_id, cursor=0):
             "success": False,
             "stage": "Delivery interrupted",
             "progress": None,
+            "timestamp": round(time.time(), 3),
             "error": "The delivery worker stopped responding. Start the delivery again.",
         }
         kindle_job_append(job_id, timeout_event)
@@ -3557,9 +4162,47 @@ def kindle_job_get(job_id, cursor=0):
         "cursor": len(events),
     }
 
+def _acquire_global_kindle_slot():
+    os.makedirs(os.path.dirname(KINDLE_DELIVERY_LOCK_FILE), mode=0o700, exist_ok=True)
+    handle = open(KINDLE_DELIVERY_LOCK_FILE, "a+", encoding="utf-8")
+    try:
+        os.chmod(KINDLE_DELIVERY_LOCK_FILE, 0o600)
+        queued_at = time.perf_counter()
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return handle
+            except BlockingIOError:
+                waited = max(1, int(time.perf_counter() - queued_at))
+                yield _kindle_progress(
+                    "Queued for delivery",
+                    1,
+                    f"Waiting for the active delivery · {waited}s",
+                )
+                time.sleep(4)
+    except Exception:
+        handle.close()
+        raise
+
+def _release_global_kindle_slot(handle):
+    if not handle:
+        return
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    finally:
+        handle.close()
+
+def _locked_kindle_events(data):
+    handle = None
+    try:
+        handle = yield from _acquire_global_kindle_slot()
+        yield from _send_to_kindle_events(data)
+    finally:
+        _release_global_kindle_slot(handle)
+
 def run_kindle_job(job_id, data):
     try:
-        for event in _send_to_kindle_events(data):
+        for event in _locked_kindle_events(data):
             kindle_job_append(job_id, event)
     except Exception as error:
         kindle_job_append(job_id, {
@@ -3605,7 +4248,7 @@ def api_sendtokindle():
 
     if request.args.get("stream") == "1":
         def stream_events():
-            for event in _send_to_kindle_events(data):
+            for event in _locked_kindle_events(data):
                 yield json.dumps(event, ensure_ascii=False) + "\n"
 
         response = Response(stream_with_context(stream_events()), mimetype="application/x-ndjson")
@@ -3613,7 +4256,7 @@ def api_sendtokindle():
         response.headers["X-Accel-Buffering"] = "no"
         return response
 
-    events = list(_send_to_kindle_events(data))
+    events = list(_locked_kindle_events(data))
     final = events[-1] if events else {"success": False, "error": "Delivery did not complete"}
     status = 200 if final.get("success") else 502
     return jsonify(final), status
@@ -3629,42 +4272,79 @@ def load_cached_shelves():
             for shelf in shelves:
                 for book in shelf.get("books", []):
                     remember_book_hint(book, lang)
-            trending = shelves[0].get("books", []) if shelves else []
-            for index, book in enumerate(trending[:12]):
-                match = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?", book.get("cover_url", ""))
-                if not match:
-                    continue
-                warm_jobs.append((match.group(1), "M"))
-                if index < 7:
-                    warm_jobs.append((match.group(1), "L"))
+            warm_jobs.extend(cover_warm_jobs_for_shelves(shelves))
             cache_set(f"shelves_{lang}_{mode}", shelves)
             print(f"Loaded {len(shelves)} Open Library {lang} {mode} shelves from disk cache", flush=True)
     schedule_cover_warm(warm_jobs)
 
-def schedule_cover_warm(jobs):
+def cover_warm_jobs_for_shelves(shelves):
+    trending = shelves[0].get("books", []) if shelves else []
+    cover_ids = []
+    for book in trending:
+        match = re.fullmatch(
+            r"/olcover/(\d+)(?:/[SML](?:\.webp)?)?",
+            str(book.get("cover_url", "")),
+        )
+        if match and match.group(1) not in cover_ids:
+            cover_ids.append(match.group(1))
+    # Any of the first 16 books may be selected as the large hero. Every
+    # Trending cover can enter the first hydrated shelf at medium size.
+    return (
+        [(cover_id, "L") for cover_id in cover_ids[:16]]
+        + [(cover_id, "M") for cover_id in cover_ids]
+    )
+
+def cover_warm_marker_is_fresh(marker):
+    try:
+        return time.time() - os.path.getmtime(marker) < 86400
+    except OSError:
+        return False
+
+def write_cover_warm_marker(marker):
+    temporary = f"{marker}.{uuid.uuid4().hex}.tmp"
+    try:
+        with open(temporary, "w") as marker_file:
+            marker_file.write(str(time.time()))
+        os.replace(temporary, marker)
+    finally:
+        try:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        except OSError:
+            pass
+
+def _run_cover_warm_batch(jobs, marker, force=False):
+    lock_path = os.path.join(COVER_CACHE_DIR, ".warm.lock")
+    with filesystem_lock(lock_path):
+        if not force and cover_warm_marker_is_fresh(marker):
+            return False
+
+        def warm(cover_id, size):
+            url = f"https://covers.openlibrary.org/b/id/{cover_id}-{size}.jpg"
+            return ensure_cover_cached("openlibrary", cover_id, size, url)
+
+        futures = [COVER_WARM_EXECUTOR.submit(warm, cover_id, size) for cover_id, size in jobs]
+        completed = True
+        for future in as_completed(futures):
+            try:
+                cache_path, _hit = future.result()
+                if not cache_path:
+                    completed = False
+            except Exception:
+                completed = False
+        if not force and completed:
+            write_cover_warm_marker(marker)
+        return completed
+
+def schedule_cover_warm(jobs, force=False):
     jobs = list(dict.fromkeys(jobs))
     if not jobs:
-        return
+        return None
     os.makedirs(COVER_CACHE_DIR, exist_ok=True)
-    marker = os.path.join(COVER_CACHE_DIR, ".warm-started")
-    try:
-        if os.path.exists(marker):
-            if time.time() - os.path.getmtime(marker) < 86400:
-                return
-            os.unlink(marker)
-        with open(marker, "x") as marker_file:
-            marker_file.write(str(time.time()))
-    except FileExistsError:
-        return
-    except OSError:
-        return
-
-    def warm(cover_id, size):
-        url = f"https://covers.openlibrary.org/b/id/{cover_id}-{size}.jpg"
-        ensure_cover_cached("openlibrary", cover_id, size, url)
-
-    for cover_id, size in jobs:
-        COVER_WARM_EXECUTOR.submit(warm, cover_id, size)
+    marker = os.path.join(COVER_CACHE_DIR, ".warm-complete")
+    if not force and cover_warm_marker_is_fresh(marker):
+        return None
+    return COVER_WARM_COORDINATOR.submit(_run_cover_warm_batch, jobs, marker, force)
 
 initialize_disk_cache()
 load_cached_shelves()

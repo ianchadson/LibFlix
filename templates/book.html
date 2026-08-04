@@ -90,7 +90,6 @@
 
   <footer class="app-footer">Powered by Open Library &amp; libgen.li</footer>
 
-  <script data-page-script src="{{ url_for('static', filename='download-ui.js', v=asset_version) }}"></script>
   <script data-page-script>
     let bookTitle = {{ title | tojson }};
     let bookAuthor = {{ author | tojson }};
@@ -151,8 +150,9 @@
 
     function sizedDetailCoverUrl(url, size) {
       const value = String(url || '');
-      if (/^\/(?:olcover\/\d+|iacover\/[A-Za-z0-9_.-]+)(?:\/[SML])?$/.test(value)) {
-        return value.replace(/\/[SML]$/, '') + '/' + size;
+      const local = value.match(/^(\/(?:olcover\/\d+|iacover\/[A-Za-z0-9_.-]+))(?:\/[SML])?(\.webp)?(\?.*)?$/);
+      if (local) {
+        return local[1] + '/' + size + (local[2] || '') + (local[3] || '');
       }
       return value.replace(/-[SML]\.jpg(?:\?.*)?$/, '-' + size + '.jpg');
     }
@@ -319,6 +319,36 @@
       return true;
     }
 
+    function applyBookDetails(data, allowRefreshRetry = true) {
+      if (!data?.success) return false;
+      hydrateBookIdentity(data);
+      const detailRefreshPending = Boolean(allowRefreshRetry && data.refreshing && scheduleDetailRetry());
+      const skeleton = document.getElementById('descSkeleton');
+      if (data.description) {
+        bookDescription = data.description;
+        skeleton.style.display = 'none';
+        document.getElementById('descNone').style.display = 'none';
+        const text = document.getElementById('descText');
+        text.textContent = data.description;
+        text.style.display = '';
+        requestAnimationFrame(updateDescriptionClamp);
+      } else if (detailRefreshPending) {
+        skeleton.style.display = '';
+        document.getElementById('descNone').style.display = 'none';
+      } else {
+        skeleton.style.display = 'none';
+        document.getElementById('descNone').style.display = 'block';
+      }
+      if (data.similar_subjects?.length) {
+        similarSubjects = data.similar_subjects;
+        requestSimilarIfReady();
+      } else {
+        renderSimilarEmpty('No similar books are available.');
+      }
+      requestDownloadsIfReady();
+      return true;
+    }
+
     function loadBookDetails() {
       if (!olKey) {
         showNoDescription();
@@ -326,45 +356,31 @@
         requestDownloadsIfReady();
         return;
       }
+      const previewKey = BOOK_LANG + ':' + olKey;
+      const cachedPreview = window.LibFlixBookPreviewCache?.get(previewKey);
+      if (
+        cachedPreview?.success &&
+        cachedPreview.description &&
+        !cachedPreview.refreshing &&
+        Date.now() - Number(cachedPreview._previewCachedAt || 0) < 60000
+      ) {
+        applyBookDetails(cachedPreview, false);
+        return;
+      }
       fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang=' + encodeURIComponent(BOOK_LANG) + '&description_version=2', { cache: 'no-store' })
         .then(response => response.json())
         .then(data => {
-          if (!data.success && data.refreshing && scheduleDetailRetry()) {
-            return;
-          }
-          if (!data.success) {
+          if (!data.success && data.refreshing && scheduleDetailRetry()) return;
+          if (!applyBookDetails(data)) {
             showNoDescription();
             renderSimilarEmpty('No similar books are available.');
             requestDownloadsIfReady();
             return;
           }
-          hydrateBookIdentity(data);
-          const detailRefreshPending = Boolean(data.refreshing && scheduleDetailRetry());
-          const skeleton = document.getElementById('descSkeleton');
-          if (data.success && data.description) {
-            bookDescription = data.description;
-            skeleton.style.display = 'none';
-            document.getElementById('descNone').style.display = 'none';
-            const text = document.getElementById('descText');
-            text.textContent = data.description;
-            text.style.display = '';
-            requestAnimationFrame(updateDescriptionClamp);
-          } else {
-            if (detailRefreshPending) {
-              skeleton.style.display = '';
-              document.getElementById('descNone').style.display = 'none';
-            } else {
-              skeleton.style.display = 'none';
-              document.getElementById('descNone').style.display = 'block';
-            }
+          if (data.description && !data.refreshing) {
+            data._previewCachedAt = Date.now();
+            window.LibFlixBookPreviewCache?.set(previewKey, data);
           }
-          if (data.success && data.similar_subjects && data.similar_subjects.length) {
-            similarSubjects = data.similar_subjects;
-            requestSimilarIfReady();
-          } else {
-            renderSimilarEmpty('No similar books are available.');
-          }
-          requestDownloadsIfReady();
         })
         .catch(() => {
           if (scheduleDetailRetry()) return;
@@ -400,11 +416,12 @@
             const title = escapeHtml(book.title || 'Untitled');
             const author = escapeHtml(book.author || '');
             const cover = book.cover_url
-              ? '<div class="cover-skeleton"></div><img src="' + escapeHtml(book.cover_url) + '" alt="' + title + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="placeholder" hidden>?</div>'
+              ? '<div class="cover-skeleton"></div><img data-cover-src="' + escapeHtml(book.cover_url) + '" alt="' + title + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="placeholder" hidden>?</div>'
               : '<div class="placeholder">?</div>';
             return '<a href="' + href + '" class="book-card-link"><div class="book-card" data-ol-key="' + escapeHtml(book.ol_key || '') + '" data-title="' + title + '" data-author="' + author + '">' + cover + '<div class="info"><div class="t">' + title + '</div>' + (author ? '<div class="a">' + author + '</div>' : '') + '</div></div></a>';
           }).join('');
           document.getElementById('similarRow').innerHTML = html;
+          window.LibFlixCoverLoader?.register(document.getElementById('similarRow'));
         })
         .catch(() => renderSimilarEmpty('Similar books could not be loaded.'));
     }
@@ -515,7 +532,11 @@
     let sendingMd5 = null;
     window.sendToKindle = function (md5, title, extension, button, edition = {}) {
       const settings = window.getKindleSettings?.();
-      if (!settings) {
+      const managedRelay = window.LibFlixManagedKindleRelay === true;
+      if (!settings?.kindle || (!managedRelay && (!settings?.host || !settings?.sender || !settings?.pass))) {
+        window.LibFlixRememberPendingKindle?.(() => {
+          window.sendToKindle(md5, title, extension, button, edition);
+        });
         window.openKindleModal?.();
         window.LibFlixNotify?.('Add Kindle delivery settings first');
         return;
@@ -537,11 +558,13 @@
           ol_key: olKey,
           ext: extension,
           kindle_email: settings.kindle,
-          smtp_host: settings.host,
-          smtp_port: parseInt(settings.port, 10) || 587,
-          smtp_user: settings.sender,
-          smtp_pass: settings.pass,
-          sender_email: settings.sender,
+          ...(managedRelay ? {} : {
+            smtp_host: settings.host,
+            smtp_port: parseInt(settings.port, 10) || 587,
+            smtp_user: settings.sender,
+            smtp_pass: settings.pass,
+            sender_email: settings.sender,
+          }),
         },
       })
         .catch(error => window.LibFlixNotify?.('Kindle delivery failed: ' + error.message, 'error'))

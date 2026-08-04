@@ -247,7 +247,7 @@
     <div class="kindle-card-head">
       <div>
         <h2 class="kindle-card-title" id="kindleModalTitle">Kindle</h2>
-        <p class="kindle-card-sub" id="kindleModalSub">Configure your Send to Kindle connection.</p>
+        <p class="kindle-card-sub" id="kindleModalSub">{% if kindle_managed_relay %}Enter your Kindle address. Delivery is managed by LibFlix.{% else %}Configure your Send to Kindle connection.{% endif %}</p>
       </div>
       <button class="kindle-close" type="button" onclick="closeKindleModal()" aria-label="Close Kindle settings">×</button>
     </div>
@@ -256,7 +256,7 @@
         <label for="ke_kindle">Kindle email</label>
         <input id="ke_kindle" autocomplete="email" placeholder="you@kindle.com">
       </div>
-      <div class="kindle-grid">
+      <div class="kindle-grid"{% if kindle_managed_relay %} hidden{% endif %}>
         <div class="kindle-field">
           <label for="ke_host">SMTP host</label>
           <input id="ke_host" value="smtp.gmail.com" autocomplete="off">
@@ -266,11 +266,11 @@
           <input id="ke_port" value="587" inputmode="numeric" autocomplete="off">
         </div>
       </div>
-      <div class="kindle-field">
+      <div class="kindle-field"{% if kindle_managed_relay %} hidden{% endif %}>
         <label for="ke_sender">Sender email</label>
         <input id="ke_sender" autocomplete="email" placeholder="you@gmail.com">
       </div>
-      <div class="kindle-field">
+      <div class="kindle-field"{% if kindle_managed_relay %} hidden{% endif %}>
         <label for="ke_pass">App password</label>
         <div class="kindle-password-wrap">
           <input id="ke_pass" type="password" autocomplete="new-password" placeholder="16-character app password">
@@ -280,7 +280,11 @@
         </div>
       </div>
       <div class="kindle-hint">
+        {% if kindle_managed_relay %}
+        Delivery is handled by LibFlix. Add the LibFlix sender address to Amazon's approved personal document list.
+        {% else %}
         Gmail works best with an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a>. Add the sender email to Amazon's approved personal document list.
+        {% endif %}
       </div>
       <div class="kindle-actions">
         <button class="kindle-primary" type="button" onclick="saveKindleSettings()">Save settings</button>
@@ -292,8 +296,23 @@
   </div>
 </div>
 <div class="app-toast" id="appToast" role="status" aria-live="polite" aria-atomic="true"></div>
+<aside class="kindle-global-tray" id="kindleGlobalTray" hidden role="status" aria-live="polite" aria-atomic="true">
+  <div class="kindle-global-tray-head">
+    <span class="kindle-global-tray-kicker">Send to Kindle</span>
+    <span class="kindle-global-tray-value" id="kindleGlobalTrayValue">Starting</span>
+  </div>
+  <div class="kindle-global-tray-title" id="kindleGlobalTrayTitle">Book</div>
+  <div class="kindle-global-tray-stage" id="kindleGlobalTrayStage">Preparing delivery</div>
+  <div class="kindle-global-tray-track" id="kindleGlobalTrayTrack" role="progressbar" aria-label="Send to Kindle progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+    <span class="kindle-global-tray-fill" id="kindleGlobalTrayFill"></span>
+  </div>
+  <div class="kindle-global-tray-detail" id="kindleGlobalTrayDetail" hidden></div>
+</aside>
+<script src="{{ url_for('static', filename='download-ui.js', v=asset_version) }}"></script>
 <script>
   (() => {
+    const KINDLE_MANAGED_RELAY = {{ kindle_managed_relay | tojson }};
+    window.LibFlixManagedKindleRelay = KINDLE_MANAGED_RELAY;
     const LOADER_DELAY = 180;
     const NAVIGATION_PROGRESS_DELAY = 320;
     const PAGE_CACHE_LIMIT = 16;
@@ -304,6 +323,40 @@
     const pageCache = new Map();
     const pendingPages = new Map();
     const loadedCoverUrls = new Set();
+    let deferredCoverObserver = null;
+    const loadDeferredCover = image => {
+      if (!(image instanceof HTMLImageElement) || image.getAttribute('src')) return;
+      const source = image.dataset.coverSrc;
+      if (!source) return;
+      image.src = source;
+    };
+    const deferredCoverCandidates = root => {
+      const images = [];
+      if (root instanceof HTMLImageElement && root.matches('img[data-cover-src]')) images.push(root);
+      root?.querySelectorAll?.('img[data-cover-src]').forEach(image => images.push(image));
+      return images;
+    };
+    const registerDeferredCovers = (root = document) => {
+      const images = deferredCoverCandidates(root).filter(image => !image.getAttribute('src'));
+      if (!images.length) return;
+      if (!('IntersectionObserver' in window)) {
+        images.forEach(loadDeferredCover);
+        return;
+      }
+      if (!deferredCoverObserver) {
+        deferredCoverObserver = new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            deferredCoverObserver.unobserve(entry.target);
+            loadDeferredCover(entry.target);
+          });
+        }, {
+          rootMargin: Math.max(320, window.innerHeight) + 'px ' + Math.max(320, window.innerWidth) + 'px',
+        });
+      }
+      images.forEach(image => deferredCoverObserver.observe(image));
+    };
+    window.LibFlixCoverLoader = { register: registerDeferredCovers, load: loadDeferredCover };
     const activateTransition = () => {
       const overlay = document.getElementById('appTransition');
       document.body.classList.add('is-leaving');
@@ -366,36 +419,69 @@
       }
       pageCache.delete(cacheKey);
       pageCache.set(cacheKey, cached);
-      return cached.html;
+      return cached.page;
     };
-    const storeCachedPage = (href, html) => {
+    const storeCachedPage = (href, page) => {
       const cacheKey = pageCacheKey(href);
       pageCache.delete(cacheKey);
-      pageCache.set(cacheKey, { html, storedAt: Date.now() });
+      pageCache.set(cacheKey, { page, storedAt: Date.now() });
       while (pageCache.size > PAGE_CACHE_LIMIT) {
         pageCache.delete(pageCache.keys().next().value);
       }
-      return html;
+      return page;
     };
-    const fetchPage = href => {
+    const waitForPage = (request, signal) => {
+      if (!signal) return request;
+      if (signal.aborted) return Promise.reject(new DOMException('Navigation superseded', 'AbortError'));
+      return new Promise((resolve, reject) => {
+        const abort = () => reject(new DOMException('Navigation superseded', 'AbortError'));
+        signal.addEventListener('abort', abort, { once: true });
+        request.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+      });
+    };
+    const fetchPage = (href, { signal } = {}) => {
       const cached = getCachedPage(href);
       if (cached !== null) return Promise.resolve(cached);
       const cacheKey = pageCacheKey(href);
-      if (pendingPages.has(cacheKey)) return pendingPages.get(cacheKey);
+      const pending = pendingPages.get(cacheKey);
+      if (pending && !pending.signal?.aborted) return waitForPage(pending.request, signal);
+      if (pending) pendingPages.delete(cacheKey);
       const url = new URL(href, window.location.href);
+      let entry;
       const request = fetch(url.href, {
         headers: {
           Accept: 'text/html',
           'X-LibFlix-Navigation': 'partial',
         },
+        signal,
       }).then(async response => {
         if (!response.ok) throw new Error('Navigation failed');
-        return storeCachedPage(url.href, await response.text());
+        const contentType = response.headers.get('content-type') || '';
+        let page;
+        if (contentType.includes('application/json')) {
+          const payload = await response.json();
+          page = {
+            html: String(payload.html || ''),
+            title: payload.title || '',
+            lang: payload.lang || '',
+            bodyClass: payload.body_class || '',
+          };
+        } else {
+          page = {
+            html: await response.text(),
+            title: response.headers.get('X-LibFlix-Title') || '',
+            lang: response.headers.get('X-LibFlix-Lang') || '',
+            bodyClass: response.headers.get('X-LibFlix-Body-Class') || '',
+          };
+        }
+        if (!page.html) throw new Error('Navigation returned no content');
+        return storeCachedPage(url.href, page);
       }).finally(() => {
-        pendingPages.delete(cacheKey);
+        if (pendingPages.get(cacheKey) === entry) pendingPages.delete(cacheKey);
       });
-      pendingPages.set(cacheKey, request);
-      return request;
+      entry = { request, signal };
+      pendingPages.set(cacheKey, entry);
+      return waitForPage(request, signal);
     };
     const prefetchPage = href => {
       if (!canPrefetchPages() || !isInternalNavigation(href)) return;
@@ -475,7 +561,7 @@
     };
 
     const coverUrl = image => {
-      const source = image.currentSrc || image.getAttribute('src');
+      const source = image.currentSrc || image.getAttribute('src') || image.dataset.coverSrc;
       if (!source) return '';
       try {
         return new URL(source, window.location.href).href;
@@ -502,7 +588,7 @@
     document.querySelectorAll('img.loaded').forEach(rememberLoadedCover);
     document.addEventListener('load', event => rememberLoadedCover(event.target), true);
 
-    const replacePage = async (nextDocument, url, push) => {
+    const replacePage = async (nextDocument, url, { push, historyEntry, pageMeta }) => {
       const nextMain = nextDocument.getElementById('mainContent');
       const currentMain = document.getElementById('mainContent');
       if (!nextMain || !currentMain) throw new Error('The destination is not app-navigable');
@@ -512,12 +598,13 @@
       document.querySelectorAll('script[data-page-script]:not([src])').forEach(script => script.remove());
       installPageStyles(nextDocument);
       syncNavbar(nextDocument);
-      document.title = nextDocument.title;
-      document.documentElement.lang = nextDocument.documentElement.lang || 'en';
-      document.body.className = nextDocument.body.className;
+      document.title = pageMeta.title || nextDocument.title || document.title;
+      document.documentElement.lang = pageMeta.lang || nextDocument.documentElement.lang || 'en';
+      document.body.className = pageMeta.bodyClass || nextDocument.body.className;
       const importedMain = document.importNode(nextMain, true);
       restoreLoadedCovers(importedMain);
       currentMain.replaceWith(importedMain);
+      registerDeferredCovers(importedMain);
       importedMain.querySelectorAll('img').forEach(image => {
         if (image.complete && image.naturalWidth > 0) rememberLoadedCover(image);
       });
@@ -526,13 +613,42 @@
       if (currentFooter && nextFooter) currentFooter.replaceWith(document.importNode(nextFooter, true));
       else if (currentFooter && !nextFooter) currentFooter.remove();
       else if (!currentFooter && nextFooter) document.body.appendChild(document.importNode(nextFooter, true));
-      if (push) history.pushState({ libflix: true }, '', url);
-      window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+      const targetScroll = push
+        ? { x: 0, y: 0 }
+        : { x: Number(historyEntry?.scrollX) || 0, y: Number(historyEntry?.scrollY) || 0 };
+      if (push) history.pushState({ libflix: true, scrollX: 0, scrollY: 0 }, '', url);
+      const restoreScroll = () => {
+        if (new URL(window.location.href).href !== new URL(url, window.location.href).href) return;
+        window.scrollTo({ top: targetScroll.y, left: targetScroll.x, behavior: 'instant' });
+      };
+      restoreScroll();
       await installPageScripts(nextDocument);
+      requestAnimationFrame(restoreScroll);
+      if (!push && targetScroll.y > 0) {
+        // Incremental grids can gain height for a few frames after their page
+        // script runs. Re-apply the saved position as those local batches mount.
+        [80, 240, 650].forEach(delay => window.setTimeout(restoreScroll, delay));
+      }
       window.dispatchEvent(new CustomEvent('libflix:navigated', { detail: { url } }));
     };
 
-    const navigateWithTransition = async (href, { push = true } = {}) => {
+    let scrollSaveFrame = null;
+    const persistScrollPosition = () => {
+      const state = history.state || {};
+      history.replaceState({ ...state, libflix: true, scrollX: window.scrollX, scrollY: window.scrollY }, '', window.location.href);
+    };
+    const scheduleScrollPositionSave = () => {
+      if (scrollSaveFrame) return;
+      scrollSaveFrame = requestAnimationFrame(() => {
+        scrollSaveFrame = null;
+        persistScrollPosition();
+      });
+    };
+    if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
+    history.replaceState({ ...(history.state || {}), libflix: true, scrollX: window.scrollX, scrollY: window.scrollY }, '', window.location.href);
+    window.addEventListener('scroll', scheduleScrollPositionSave, { passive: true });
+
+    const navigateWithTransition = async (href, { push = true, historyEntry = null } = {}) => {
       const url = new URL(href, window.location.href);
       if (url.pathname.startsWith('/language/')) {
         showTransition();
@@ -542,19 +658,22 @@
       if (navigationController) navigationController.abort();
       navigationController = new AbortController();
       const controller = navigationController;
+      if (push) persistScrollPosition();
       showNavigationProgress();
       try {
-        const html = await fetchPage(url.href);
+        const page = await fetchPage(url.href, { signal: controller.signal });
         if (controller.signal.aborted) throw new DOMException('Navigation superseded', 'AbortError');
-        const nextDocument = new DOMParser().parseFromString(html, 'text/html');
-        await replacePage(nextDocument, url.href, push);
+        const nextDocument = new DOMParser().parseFromString(page.html, 'text/html');
+        await replacePage(nextDocument, url.href, { push, historyEntry, pageMeta: page });
       } catch (error) {
         if (error.name === 'AbortError') return;
         window.location.assign(url.href);
         return;
       } finally {
-        if (navigationController === controller) navigationController = null;
-        hideNavigationProgress();
+        if (navigationController === controller) {
+          navigationController = null;
+          hideNavigationProgress();
+        }
       }
     };
 
@@ -605,7 +724,10 @@
       };
       window.addEventListener('pagehide', reportVitals);
     }
-    document.addEventListener('DOMContentLoaded', hideTransition, { once: true });
+    document.addEventListener('DOMContentLoaded', () => {
+      hideTransition();
+      registerDeferredCovers(document);
+    }, { once: true });
     window.addEventListener('pageshow', hideTransition);
     window.addEventListener('load', hideTransition);
     document.addEventListener('click', event => {
@@ -650,7 +772,9 @@
       event.preventDefault();
       submitWithTransition(form);
     });
-    window.addEventListener('popstate', () => navigateWithTransition(window.location.href, { push: false }));
+    window.addEventListener('popstate', event => {
+      navigateWithTransition(window.location.href, { push: false, historyEntry: event.state || null });
+    });
 
     const searchForm = document.querySelector('.search-bar');
     const searchInput = searchForm?.querySelector('input[name="q"]');
@@ -698,6 +822,7 @@
     const kindlePasswordToggle = document.getElementById('kindlePasswordToggle');
     const kindleForget = document.getElementById('kindleForget');
     let modalReturnFocus = null;
+    let pendingKindleAction = null;
     const getKindleSettings = () => {
       try {
         const raw = localStorage.getItem('libflix_kindle');
@@ -707,7 +832,9 @@
       }
     };
     const isKindleConfigured = settings => Boolean(
-      settings?.kindle && settings?.host && settings?.sender && settings?.pass
+      settings?.kindle && (
+        KINDLE_MANAGED_RELAY || (settings?.host && settings?.sender && settings?.pass)
+      )
     );
     const updateKindleConnectionState = () => {
       const configured = isKindleConfigured(getKindleSettings());
@@ -720,7 +847,9 @@
       if (kindleModalSub) {
         kindleModalSub.textContent = configured
           ? 'Connection configured in this browser.'
-          : 'Configure your Send to Kindle connection.';
+          : (KINDLE_MANAGED_RELAY
+              ? 'Enter your Kindle address. Delivery is managed by LibFlix.'
+              : 'Configure your Send to Kindle connection.');
       }
       return configured;
     };
@@ -731,6 +860,14 @@
       status.style.color = color;
     };
     window.getKindleSettings = getKindleSettings;
+    window.LibFlixRememberPendingKindle = action => {
+      pendingKindleAction = typeof action === 'function' ? action : null;
+    };
+    window.LibFlixResumePendingKindle = () => {
+      const action = pendingKindleAction;
+      pendingKindleAction = null;
+      if (action) window.setTimeout(action, 0);
+    };
     window.openKindleModal = () => {
       if (!kindleModal) return;
       const settings = getKindleSettings();
@@ -750,11 +887,12 @@
       kindlePasswordToggle?.setAttribute('aria-label', 'Show app password');
       document.getElementById('ke_kindle')?.focus({ preventScroll: true });
     };
-    window.closeKindleModal = () => {
+    window.closeKindleModal = (preservePending = false) => {
       kindleModal?.classList.remove('open');
       document.body.classList.remove('modal-open');
       if (modalReturnFocus instanceof HTMLElement) modalReturnFocus.focus({ preventScroll: true });
       modalReturnFocus = null;
+      if (!preservePending) pendingKindleAction = null;
     };
     window.saveKindleSettings = () => {
       const savedSettings = getKindleSettings();
@@ -765,7 +903,7 @@
         sender: document.getElementById('ke_sender')?.value.trim() || '',
         pass: document.getElementById('ke_pass')?.value || savedSettings?.pass || '',
       };
-      if (!settings.kindle || !settings.host || !settings.sender || !settings.pass) {
+      if (!settings.kindle || (!KINDLE_MANAGED_RELAY && (!settings.host || !settings.sender || !settings.pass))) {
         setKindleStatus('All fields are required.', '#ff6b72');
         return;
       }
@@ -773,7 +911,10 @@
       setKindleStatus('Saved.', '#35d07f');
       kindleForget?.classList.add('visible');
       updateKindleConnectionState();
-      window.setTimeout(window.closeKindleModal, 650);
+      window.setTimeout(() => {
+        window.closeKindleModal(true);
+        window.LibFlixResumePendingKindle();
+      }, 180);
     };
     window.clearKindleSettings = () => {
       localStorage.removeItem('libflix_kindle');
@@ -858,7 +999,8 @@
     quickPeek.setAttribute('role', 'status');
     quickPeek.setAttribute('aria-live', 'polite');
     document.body.appendChild(quickPeek);
-    const quickPeekCache = new Map();
+    const quickPeekCache = window.LibFlixBookPreviewCache || new Map();
+    window.LibFlixBookPreviewCache = quickPeekCache;
     let quickPeekTimer = null;
     let quickPeekActiveLink = null;
     let quickPeekPendingLink = null;
@@ -910,21 +1052,25 @@
         positionQuickPeek(link, quickPeekPointer);
         return;
       }
-      if (quickPeekCache.has(olKey)) {
-        renderQuickPeek(card, 'done', quickPeekCache.get(olKey));
+      const quickPeekLang = document.documentElement.lang === 'zh' ? 'cn' : 'en';
+      const cacheKey = quickPeekLang + ':' + olKey;
+      if (quickPeekCache.has(cacheKey)) {
+        renderQuickPeek(card, 'done', quickPeekCache.get(cacheKey));
         positionQuickPeek(link, quickPeekPointer);
         return;
       }
       if (quickPeekAbortController) quickPeekAbortController.abort();
       quickPeekAbortController = new AbortController();
       const activeController = quickPeekAbortController;
-      const quickPeekLang = document.documentElement.lang === 'zh' ? 'cn' : 'en';
       fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang=' + quickPeekLang, { signal: activeController.signal })
         .then(response => response.json())
         .then(data => {
           if (quickPeekActiveLink !== link) return;
           const details = data.success ? data : {};
-          if (!data.refreshing || data.description) quickPeekCache.set(olKey, details);
+          if (!data.refreshing || data.description) {
+            details._previewCachedAt = Date.now();
+            quickPeekCache.set(cacheKey, details);
+          }
           renderQuickPeek(card, 'done', details);
           positionQuickPeek(link, quickPeekPointer);
         })

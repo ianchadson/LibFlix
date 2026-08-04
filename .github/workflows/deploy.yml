@@ -30,7 +30,7 @@ jobs:
 
       - name: Check syntax
         run: |
-          python -m py_compile app.py downloaders/*.py
+          python -m py_compile app.py book_preparation.py kindle_delivery.py downloaders/*.py
           node --check static/download-ui.js
 
       - name: Run regression suite

@@ -172,6 +172,38 @@ class BookPreparationTests(unittest.TestCase):
         self.assertEqual(clean_book_title("The_Great_Book (retail).epub"), "The Great Book")
         self.assertEqual(clean_book_title("The Book (A Novel)"), "The Book (A Novel)")
 
+    def test_cosmetic_title_difference_does_not_rewrite_whole_epub(self):
+        source_path = os.path.join(self.tempdir.name, "cosmetic.epub")
+        build_epub(source_path, existing_cover=True)
+
+        prepared = prepare_book_for_kindle(
+            source_path,
+            "epub",
+            {"canonical_title": "Old Source Title"},
+        )
+
+        self.assertEqual(prepared.path, source_path)
+        self.assertFalse(prepared.temporary)
+        self.assertEqual(prepared.updated_fields, ())
+
+    def test_large_pdf_skips_expensive_full_file_rewrite(self):
+        source_path = os.path.join(self.tempdir.name, "large.pdf")
+        with open(source_path, "wb") as output:
+            output.write(b"%PDF-1.7\n")
+            output.seek(2048)
+            output.write(b"\n%%EOF")
+
+        prepared = prepare_book_for_kindle(
+            source_path,
+            "pdf",
+            {"canonical_title": "Large PDF"},
+            pdf_rewrite_max_bytes=1024,
+        )
+
+        self.assertEqual(prepared.path, source_path)
+        self.assertFalse(prepared.temporary)
+        self.assertIn("Large PDF", prepared.warning)
+
 
 if __name__ == "__main__":
     unittest.main()

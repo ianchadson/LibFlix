@@ -17,6 +17,10 @@ from xml.etree import ElementTree as ET
 
 DC_NS = "http://purl.org/dc/elements/1.1/"
 OPF_NS = "http://www.idpf.org/2007/opf"
+PDF_METADATA_REWRITE_MAX_BYTES = max(
+    0,
+    int(os.environ.get("KINDLE_PDF_METADATA_MAX_BYTES", str(20 * 1024 * 1024))),
+)
 
 ET.register_namespace("dc", DC_NS)
 ET.register_namespace("", OPF_NS)
@@ -119,6 +123,10 @@ def normalize_metadata(metadata: Mapping[str, object]):
     }
 
 
+def _titles_equivalent(existing, canonical):
+    return clean_book_title(existing).casefold() == clean_book_title(canonical).casefold()
+
+
 def _local_name(tag):
     return str(tag).rsplit("}", 1)[-1]
 
@@ -187,7 +195,7 @@ def _set_epub_metadata(package, values):
 
     titles = _elements(metadata, "title")
     if titles:
-        if (titles[0].text or "").strip() != values["title"]:
+        if not _titles_equivalent(titles[0].text, values["title"]):
             titles[0].text = values["title"]
             changed.append("title")
     else:
@@ -328,6 +336,7 @@ def prepare_book_for_kindle(
     extension: str,
     metadata: Mapping[str, object],
     cover_loader: Callable[[], bytes] | None = None,
+    pdf_rewrite_max_bytes: int | None = None,
 ):
     values = normalize_metadata(metadata)
     extension = re.sub(r"[^a-z0-9]", "", str(extension or "").lower()) or "epub"
@@ -336,6 +345,20 @@ def prepare_book_for_kindle(
     try:
         if extension not in {"epub", "pdf"}:
             return PreparedBook(source_path, filename, values["title"], values["author"])
+        if extension == "pdf":
+            rewrite_limit = (
+                PDF_METADATA_REWRITE_MAX_BYTES
+                if pdf_rewrite_max_bytes is None
+                else max(0, int(pdf_rewrite_max_bytes))
+            )
+            if rewrite_limit and os.path.getsize(source_path) > rewrite_limit:
+                return PreparedBook(
+                    source_path,
+                    filename,
+                    values["title"],
+                    values["author"],
+                    warning="Large PDF kept unchanged to avoid a slow full-file rewrite",
+                )
         with tempfile.NamedTemporaryFile(suffix=f".{extension}", delete=False) as output:
             temporary_path = output.name
         if extension == "epub":

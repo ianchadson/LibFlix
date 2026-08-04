@@ -25,7 +25,8 @@ works in Flask and the browser without edge-specific configuration.
 - Shelf files and their book hints load before the app begins serving.
 - The initial homepage document contains the hero and fixed-size shelf
   placeholders instead of every card and cover.
-- Shelves hydrate near the viewport and horizontal pages load near the row end.
+- Shelves hydrate near the viewport in 12-card batches, and horizontal pages
+  load near the row end. Discovery and category grids use the same batch size.
 - Category page 1 can use the populated shelf cache when an older empty category
   cache entry exists.
 - An empty upstream response does not overwrite a useful local first page.
@@ -50,7 +51,8 @@ The navbar owns a small persistent app shell:
 1. Pointer intent starts at most four concurrent same-origin fetches after a
    stable hover delay; up to 16 completed pages remain in memory for five minutes.
 2. A normal internal click reuses a completed or in-flight page request.
-3. The existing navbar remains mounted while the main content and footer swap.
+3. The server returns only page-specific HTML for these requests; the existing
+   navbar remains mounted while the main content and footer swap.
 4. Page-specific CSS and JavaScript are synchronized.
 5. History and `popstate` use the same path.
 6. Any unsupported response or JavaScript error falls back to normal browser
@@ -107,7 +109,8 @@ to the user.
 | In-process memory | one worker | hottest metadata, shelves, request coalescing |
 | SQLite WAL cache | all workers | metadata, assembled book details, search results, Kindle jobs |
 | Shelf JSON files | all workers/restarts | instant homepage/category seed data |
-| Cover files | all workers/restarts | size-specific Open Library and download-result images |
+| Cover files | all workers/restarts | size-specific Open Library, Internet Archive, and download-result images |
+| Kindle source files | all workers/restarts | validated recent EPUB/PDF downloads, with TTL and byte-quota pruning |
 | Browser HTTP cache | one browser | immutable static assets and long-lived cover responses |
 
 SQLite rows are retained for the longest supported stale window and pruned
@@ -132,25 +135,33 @@ the fresh value is unavailable or while a refresh is pending.
 Browser requests use local endpoints:
 
 ```text
-/olcover/<cover_id>/<size>
-/cover/<md5>/<size>?dir=<cover_directory>
+/olcover/<cover_id>/<size>.webp
+/iacover/<archive_id>/<size>.webp
+/cover/<md5>/<size>.webp?dir=<cover_directory>
 ```
 
 Both endpoints:
 
 - validate identifiers before constructing an upstream URL;
 - use stable hashed disk paths;
-- share concurrent fetches through a per-path lock;
-- request only the required `S`, `M`, or `L` rendition;
-- store a size-specific WebP thumbnail when Pillow is installed;
+- share concurrent fetches across threads and Gunicorn workers through an
+  identity lock;
+- turn one origin response into all useful `S`, `M`, and `L` renditions;
+- store size-specific WebP thumbnails when Pillow is installed;
 - fall back to the provider JPEG without breaking the request when conversion
   is unavailable;
 - return a 30-day browser cache policy with a stale allowance;
 - expose `X-LibFlix-Cover-Cache: HIT|MISS`;
 - include `Server-Timing` for cache/fetch diagnosis.
 
-The first visible Trending covers are warmed in the background once per day.
-Warming uses three workers and never blocks startup or a page response.
+The canonical `.webp` URLs are eligible for a CDN's normal static-asset cache
+without a route-specific rule. Query strings remain part of the cache key, and
+the response supplies a 30-day immutable cache policy.
+
+All likely hero covers are warmed at `L` size and every Trending cover at `M`
+size in the background once per day. Warming uses three workers, coordinates
+across Gunicorn workers, marks completion only when every requested image is
+usable, and never blocks startup or a page response.
 
 Cover elements keep stable dimensions and a restrained shimmer until the image
 decodes. The animation stops after load and respects reduced-motion settings.
@@ -182,8 +193,10 @@ English mode applies an explicit penalty to Han characters in title/author
 metadata and a smaller penalty to Chinese source branding in publisher data.
 Chinese mode does not apply those penalties.
 
-The selected result displays short evidence labels such as `Strong title
-match`, `Author match`, `English`, `Kindle-ready EPUB`, and `Easy to send`.
+Within 40 accuracy points of the strongest title/author/language match, the
+smallest plausible EPUB becomes the default `Best match`. The selected result
+displays short evidence labels such as `Strong title match`, `Author match`,
+`English`, `Kindle-ready EPUB`, `Fastest to Kindle`, and `Easy to send`.
 Only that selected result is initially expanded; remaining editions stay behind
 the native `Other options` disclosure to reduce initial visual load.
 
@@ -214,12 +227,19 @@ The terminal completion event includes the title returned by attachment
 preparation and elapsed seconds measured by the worker. The success toast shows
 that cleaned title and formats the duration as seconds or minutes and seconds.
 
-Source-file downloads use identity encoding and verify the completed byte count
-against `Content-Length` or `Content-Range`. An interrupted response makes up to
-three bounded continuation attempts with `Range`, validates the returned start
-offset, and appends only when the offset matches. A source that ignores ranges
-restarts the temporary file cleanly. The progress panel reports
-`Resuming book download` while this happens.
+Source-file downloads use identity encoding and verify EPUB/PDF magic, completed
+byte count, and the source MD5. A verified source is atomically retained for 24
+hours in a shared cache capped at 5 GiB; repeat sends skip source resolution and
+download. An interrupted response makes bounded continuation attempts with
+`Range`, validates the returned start offset, and appends only when the offset
+matches. A source that ignores ranges restarts the temporary file cleanly. The
+progress panel reports `Resuming book download` while this happens.
+
+SMTP connection and authentication start in parallel with source preparation,
+and cover lookup runs alongside them for EPUB files. The attachment is encoded
+and written to SMTP incrementally instead of first building the complete MIME
+message in memory. Progress includes uploaded bytes, total bytes, throughput,
+and an ETA. A dropped SMTP connection is reopened once with the same message id.
 
 ### Attachment preparation
 
@@ -248,18 +268,37 @@ keeps metadata cleanup from becoming a new delivery failure mode.
 
 ### Security and lifecycle
 
-- SMTP credentials are validated and kept only in process memory.
+- Browser-supplied SMTP credentials are validated and kept only in process memory.
 - Credentials are never written to SQLite or returned by the status API.
 - SMTP hosts must resolve to public addresses.
 - Only secure submission ports 465, 587, and 2525 are accepted.
 - Port 465 uses implicit TLS; other accepted ports upgrade with STARTTLS.
-- At most two deliveries run concurrently in a process.
+- A filesystem-backed queue prevents separate Gunicorn workers from uploading
+  competing deliveries simultaneously on the small VPS.
 - Jobs left running for more than five minutes are marked interrupted rather
   than appearing permanently stuck.
 - Completed and failed jobs are periodically pruned.
 
 The older `/api/sendtokindle` endpoint remains available for compatibility, but
 the current UI uses background jobs.
+
+### Optional managed relay
+
+A geographically closer submission relay can be enabled without changing the
+browser UI:
+
+```text
+KINDLE_RELAY_HOST
+KINDLE_RELAY_PORT
+KINDLE_RELAY_USER
+KINDLE_RELAY_PASSWORD
+KINDLE_RELAY_SENDER
+```
+
+When the required relay variables are present, the server ignores browser SMTP
+credentials and uses the managed relay. Provisioning the external relay account
+and adding its sender to the user's Amazon approved-sender list remain external
+operations.
 
 ## Observability
 
@@ -339,11 +378,12 @@ Run UI checks with headless isolated Chromium. Verify:
 2. Scroll a category, hover a later card, and confirm Quick Look stays by the
    cursor.
 3. Confirm desktop and 390 px mobile layouts have no horizontal overflow.
-4. Request the same cover twice and confirm `MISS` then `HIT`.
+4. Request the same canonical `.webp` cover twice and confirm local `MISS` then
+   `HIT`; in production, confirm the CDN changes from `MISS` to `HIT` too.
 5. Delay a route response and confirm the shared loader appears after 180 ms.
 6. Confirm a fast route does not flash the loader.
-7. Start a mocked Kindle job, navigate away and back, and confirm progress
-   resumes through completion.
+7. Start a mocked Kindle job, navigate away and back, and confirm the global
+   progress tray and edition row resume through completion.
 8. Disable the download source and confirm the book page remains usable.
 
 ## Deployment Boundary
@@ -357,4 +397,5 @@ All changes in this performance pass are contained in the repository:
 - tests and documentation.
 
 Deploy the code with the existing workflow. No DNS, Cloudflare Worker, cache
-rule, transform rule, tunnel, or Cloudflare setting is part of the change.
+rule, transform rule, tunnel, or Cloudflare setting is required: canonical
+`.webp` cover routes use the CDN's normal static-file behavior.

@@ -9,6 +9,7 @@ tmp/
 *.log
 .env
 shelf_cache*.json
+shelf_cache*.json.tmp
 api_cache.json
 api_cache.json.tmp
 api_cache.sqlite3
@@ -17,3 +18,5 @@ api_cache.sqlite3-wal
 output/playwright/
 .playwright-cli/
 covers/
+kindle-source-cache/
+kindle-delivery.lock

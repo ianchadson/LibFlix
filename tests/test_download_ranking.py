@@ -5,6 +5,7 @@ import app
 from app import (
     book_score,
     download_book_is_relevant,
+    fastest_kindle_candidate,
     is_visible_kindle_format,
     rank_download_books,
     recommendation_reasons,
@@ -13,6 +14,106 @@ from downloaders.base import Book
 
 
 class DownloadRankingTests(unittest.TestCase):
+    def test_smallest_equally_accurate_epub_is_fastest_to_kindle(self):
+        compact = Book(
+            book_id="a" * 32,
+            title="The Age of AI",
+            author="Henry Kissinger",
+            language="English",
+            ext="epub",
+            size="1.2 MB",
+        )
+        large = Book(
+            book_id="b" * 32,
+            title="The Age of AI",
+            author="Henry Kissinger",
+            publisher="Little, Brown",
+            language="English",
+            ext="epub",
+            size="9 MB",
+            pages="272",
+        )
+
+        fastest = fastest_kindle_candidate(
+            [large, compact],
+            "The Age of AI",
+            "Henry Kissinger",
+            "English",
+        )
+        ranked, _ = rank_download_books(
+            [large, compact],
+            "The Age of AI",
+            "Henry Kissinger",
+            "English",
+        )
+
+        self.assertIs(fastest, compact)
+        self.assertIs(ranked[0], compact)
+
+    def test_best_match_api_marks_and_leads_with_fastest_epub(self):
+        compact = Book(
+            book_id="a" * 32,
+            title="The Age of AI",
+            author="Henry Kissinger",
+            language="English",
+            ext="epub",
+            size="1.2 MB",
+        )
+        large = Book(
+            book_id="b" * 32,
+            title="The Age of AI",
+            author="Henry Kissinger",
+            publisher="Little, Brown",
+            language="English",
+            ext="epub",
+            size="9 MB",
+            pages="272",
+        )
+        with (
+            patch.object(app.DOWNLOADER, "search", return_value=([large, compact], 2)),
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_cache_get", return_value=None),
+            patch.object(app, "cache_set"),
+            patch.object(app, "disk_cache_set"),
+            app.app.test_client() as client,
+        ):
+            response = client.get(
+                "/api/search?q=The+Age+of+AI&target_title=The+Age+of+AI"
+                "&target_author=Henry+Kissinger&lang=English&dedup=0"
+            )
+
+        books = response.get_json()["books"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(books[0]["md5"], compact.book_id)
+        self.assertTrue(books[0]["fastest_to_kindle"])
+        self.assertTrue(books[0]["best_match"])
+        self.assertIn("Fastest to Kindle", books[0]["recommendation_reasons"])
+
+    def test_fastest_tier_does_not_choose_materially_worse_epub(self):
+        accurate_pdf = Book(
+            book_id="a" * 32,
+            title="The Age of AI",
+            author="Henry Kissinger",
+            language="English",
+            ext="pdf",
+            size="4 MB",
+        )
+        wrong_epub = Book(
+            book_id="b" * 32,
+            title="The Age of Algorithms",
+            author="Different Author",
+            language="English",
+            ext="epub",
+            size="500 kB",
+        )
+
+        self.assertIsNone(fastest_kindle_candidate(
+            [wrong_epub, accurate_pdf],
+            "The Age of AI",
+            "Henry Kissinger",
+            "English",
+        ))
+
     def test_clean_english_edition_beats_chinese_source_metadata(self):
         source_branded = Book(
             title="Shoe Dog",

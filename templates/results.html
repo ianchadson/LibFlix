@@ -156,7 +156,7 @@
           <tr class="book-row">
             <td class="text-center">
               {% if book.cover_dir and book.md5 %}
-              <img class="cover-thumb" src="/cover/{{ book.md5 }}?dir={{ book.cover_dir }}"
+              <img class="cover-thumb" src="/cover/{{ book.md5 }}/S.webp?dir={{ book.cover_dir }}"
                    alt="cover"
                    onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
               <div class="cover-placeholder" style="display:none">?</div>
