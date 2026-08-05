@@ -1,8 +1,8 @@
-import re, os, io, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3, unicodedata, uuid, ipaddress, socket, fcntl
+import re, os, io, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3, unicodedata, uuid, ipaddress, socket, fcntl, math
 from contextlib import contextmanager
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, quote, urlencode, urlsplit, parse_qs
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from concurrent.futures import (
     FIRST_COMPLETED,
     ThreadPoolExecutor,
@@ -139,6 +139,11 @@ TOPIC_DISCOVERY_WINDOW = 126
 TOPIC_MERGED_FRESH_TTL = 1800
 TOPIC_MERGED_STALE_TTL = 86400
 TOPIC_PARTIAL_FRESH_TTL = 90
+TOPIC_LOCAL_CORPUS_TTL = 300
+TOPIC_LOCAL_CORPUS_MAX_ROWS = 1600
+TOPIC_LOCAL_CORPUS_MAX_RECORDS = 12000
+TOPIC_LOCAL_CORPUS_MATCH_LIMIT = 100
+TOPIC_LOCAL_READY_CANDIDATES = 4
 TOPIC_PROVIDER_WAIT_TIMEOUT = max(
     3.0,
     min(float(os.environ.get("TOPIC_PROVIDER_WAIT_TIMEOUT", "10")), 15.0),
@@ -351,6 +356,10 @@ TOPIC_OL_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="topic-
 TOPIC_INVENTAIRE_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="topic-inventaire")
 TOPIC_OL_SLOTS = threading.BoundedSemaphore(6)
 TOPIC_INVENTAIRE_SLOTS = threading.BoundedSemaphore(6)
+TOPIC_LOCAL_CORPUS_LOCK = threading.Lock()
+TOPIC_LOCAL_CORPUS_DATABASE = ""
+TOPIC_LOCAL_CORPUS_BUILT_AT = 0.0
+TOPIC_LOCAL_CORPUS_RECORDS = ()
 BOOK_DETAIL_REFRESHING = set()
 BOOK_DETAIL_REFRESH_LOCK = threading.Lock()
 BOOK_DETAIL_REFRESH_PENDING_LIMIT = max(2, int(os.environ.get("LIBFLIX_BOOK_REFRESH_PENDING_LIMIT", "16")))
@@ -1963,6 +1972,285 @@ def cached_topic_discovery_payload(query, lang, filters, *, allow_stale=True):
     return None
 
 
+TOPIC_LOCAL_CORPUS_FIELDS = (
+    "key", "title", "author_name", "cover_i", "language", "subject",
+    "description", "first_publish_year", "ratings_count", "ratings_average",
+    "readinglog_count", "osp_count", "edition_count", "isbn",
+)
+TOPIC_LOCAL_HETEROGENEOUS_SUBJECTS = 16
+TOPIC_LOCAL_MAX_TRUSTED_SUBJECTS = 64
+
+
+def _topic_cached_record_quality(record):
+    def number(name):
+        try:
+            return max(0.0, float(record.get(name) or 0))
+        except (TypeError, ValueError):
+            return 0.0
+
+    subjects = record.get("subject")
+    subject_count = len(subjects) if isinstance(subjects, list) else 0
+    return (
+        math.log1p(number("readinglog_count")) * 4
+        + math.log1p(number("ratings_count")) * 2
+        + math.log1p(number("edition_count"))
+        + min(subject_count, 20) * 0.12
+        + (3 if record.get("cover_i") else 0)
+        + (1 if record.get("description") else 0)
+    )
+
+
+def _topic_cached_record_text(record):
+    description = record.get("description")
+    if isinstance(description, dict):
+        description = description.get("value") or description.get("en") or ""
+    subjects = record.get("subject")
+    if not isinstance(subjects, (list, tuple)):
+        subjects = (subjects,) if subjects else ()
+    return normalize_topic_text(" ".join((
+        str(record.get("title") or "")[:500],
+        str(description or "")[:2000],
+        " ".join(str(subject)[:200] for subject in subjects[:64]),
+    )))
+
+
+def _topic_cached_record_subjects(record):
+    subjects = record.get("subject")
+    if not isinstance(subjects, (list, tuple)):
+        subjects = (subjects,) if subjects else ()
+    return tuple(dict.fromkeys(
+        normalized
+        for subject in subjects
+        if (normalized := normalize_topic_text(str(subject)[:200]))
+    ))
+
+
+def _topic_cached_record_primary_text(record):
+    description = record.get("description")
+    if isinstance(description, dict):
+        description = description.get("value") or description.get("en") or ""
+    return normalize_topic_text(" ".join((
+        str(record.get("title") or "")[:500],
+        str(description or "")[:2000],
+    )))
+
+
+def _topic_cached_record_has_engagement(record):
+    for name in (
+        "readinglog_count", "ratings_count", "edition_count", "osp_count",
+    ):
+        try:
+            if float(record.get(name) or 0) > 0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _topic_cached_record_is_coherent(record, plan):
+    """Reject weak one-off matches in noisy saved-provider metadata.
+
+    Open Library occasionally aggregates dozens of unrelated subjects onto one
+    work. Those records are useful as a provider-outage fallback only when the
+    topic is supported by the title/description, multiple planned queries, or
+    measurable engagement. A provider-truncated maximum-size list must have
+    primary-text support. Live provider results keep their normal ranking.
+    """
+    subjects = _topic_cached_record_subjects(record)
+    description = record.get("description")
+    if isinstance(description, dict):
+        description = description.get("value") or description.get("en") or ""
+    if not subjects and not str(description or "").strip():
+        title = normalize_topic_text(str(record.get("title") or "")[:500])
+        original = normalize_topic_text(plan.queries[0]) if plan.queries else ""
+        if _topic_cached_text_contains(title, original):
+            return True
+        if any(
+            " " in normalize_topic_text(query)
+            and _topic_cached_text_contains(title, query)
+            for query in plan.queries
+        ):
+            return True
+        if plan.display_query == "sales" and _topic_cached_text_contains(
+            title,
+            "selling",
+        ):
+            return True
+        return _topic_cached_record_has_engagement(record)
+    if len(subjects) < TOPIC_LOCAL_HETEROGENEOUS_SUBJECTS:
+        return True
+    primary_text = _topic_cached_record_primary_text(record)
+    if any(
+        _topic_cached_text_contains(primary_text, query)
+        for query in plan.queries
+    ):
+        return True
+    matched_queries = {
+        query
+        for query in plan.queries
+        if any(
+            _topic_cached_text_contains(subject, query)
+            for subject in subjects
+        )
+    }
+    if len(subjects) >= TOPIC_LOCAL_MAX_TRUSTED_SUBJECTS:
+        return False
+    if plan.display_query == "productivity" and matched_queries:
+        personal_signals = (
+            "employee empowerment", "motivation", "leadership",
+            "personnel management", "job satisfaction", "time management",
+            "conduct of life", "organizational efficiency",
+            "self management", "goals",
+        )
+        industrial_senses = (
+            "well productivity", "oil well", "petroleum engineering",
+            "work measurement", "industrial engineering", "manufacturing",
+        )
+        if (
+            any(
+                _topic_cached_text_contains(subject, signal)
+                for subject in subjects
+                for signal in personal_signals
+            )
+            and not any(
+                _topic_cached_text_contains(subject, sense)
+                for subject in subjects
+                for sense in industrial_senses
+            )
+        ):
+            return True
+    return (
+        len(matched_queries) > 1
+        or _topic_cached_record_has_engagement(record)
+    )
+
+
+def _topic_local_openlibrary_corpus():
+    """Build a bounded searchable corpus from durable Open Library responses."""
+    global TOPIC_LOCAL_CORPUS_DATABASE, TOPIC_LOCAL_CORPUS_BUILT_AT
+    global TOPIC_LOCAL_CORPUS_RECORDS
+
+    now = time.monotonic()
+    if (
+        TOPIC_LOCAL_CORPUS_DATABASE == API_SQLITE_CACHE
+        and TOPIC_LOCAL_CORPUS_BUILT_AT > 0
+        and now - TOPIC_LOCAL_CORPUS_BUILT_AT < TOPIC_LOCAL_CORPUS_TTL
+    ):
+        return TOPIC_LOCAL_CORPUS_RECORDS
+    with TOPIC_LOCAL_CORPUS_LOCK:
+        now = time.monotonic()
+        if (
+            TOPIC_LOCAL_CORPUS_DATABASE == API_SQLITE_CACHE
+            and TOPIC_LOCAL_CORPUS_BUILT_AT > 0
+            and now - TOPIC_LOCAL_CORPUS_BUILT_AT < TOPIC_LOCAL_CORPUS_TTL
+        ):
+            return TOPIC_LOCAL_CORPUS_RECORDS
+        initialize_disk_cache()
+        rows = []
+        try:
+            with disk_cache_connection(timeout=5) as connection:
+                rows = connection.execute(
+                    "SELECT payload FROM api_cache "
+                    "WHERE payload LIKE ? ORDER BY created_at DESC LIMIT ?",
+                    ('%"docs"%', TOPIC_LOCAL_CORPUS_MAX_ROWS),
+                ).fetchall()
+        except sqlite3.Error:
+            rows = []
+
+        records = {}
+        for (serialized,) in rows:
+            try:
+                payload = json.loads(serialized)
+            except (TypeError, ValueError):
+                continue
+            docs = payload.get("docs") if isinstance(payload, dict) else None
+            if not isinstance(docs, list):
+                continue
+            for raw_record in docs:
+                if not isinstance(raw_record, dict):
+                    continue
+                work_key = str(raw_record.get("key") or "").strip()
+                if not re.fullmatch(r"/?works/OL\d+W", work_key, re.I):
+                    continue
+                record = {
+                    field: raw_record[field]
+                    for field in TOPIC_LOCAL_CORPUS_FIELDS
+                    if field in raw_record
+                }
+                normalized_key = work_id_from_ol_key(work_key)
+                current = records.get(normalized_key)
+                if current is not None:
+                    if _topic_cached_record_quality(record) > current[1]:
+                        records[normalized_key] = (
+                            record,
+                            _topic_cached_record_quality(record),
+                        )
+                    continue
+                if len(records) >= TOPIC_LOCAL_CORPUS_MAX_RECORDS:
+                    continue
+                records[normalized_key] = (
+                    record,
+                    _topic_cached_record_quality(record),
+                )
+
+        TOPIC_LOCAL_CORPUS_RECORDS = tuple(
+            (record, _topic_cached_record_text(record), quality)
+            for record, quality in records.values()
+        )
+        TOPIC_LOCAL_CORPUS_DATABASE = API_SQLITE_CACHE
+        TOPIC_LOCAL_CORPUS_BUILT_AT = time.monotonic()
+        return TOPIC_LOCAL_CORPUS_RECORDS
+
+
+def _topic_cached_text_contains(text, phrase):
+    phrase = normalize_topic_text(phrase)
+    if not text or not phrase:
+        return False
+    if re.search(r"[\u3400-\u9fff]", phrase):
+        return phrase in text
+    return bool(re.search(rf"(?:^| ){re.escape(phrase)}(?:$| )", text))
+
+
+def _topic_cached_openlibrary_pages(plan, provider_lang, filters):
+    started = time.perf_counter()
+    corpus = _topic_local_openlibrary_corpus()
+    if not corpus:
+        return []
+    filter_language = filters.get("language") != "any"
+    selected_language = (
+        provider_lang if provider_lang in BOOK_LANGS else DEFAULT_BOOK_LANG
+    )
+    newest = filters.get("sort") == "newest"
+    pages = []
+    for query_rank, query in enumerate(plan.queries):
+        matches = []
+        for record, search_text, quality in corpus:
+            if not _topic_cached_text_contains(search_text, query):
+                continue
+            if not _topic_cached_record_is_coherent(record, plan):
+                continue
+            if filter_language and not discovery_fallback_matches_language(
+                record,
+                selected_language,
+            ):
+                continue
+            try:
+                year = int(record.get("first_publish_year") or 0)
+            except (TypeError, ValueError):
+                year = 0
+            matches.append((year if newest else 0, quality, record))
+        matches.sort(key=lambda item: (-item[0], -item[1]))
+        page = parse_openlibrary_payload(
+            {"docs": [item[2] for item in matches[:TOPIC_LOCAL_CORPUS_MATCH_LIMIT]]},
+            query,
+            query_rank,
+        )
+        if page.candidates:
+            pages.append(page)
+    add_server_timing("topiccache", started, description="local-corpus")
+    return pages
+
+
 def _topic_openlibrary_page(plan, query_rank, provider_lang, filters):
     path, params = build_openlibrary_request(
         plan,
@@ -2084,7 +2372,7 @@ def _topic_inventaire_pages(plan, query_rank, provider_lang, filters):
     return [inv_page]
 
 
-def _topic_provider_pages(plan, lang, filters):
+def _topic_provider_pages(plan, lang, filters, *, fallback_ready=False):
     selected_language = filters.get("language", "current")
     provider_lang = (
         "any" if selected_language == "any"
@@ -2155,7 +2443,10 @@ def _topic_provider_pages(plan, lang, filters):
     pages = []
     failed_sources = set()
     deadline = time.monotonic() + TOPIC_PROVIDER_WAIT_TIMEOUT
-    grace_deadline = None
+    grace_deadline = (
+        min(deadline, time.monotonic() + 1.35)
+        if fallback_ready else None
+    )
     while pending and time.monotonic() < deadline:
         current_deadline = min(
             deadline,
@@ -2253,7 +2544,7 @@ def _topic_books_from_results(results, lang="en", language_filter="current"):
         cover_id = book.pop("cover_id", None)
         book["cover_url"] = open_library_cover_url(cover_id)
         book["ol_key"] = normalize_topic_work_key(book.get("ol_key"))
-        if not book["ol_key"] or not book.get("title") or not book.get("author"):
+        if not book["ol_key"] or not book.get("title"):
             continue
         remember_book_hint(book, lang)
         books.append(book)
@@ -2282,11 +2573,84 @@ def fetch_topic_discovery_payload(query, lang, filters):
         allow_stale=True,
     )
     plan = plan_topic_query(query, "topic")
-    pages, _available_sources, partial, canonical_available = _topic_provider_pages(
+    selected_language = filters.get("language", "current")
+    provider_lang = (
+        "any" if selected_language == "any"
+        else lang if selected_language == "current"
+        else selected_language
+    )
+    cached_pages = _topic_cached_openlibrary_pages(
+        plan,
+        provider_lang,
+        filters,
+    )
+    cached_preview = merge_topic_candidates(
+        cached_pages,
+        plan,
+        limit=200,
+        author_cap=200,
+        require_openlibrary=True,
+    )
+    cached_preview = filter_topic_results(
+        cached_preview,
+        book_type=filters["type"],
+        language=filters["language"],
+        current_language=lang,
+        published=filters["published"],
+        sort=filters["sort"],
+        author_cap=2,
+    )
+    cached_eligible_keys = {
+        result.candidate.work_key
+        for result in cached_preview
+        if result.candidate.work_key
+    }
+    pages, available_sources, partial, _canonical_available = _topic_provider_pages(
         plan,
         lang,
         filters,
+        fallback_ready=(len(cached_preview) >= TOPIC_LOCAL_READY_CANDIDATES),
     )
+    supplemental_work_keys = set()
+    openlibrary_pages = [
+        page for page in pages if page.provider == "openlibrary"
+    ]
+    openlibrary_incomplete = (
+        len(openlibrary_pages) < len(plan.queries)
+        or any(not page.available for page in openlibrary_pages)
+    )
+    if partial and cached_pages and openlibrary_incomplete:
+        live_work_keys = {
+            candidate.work_key
+            for page in openlibrary_pages
+            if page.available
+            for candidate in page.candidates
+            if candidate.work_key
+        }
+        supplemental_pages = [
+            replace(
+                page,
+                candidates=tuple(
+                    candidate for candidate in page.candidates
+                    if (
+                        candidate.work_key in cached_eligible_keys
+                        and candidate.work_key not in live_work_keys
+                    )
+                ),
+            )
+            for page in cached_pages
+        ]
+        supplemental_pages = [
+            page for page in supplemental_pages if page.candidates
+        ]
+        if supplemental_pages:
+            pages.extend(supplemental_pages)
+            supplemental_work_keys = {
+                candidate.work_key
+                for page in supplemental_pages
+                for candidate in page.candidates
+                if candidate.work_key
+            }
     merged = merge_topic_candidates(
         pages,
         plan,
@@ -2303,6 +2667,10 @@ def fetch_topic_discovery_payload(query, lang, filters):
         sort=filters["sort"],
         author_cap=2,
     )[:TOPIC_DISCOVERY_WINDOW]
+    cache_fallback = any(
+        result.candidate.work_key in supplemental_work_keys
+        for result in merged
+    )
     books = _topic_books_from_results(merged, lang, filters["language"])
     sources = sorted({
         source
@@ -2313,6 +2681,7 @@ def fetch_topic_discovery_payload(query, lang, filters):
     retry_after = max(
         openlibrary_status().get("retry_after", 0),
         inventaire_status().get("retry_after", 0),
+        math.ceil(OL_CONNECT_TIMEOUT + OL_READ_TIMEOUT + 2),
     ) if partial else 0
     if partial and stale_complete and not stale_complete.get("partial"):
         fallback = dict(stale_complete)
@@ -2326,8 +2695,9 @@ def fetch_topic_discovery_payload(query, lang, filters):
         "display_query": plan.display_query,
         "all_books": books,
         "partial": partial,
+        "cache_fallback": cache_fallback,
         "sources": sources,
-        "source_unavailable": bool(partial and not canonical_available and not books),
+        "source_unavailable": bool(partial and not available_sources and not books),
         "retry_after": retry_after,
         "filters": filters,
         "expansion_version": TOPIC_EXPANSION_VERSION,
@@ -3921,6 +4291,7 @@ def render_home(mode="nonfiction", lang=None, error=None):
         hero_books=hero_books,
         hero_items=hero_items,
         featured_topics=TOPIC_FEATURED,
+        topic_groups=TOPIC_BROWSE_GROUPS,
         mode=mode,
         error=error,
     )

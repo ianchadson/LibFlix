@@ -15,8 +15,8 @@ from datetime import date
 from typing import Any, Iterable, Protocol, Sequence
 
 
-EXPANSION_VERSION = "topic-v1"
-RANKER_VERSION = "rrf-v1"
+EXPANSION_VERSION = "topic-v3"
+RANKER_VERSION = "rrf-v3"
 RRF_K = 60
 MAX_PROVIDER_RECORDS = 100
 MAX_TEXT = 500
@@ -36,7 +36,7 @@ TOPIC_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "mindfulness": ("mindfulness", "meditation", "present moment"),
     "startups": ("startups", "entrepreneurship", "lean startup", "venture creation"),
     "startup": ("startups", "entrepreneurship", "lean startup", "venture creation"),
-    "productivity": ("productivity", "time management", "personal efficiency"),
+    "productivity": ("productivity", "time management", "getting things done"),
     "habits": ("habits", "behavior change", "self control"),
     "sleep": ("sleep", "sleep science", "insomnia"),
     "anxiety": ("anxiety", "anxiety disorders", "stress management"),
@@ -55,7 +55,7 @@ TOPIC_EXPANSIONS: dict[str, tuple[str, ...]] = {
     "writing": ("writing", "authorship", "creative writing"),
     "communication": ("communication", "interpersonal communication", "public speaking"),
     "relationships": ("relationships", "interpersonal relations", "love"),
-    "parenting": ("parenting", "child rearing", "parent and child"),
+    "parenting": ("parenting", "child development", "parent and child"),
     "health": ("health", "wellness", "preventive health"),
     "fitness": ("fitness", "physical fitness", "exercise"),
     "nutrition": ("nutrition", "diet", "healthy eating"),
@@ -457,11 +457,16 @@ def _infer_fiction(subjects: Sequence[str]) -> bool | None:
         "nonfiction", "biography", "autobiography", "self help", "business",
         "psychology", "history", "science", "philosophy",
     }
-    if any(
+    if "novel" in normalized or any(
         value == marker or (marker != "fiction" and marker in value)
         for value in normalized
         for marker in fiction_markers
         if "nonfiction" not in value
+    ):
+        return True
+    if any(
+        value.endswith(" fiction") and "nonfiction" not in value
+        for value in normalized
     ):
         return True
     if any(marker in value for value in normalized for marker in nonfiction_markers):
@@ -652,11 +657,166 @@ def _topic_evidence(candidate: DiscoveryCandidate, plan: QueryPlan) -> tuple[flo
     subjects = [(subject, normalize_text(subject)) for subject in candidate.subjects]
     combined = " ".join((title, description, *(value for _, value in subjects)))
 
-    # "Concentration" by itself is dangerously polysemous: the live focus
-    # corpus otherwise admits concentration-camp history. Keep this family out
-    # unless that is the user's actual query.
-    if plan.display_query == "focus" and (
-        "concentration camp" in combined or "concentration camps" in combined
+    if plan.display_query == "focus":
+        # The Open Library subject is highly polysemous. Reject unrelated
+        # research-method, automobile, linguistics, and programming senses,
+        # while preserving a book that also carries genuine attention signals.
+        subject_text = " ".join(value for _, value in subjects)
+        focus_context = " ".join((title, subject_text))
+        if "concentration camp" in combined or "concentration camps" in combined:
+            return 0.0, []
+        unrelated_senses = (
+            "focus group",
+            "focus groups",
+            "focused group",
+            "focused groups",
+            "focus automobile",
+            "ford focus",
+            "focus linguistics",
+            "focus computer program language",
+            "focus theatre",
+            "focus on the family",
+            "family focus inc",
+        )
+        attention_signals = (
+            "attention",
+            "deep work",
+            "distraction",
+            "concentration",
+            "mindfulness",
+            "cognitive psychology",
+            "self control",
+            "productivity",
+        )
+        if (
+            any(_contains_phrase(focus_context, sense) for sense in unrelated_senses)
+            and not any(
+                _contains_phrase(focus_context, signal)
+                for signal in attention_signals
+            )
+        ):
+            return 0.0, []
+
+    if plan.display_query == "productivity":
+        industrial_senses = (
+            "well productivity",
+            "oil well",
+            "petroleum engineering",
+            "work measurement",
+            "industrial engineering",
+            "manufacturing productivity",
+        )
+        personal_signals = (
+            "time management",
+            "personal efficiency",
+            "self help",
+            "work habits",
+            "procrastination",
+            "attention",
+            "goal setting",
+            "knowledge work",
+        )
+        if (
+            any(_contains_phrase(combined, sense) for sense in industrial_senses)
+            and not any(
+                _contains_phrase(combined, signal)
+                for signal in personal_signals
+            )
+        ):
+            return 0.0, []
+
+    if plan.display_query == "communication":
+        clinical_senses = (
+            "communication disorders",
+            "communicative disorders",
+        )
+        if any(_contains_phrase(combined, sense) for sense in clinical_senses):
+            return 0.0, []
+        technical_senses = (
+            "interstellar communication",
+            "animal communication",
+            "data communication",
+            "telecommunication",
+            "communications engineering",
+            "communication systems",
+        )
+        human_signals = (
+            "interpersonal communication",
+            "public speaking",
+            "human communication",
+            "business communication",
+            "communication skills",
+            "conversation",
+            "persuasion",
+            "rhetoric",
+        )
+        if (
+            any(_contains_phrase(combined, sense) for sense in technical_senses)
+            and not any(
+                _contains_phrase(combined, signal)
+                for signal in human_signals
+            )
+        ):
+            return 0.0, []
+
+    if plan.display_query in {"startup", "startups"} and any(
+        _contains_phrase(combined, sense)
+        for sense in ("juvenile literature", "children s literature", "for kids")
+    ):
+        return 0.0, []
+
+    if plan.display_query == "investing":
+        unrelated_senses = (
+            "capital punishment",
+            "death row",
+            "juvenile justice",
+            "operations research",
+            "industrial engineering",
+            "manufacturing",
+        )
+        financial_signals = (
+            "portfolio",
+            "personal finance",
+            "financial markets",
+            "investment strategy",
+            "asset allocation",
+            "securities",
+            "stocks",
+            "bonds",
+        )
+        if (
+            any(_contains_phrase(combined, sense) for sense in unrelated_senses)
+            and not any(
+                _contains_phrase(combined, signal)
+                for signal in financial_signals
+            )
+        ):
+            return 0.0, []
+
+    if plan.display_query == "habits" and _contains_phrase(
+        title,
+        "habits of the heart",
+    ):
+        return 0.0, []
+
+    if plan.display_query == "mental health" and any(
+        _contains_phrase(combined, sense)
+        for sense in (
+            "capital punishment", "death row", "insanity law",
+            "trials murder", "eligible for execution",
+        )
+    ):
+        return 0.0, []
+
+    if plan.display_query == "writing" and _contains_phrase(
+        title,
+        "writing women in",
+    ):
+        return 0.0, []
+
+    if plan.display_query == "health" and _contains_phrase(
+        combined,
+        "health sciences information sources",
     ):
         return 0.0, []
 
@@ -678,10 +838,7 @@ def _topic_evidence(candidate: DiscoveryCandidate, plan: QueryPlan) -> tuple[flo
             if subject == normalized_term:
                 term_score = max(term_score, 7.5)
                 matched_subject = matched_subject or raw_subject
-            elif (
-                _contains_phrase(subject, normalized_term)
-                or _contains_phrase(normalized_term, subject)
-            ):
+            elif _contains_phrase(subject, normalized_term):
                 term_score = max(term_score, 5.0)
                 matched_subject = matched_subject or raw_subject
         if _contains_phrase(description, normalized_term):
@@ -816,13 +973,23 @@ def merge_topic_candidates(
     ))
     selected: list[DiscoveryResult] = []
     author_counts: dict[str, int] = {}
+    seen_title_authors: set[tuple[str, str]] = set()
     for _, _, _, _, result in ranked:
         author = normalize_text(result.candidate.authors[0] if result.candidate.authors else "")
+        normalized_title = re.sub(
+            r"^(?:the|a|an) ",
+            "",
+            normalize_text(result.candidate.title),
+        )
+        title_author = (normalized_title, author)
+        if author and title_author in seen_title_authors:
+            continue
         if author and author_counts.get(author, 0) >= max(author_cap, 1):
             continue
         selected.append(result)
         if author:
             author_counts[author] = author_counts.get(author, 0) + 1
+            seen_title_authors.add(title_author)
         if len(selected) >= min(max(limit, 1), 200):
             break
     return selected
@@ -867,8 +1034,19 @@ def filter_topic_results(
         candidate = result.candidate
         if book_type == "fiction" and candidate.fiction is not True:
             continue
-        if book_type == "nonfiction" and candidate.fiction is True:
-            continue
+        if book_type == "nonfiction":
+            if candidate.fiction is True:
+                continue
+            # Inventaire text search does not expose enough type metadata to
+            # distinguish a topical novel from nonfiction. Keep semantically
+            # claimed works, but do not let raw title matches defeat an
+            # explicit nonfiction filter.
+            if (
+                candidate.fiction is None
+                and candidate.provider == "inventaire"
+                and not candidate.semantic_terms
+            ):
+                continue
         if wanted_language:
             if not candidate.languages:
                 if language in {"en", "cn"}:

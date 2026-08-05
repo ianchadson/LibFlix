@@ -683,17 +683,27 @@
       if (push) history.pushState({ libflix: true, scrollX: 0, scrollY: 0 }, '', url);
       const renderedUrl = new URL(url, window.location.href);
       renderedPageKey = renderedUrl.pathname + renderedUrl.search;
-      const restoreScroll = () => {
+      let fragmentTarget = null;
+      if (renderedUrl.hash) {
+        try {
+          fragmentTarget = document.getElementById(decodeURIComponent(renderedUrl.hash.slice(1)));
+        } catch {}
+      }
+      const restorePosition = () => {
         if (new URL(window.location.href).href !== new URL(url, window.location.href).href) return;
+        if (fragmentTarget) {
+          focusFragmentTarget(fragmentTarget);
+          return;
+        }
         window.scrollTo({ top: targetScroll.y, left: targetScroll.x, behavior: 'instant' });
       };
-      restoreScroll();
+      restorePosition();
       await installPageScripts(nextDocument);
-      requestAnimationFrame(restoreScroll);
-      if (!push && targetScroll.y > 0) {
+      requestAnimationFrame(restorePosition);
+      if (!push && !fragmentTarget && targetScroll.y > 0) {
         // Incremental grids can gain height for a few frames after their page
         // script runs. Re-apply the saved position as those local batches mount.
-        [80, 240, 650].forEach(delay => window.setTimeout(restoreScroll, delay));
+        [80, 240, 650].forEach(delay => window.setTimeout(restorePosition, delay));
       }
       window.dispatchEvent(new CustomEvent('libflix:navigated', { detail: { url } }));
     };

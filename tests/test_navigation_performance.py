@@ -57,6 +57,24 @@ class PartialNavigationTests(unittest.TestCase):
         self.assertIn("if (pageKey === renderedPageKey)", navbar)
         self.assertIn("top: Number(event.state?.scrollY) || 0", navbar)
 
+    def test_cross_page_hash_navigation_focuses_the_imported_fragment(self):
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+        replace_page = navbar.split("const replacePage = async", 1)[1].split(
+            "let scrollSaveFrame", 1
+        )[0]
+
+        self.assertIn("if (renderedUrl.hash)", replace_page)
+        self.assertIn("fragmentTarget = document.getElementById", replace_page)
+        self.assertIn("focusFragmentTarget(fragmentTarget)", replace_page)
+        self.assertIn("if (!push && !fragmentTarget", replace_page)
+
+    def test_topic_errors_have_accessible_status_and_rate_limit_copy(self):
+        template = (Path(app.APP_DIR) / "templates" / "discover.html").read_text()
+
+        self.assertIn('id="emptyState" role="status" aria-live="polite"', template)
+        self.assertIn("empty.setAttribute('role', 'status')", template)
+        self.assertIn("Too many searches at once. Wait a moment", template)
+
 
 class DiscoveryShellTests(unittest.TestCase):
     def test_cold_discovery_document_never_waits_for_provider(self):
@@ -113,6 +131,15 @@ class DiscoveryShellTests(unittest.TestCase):
         self.assertIn("pageDisposed = true;", template)
         self.assertIn("const delays = [7000, 11000, 16000, 32000];", template)
         self.assertIn("Number(data?.page) === 1", template)
+
+    def test_dynamic_topic_cards_keep_canonical_preview_work_keys(self):
+        template = (Path(app.APP_DIR) / "templates" / "discover.html").read_text()
+
+        self.assertIn("function canonicalWorkKey(value)", template)
+        self.assertIn(
+            "bookCard.dataset.olKey = canonicalWorkKey(olKey)",
+            template,
+        )
 
 
 class SimilarRecommendationShellTests(unittest.TestCase):

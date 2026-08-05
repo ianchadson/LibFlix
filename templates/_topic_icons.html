@@ -1,0 +1,27 @@
+{% macro topic_icon(kind, class_name='') -%}
+<svg class="{{ class_name }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+  {% if kind == 'focus' %}
+  <circle cx="12" cy="12" r="6.75"></circle><circle cx="12" cy="12" r="2.15"></circle><path d="M12 2.5v2.75M12 18.75v2.75M2.5 12h2.75M18.75 12h2.75"></path>
+  {% elif kind == 'connection' %}
+  <circle cx="8.7" cy="12" r="5.1"></circle><circle cx="15.3" cy="12" r="5.1"></circle>
+  {% elif kind == 'build' or kind == 'startups' %}
+  <path d="M4 19h4v-4h4v-4h4V7h4"></path><path d="M15.5 4H20v4.5"></path>
+  {% elif kind == 'value' %}
+  <path d="m12 3.25 8 8.75-8 8.75L4 12l8-8.75Z"></path><path d="M8.2 12h7.6M12 8.2v7.6"></path>
+  {% elif kind == 'vitality' %}
+  <path d="M2.5 12h4l2.1-5.25 4.2 10.5L15.25 12H21.5"></path>
+  {% elif kind == 'science' %}
+  <ellipse cx="12" cy="12" rx="9" ry="3.6"></ellipse><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(60 12 12)"></ellipse><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(120 12 12)"></ellipse><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"></circle>
+  {% elif kind == 'meditation' %}
+  <circle cx="12" cy="12" r="2"></circle><circle cx="12" cy="12" r="5.25"></circle><circle cx="12" cy="12" r="8.5"></circle>
+  {% elif kind == 'artificial intelligence' %}
+  <circle cx="12" cy="5" r="2"></circle><circle cx="5" cy="17.5" r="2"></circle><circle cx="19" cy="17.5" r="2"></circle><path d="m10.9 6.8-4.8 8.9M13.1 6.8l4.8 8.9M7 17.5h10"></path>
+  {% elif kind == 'search' %}
+  <circle cx="10.75" cy="10.75" r="6.75"></circle><path d="m16 16 4.2 4.2"></path>
+  {% elif kind == 'catalog' %}
+  <path d="M5 4.5h11.5A2.5 2.5 0 0 1 19 7v12.5H7.5A2.5 2.5 0 0 1 5 17V4.5Z"></path><path d="M5 17a2.5 2.5 0 0 1 2.5-2.5H19M9 8h6"></path>
+  {% else %}
+  <path d="M5 12h13"></path><path d="m14 8 4 4-4 4"></path>
+  {% endif %}
+</svg>
+{%- endmacro %}

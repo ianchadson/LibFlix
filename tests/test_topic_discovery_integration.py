@@ -4,6 +4,7 @@ import tempfile
 import time
 import unittest
 from contextlib import closing
+from datetime import date
 from unittest.mock import patch
 
 import app
@@ -21,14 +22,27 @@ class TopicIntegrationCacheTest(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.original_database = app.API_SQLITE_CACHE
         self.original_ready = app.SQLITE_CACHE_READY
+        self.original_topic_corpus = (
+            app.TOPIC_LOCAL_CORPUS_DATABASE,
+            app.TOPIC_LOCAL_CORPUS_BUILT_AT,
+            app.TOPIC_LOCAL_CORPUS_RECORDS,
+        )
         app.API_SQLITE_CACHE = os.path.join(self.tempdir.name, "cache.sqlite3")
         app.SQLITE_CACHE_READY = False
+        app.TOPIC_LOCAL_CORPUS_DATABASE = ""
+        app.TOPIC_LOCAL_CORPUS_BUILT_AT = 0.0
+        app.TOPIC_LOCAL_CORPUS_RECORDS = ()
         app.CACHE.clear()
         app.initialize_disk_cache()
 
     def tearDown(self):
         app.API_SQLITE_CACHE = self.original_database
         app.SQLITE_CACHE_READY = self.original_ready
+        (
+            app.TOPIC_LOCAL_CORPUS_DATABASE,
+            app.TOPIC_LOCAL_CORPUS_BUILT_AT,
+            app.TOPIC_LOCAL_CORPUS_RECORDS,
+        ) = self.original_topic_corpus
         app.CACHE.clear()
         self.tempdir.cleanup()
 
@@ -195,6 +209,279 @@ class TopicIntegrationCacheTest(unittest.TestCase):
         )
         self.assertIsNotNone(app.disk_cache_entry(key))
 
+    def test_healthy_supplemental_provider_empty_is_partial_not_outage(self):
+        filters = dict(app.TOPIC_FILTER_DEFAULTS)
+        inventaire = ProviderPage(
+            "inventaire",
+            "meditation",
+            0,
+            (),
+            available=True,
+        )
+        with patch.object(
+            app,
+            "_topic_provider_pages",
+            return_value=([inventaire], ["inventaire"], True, False),
+        ):
+            payload = app.fetch_topic_discovery_payload(
+                "meditation",
+                "en",
+                filters,
+            )
+
+        self.assertTrue(payload["partial"])
+        self.assertFalse(payload["source_unavailable"])
+        self.assertEqual(payload["all_books"], [])
+
+    def test_durable_openlibrary_corpus_rescues_a_provider_outage(self):
+        app.disk_cache_set("test-openlibrary-search", {"docs": [{
+            "key": "/works/OL77W",
+            "title": "Deep Focus",
+            "author_name": ["Test Author"],
+            "language": ["eng"],
+            "subject": ["Focus", "Attention"],
+            "cover_i": 700,
+            "readinglog_count": 400,
+        }]})
+        with patch.object(
+            app,
+            "_topic_provider_pages",
+            return_value=([], [], True, False),
+        ):
+            payload = app.fetch_topic_discovery_payload(
+                "focus",
+                "en",
+                dict(app.TOPIC_FILTER_DEFAULTS),
+            )
+
+        self.assertTrue(payload["partial"])
+        self.assertTrue(payload["cache_fallback"])
+        self.assertFalse(payload["source_unavailable"])
+        self.assertEqual(payload["all_books"][0]["ol_key"], "/works/OL77W")
+        self.assertEqual(payload["all_books"][0]["cover_url"], "/olcover/700/M.webp")
+
+    def test_filtered_out_cache_does_not_shorten_live_provider_wait(self):
+        app.disk_cache_set("test-openlibrary-search", {"docs": [{
+            "key": f"/works/OL{index}W",
+            "title": f"Focus Archive {index}",
+            "author_name": [f"Author {index}"],
+            "language": ["eng"],
+            "subject": ["Focus"],
+        } for index in range(1, 6)]})
+        provider = patch.object(
+            app,
+            "_topic_provider_pages",
+            return_value=([], [], True, False),
+        )
+        with provider as mocked_provider:
+            app.fetch_topic_discovery_payload(
+                "focus",
+                "en",
+                {
+                    **app.TOPIC_FILTER_DEFAULTS,
+                    "published": "recent",
+                },
+            )
+
+        self.assertFalse(mocked_provider.call_args.kwargs["fallback_ready"])
+
+    def test_filtered_out_cache_is_not_reported_as_visible_fallback(self):
+        app.disk_cache_set("test-openlibrary-search", {"docs": [{
+            "key": "/works/OL77W",
+            "title": "Focus Without a Date",
+            "author_name": ["Cached Author"],
+            "language": ["eng"],
+            "subject": ["Focus"],
+        }]})
+        plan = plan_topic_query("focus", "topic")
+        live_page = parse_openlibrary_payload({"docs": [{
+            "key": "/works/OL99W",
+            "title": "Recent Focus",
+            "author_name": ["Live Author"],
+            "language": ["eng"],
+            "subject": ["Focus"],
+            "first_publish_year": date.today().year,
+        }]}, plan.queries[0], 0)
+        with patch.object(
+            app,
+            "_topic_provider_pages",
+            return_value=([live_page], ["openlibrary"], True, False),
+        ):
+            payload = app.fetch_topic_discovery_payload(
+                "focus",
+                "en",
+                {
+                    **app.TOPIC_FILTER_DEFAULTS,
+                    "published": "recent",
+                },
+            )
+
+        self.assertFalse(payload["cache_fallback"])
+        self.assertEqual(
+            [book["title"] for book in payload["all_books"]],
+            ["Recent Focus"],
+        )
+
+    def test_inventaire_only_partial_does_not_reweight_complete_live_ol_pages(self):
+        app.disk_cache_set("test-openlibrary-search", {"docs": [{
+            "key": "/works/OL88W",
+            "title": "Cached Focus",
+            "author_name": ["Cached Author"],
+            "language": ["eng"],
+            "subject": ["Focus"],
+        }]})
+        plan = plan_topic_query("focus", "topic")
+        live_pages = [
+            parse_openlibrary_payload({"docs": [{
+                "key": "/works/OL99W",
+                "title": "Live Focus",
+                "author_name": ["Live Author"],
+                "language": ["eng"],
+                "subject": ["Focus", "Attention", "Deep Work"],
+            }]}, query, rank)
+            for rank, query in enumerate(plan.queries)
+        ]
+        with patch.object(
+            app,
+            "_topic_provider_pages",
+            return_value=(live_pages, ["openlibrary"], True, True),
+        ):
+            payload = app.fetch_topic_discovery_payload(
+                "focus",
+                "en",
+                dict(app.TOPIC_FILTER_DEFAULTS),
+            )
+
+        self.assertFalse(payload["cache_fallback"])
+        self.assertEqual(
+            [book["title"] for book in payload["all_books"]],
+            ["Live Focus"],
+        )
+
+    def test_local_corpus_term_matching_never_uses_raw_substrings(self):
+        self.assertFalse(app._topic_cached_text_contains("chair design", "ai"))
+        self.assertTrue(app._topic_cached_text_contains("the age of ai", "ai"))
+
+    def test_local_corpus_rejects_weak_matches_in_noisy_subject_lists(self):
+        plan = plan_topic_query("productivity", "topic")
+        filler = [f"Unrelated subject {index}" for index in range(30)]
+        weak = {
+            "title": "Contract Pricing",
+            "subject": ["Software Productivity Consortium", *filler],
+        }
+        polluted = {
+            "title": "Race and Ethnicity in Society",
+            "subject": ["Productivity", *filler, *(
+                f"Other domain {index}" for index in range(40)
+            )],
+            "readinglog_count": 500,
+        }
+        supported = {
+            "title": "The Productivity Project",
+            "subject": ["Productivity", *filler],
+        }
+        established = {
+            "title": "Better Work",
+            "subject": ["Productivity", *filler],
+            "readinglog_count": 500,
+        }
+
+        self.assertFalse(app._topic_cached_record_is_coherent(weak, plan))
+        self.assertFalse(app._topic_cached_record_is_coherent(polluted, plan))
+        self.assertTrue(app._topic_cached_record_is_coherent(supported, plan))
+        self.assertTrue(app._topic_cached_record_is_coherent(established, plan))
+
+    def test_sparse_local_corpus_uses_bounded_title_evidence(self):
+        productivity = plan_topic_query("productivity", "topic")
+        sleep = plan_topic_query("sleep", "topic")
+        focus = plan_topic_query("focus", "topic")
+        parenting = plan_topic_query("parenting", "topic")
+
+        # The corpus gate admits the primary term; topic-specific semantic
+        # ranking rejects the petroleum sense after parsing.
+        self.assertTrue(app._topic_cached_record_is_coherent(
+            {"title": "Well Productivity Handbook"},
+            productivity,
+        ))
+        self.assertFalse(app._topic_cached_record_is_coherent(
+            {"title": "Insomnia"},
+            sleep,
+        ))
+        self.assertTrue(app._topic_cached_record_is_coherent(
+            {"title": "Deep Work"},
+            focus,
+        ))
+        self.assertTrue(app._topic_cached_record_is_coherent(
+            {"title": "Parenting the New Teen"},
+            parenting,
+        ))
+
+    def test_sparse_local_corpus_restores_primary_and_safe_sales_titles(self):
+        focus = plan_topic_query("focus", "topic")
+        meditation = plan_topic_query("meditation", "topic")
+        sales = plan_topic_query("sales", "topic")
+
+        self.assertTrue(app._topic_cached_record_is_coherent(
+            {"title": "The Power of Focus"},
+            focus,
+        ))
+        self.assertTrue(app._topic_cached_record_is_coherent(
+            {"title": "The Meditation Handbook"},
+            meditation,
+        ))
+        self.assertTrue(app._topic_cached_record_is_coherent(
+            {"title": "The Little Red Book of Selling"},
+            sales,
+        ))
+
+    def test_local_corpus_drops_incidental_topic_in_large_subject_list(self):
+        science = plan_topic_query("science", "topic")
+        record = {
+            "title": "Drive",
+            "subject": ["Science", *(
+                f"Unrelated domain {index}" for index in range(19)
+            )],
+        }
+
+        self.assertFalse(app._topic_cached_record_is_coherent(record, science))
+
+    def test_local_productivity_corpus_keeps_personal_work_signals(self):
+        plan = plan_topic_query("productivity", "topic")
+        zapp = {
+            "title": "Zapp!",
+            "subject": [
+                "Productivity", "Employee empowerment", "Motivation",
+                *(
+                    f"Workplace subject {index}" for index in range(20)
+                ),
+            ],
+        }
+        first_things_first = {
+            "title": "First Things First",
+            "subject": [
+                "Time management", "Conduct of life", "Goals",
+                *(
+                    f"Workplace subject {index}" for index in range(20)
+                ),
+            ],
+        }
+        industrial = {
+            "title": "MOST Work Measurement Systems",
+            "subject": [
+                "Productivity", "Work measurement", "Industrial engineering",
+                *(
+                    f"Engineering subject {index}" for index in range(20)
+                ),
+            ],
+        }
+
+        self.assertTrue(app._topic_cached_record_is_coherent(zapp, plan))
+        self.assertTrue(app._topic_cached_record_is_coherent(
+            first_things_first,
+            plan,
+        ))
+        self.assertFalse(app._topic_cached_record_is_coherent(industrial, plan))
+
     def test_pagination_is_stable_and_duplicate_free(self):
         payload = self.payload(70)
         first = app.paginate_topic_discovery_payload(payload, 1)
@@ -338,6 +625,28 @@ class TopicIntegrationCacheTest(unittest.TestCase):
         )
         self.assertEqual(explicitly_english, [])
 
+    def test_mapped_inventaire_work_without_author_still_renders(self):
+        result = DiscoveryResult(
+            candidate=DiscoveryCandidate(
+                provider="inventaire",
+                provider_id="wd:Q2",
+                native_rank=1,
+                query_rank=0,
+                title="Mindfulness in Plain English",
+                authors=(),
+                work_key="/works/OL2W",
+                semantic_terms=("meditation",),
+            ),
+            score=1,
+            reasons=("Related: Meditation",),
+            sources=("inventaire",),
+        )
+
+        books = app._topic_books_from_results([result], "en", "current")
+
+        self.assertEqual(len(books), 1)
+        self.assertEqual(books[0]["author"], "")
+
     def test_topic_book_hint_is_stored_under_the_active_language(self):
         result = DiscoveryResult(
             candidate=DiscoveryCandidate(
@@ -380,6 +689,27 @@ class TopicIntegrationCacheTest(unittest.TestCase):
             )
 
         self.assertEqual(payload["retry_after"], 61)
+
+    def test_partial_payload_waits_past_inflight_provider_timeout(self):
+        with (
+            patch.object(
+                app,
+                "_topic_provider_pages",
+                return_value=([], [], True, False),
+            ),
+            patch.object(app, "openlibrary_status", return_value={"retry_after": 0}),
+            patch.object(app, "inventaire_status", return_value={"retry_after": 0}),
+        ):
+            payload = app.fetch_topic_discovery_payload(
+                "focus",
+                "en",
+                dict(app.TOPIC_FILTER_DEFAULTS),
+            )
+
+        self.assertGreaterEqual(
+            payload["retry_after"],
+            app.OL_CONNECT_TIMEOUT + app.OL_READ_TIMEOUT,
+        )
 
     def test_invalid_filter_values_fall_back_to_bounded_defaults(self):
         filters = app.normalize_topic_filters({

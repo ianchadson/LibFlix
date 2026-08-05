@@ -61,14 +61,14 @@
     .discover-title { font-size: 1.55rem; font-weight: 700; line-height: 1.15; margin: 0; }
     .discover-meta { color: #777; font-size: .83rem; margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .intent-switch { display: inline-flex; align-items: center; gap: 2px; margin-top: 12px; padding: 3px; border: 1px solid rgba(255,255,255,.1); border-radius: 999px; background: rgba(255,255,255,.035); }
-    .intent-switch a { padding: 5px 10px; border-radius: 999px; color: #989ba2; font-size: .74rem; font-weight: 650; line-height: 1; text-decoration: none; transition: color .15s ease, background .15s ease; }
+    .intent-switch a { min-height:44px; display:inline-flex; align-items:center; padding: 5px 12px; border-radius: 999px; color: #989ba2; font-size: .74rem; font-weight: 650; line-height: 1; text-decoration: none; transition: color .15s ease, background .15s ease; }
     .intent-switch a:hover { color: #fff; }
     .intent-switch a.active { background: #34363b; color: #fff; }
     .topic-tools { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-top: 13px; }
     .topic-source-note { min-height: 20px; padding-top: 5px; color: #777b83; font-size: .75rem; }
     .topic-source-note:empty { display: none; }
     .topic-filters { position: relative; flex: 0 0 auto; }
-    .topic-filters summary { display: inline-flex; align-items: center; gap: 6px; min-height: 30px; padding: 6px 10px; border: 1px solid rgba(255,255,255,.13); border-radius: 5px; color: #b8bac0; background: #1c1e22; font-size: .75rem; font-weight: 650; cursor: pointer; list-style: none; user-select: none; }
+    .topic-filters summary { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 12px; border: 1px solid rgba(255,255,255,.13); border-radius: 5px; color: #b8bac0; background: #1c1e22; font-size: .75rem; font-weight: 650; cursor: pointer; list-style: none; user-select: none; }
     .topic-filters summary::-webkit-details-marker { display: none; }
     .topic-filters summary::after { content: '▾'; color: #72757c; font-size: .65rem; transition: transform .15s ease; }
     .topic-filters[open] summary::after { transform: rotate(180deg); }
@@ -234,7 +234,7 @@
       <span class="spinner-sm" aria-hidden="true"></span><span>Finding books</span>
     </div>
     {% elif not books and not topic_start_books %}
-    <div class="empty-state" id="emptyState">
+    <div class="empty-state" id="emptyState" role="status" aria-live="polite">
       {% if search_unavailable %}
       Book search is temporarily unavailable.<a href="{{ request.url }}">Try again</a>
       {% elif topic_active %}
@@ -293,6 +293,11 @@
 
     function normalizeKey(value) {
       return String(value || '').trim().replace(/^\/?works\//, '');
+    }
+
+    function canonicalWorkKey(value) {
+      const key = normalizeKey(value);
+      return /^OL\d+W$/i.test(key) ? '/works/' + key.toUpperCase() : '';
     }
 
     function normalizeText(value) {
@@ -376,7 +381,7 @@
       const displayAuthor = author.length > 35 ? author.slice(0, 35) + '...' : author;
       const bookCard = document.createElement('div');
       bookCard.className = 'book-card';
-      bookCard.dataset.olKey = olKey;
+      bookCard.dataset.olKey = canonicalWorkKey(olKey);
       bookCard.dataset.title = title;
       bookCard.dataset.author = author;
       if (withTopicCopy) bookCard.dataset.quickPeekAction = 'Find an edition';
@@ -570,8 +575,10 @@
       if (!topicMode) document.getElementById('startHereSection').hidden = true;
       document.title = (topicMode ? 'Books about ' + topicLabel : 'Search: ' + QUERY) + ' - LibFlix';
       const sourceNote = document.getElementById('topicSourceNote');
-      sourceNote.textContent = topicMode && data?.partial
-        ? 'Some book sources are temporarily unavailable.'
+      sourceNote.textContent = topicMode && data?.cache_fallback
+        ? 'Showing saved books while live sources recover.'
+        : topicMode && data?.partial
+          ? 'Some book sources are temporarily unavailable.'
         : topicMode && data?.refresh_partial
           ? 'Showing saved results while book sources refresh.'
           : '';
@@ -615,6 +622,8 @@
       const empty = document.createElement('div');
       empty.className = 'empty-state';
       empty.id = 'emptyState';
+      empty.setAttribute('role', 'status');
+      empty.setAttribute('aria-live', 'polite');
       empty.textContent = message;
       if (retry) {
         const link = document.createElement('a');
@@ -649,6 +658,16 @@
       return Boolean(data?.partial || data?.refresh_partial);
     }
 
+    function discoverErrorMessage(data) {
+      if (
+        Number(data?.http_status) === 429
+        || String(data?.error || '').toLowerCase().startsWith('too many requests')
+      ) {
+        return 'Too many searches at once. Wait a moment, then try again.';
+      }
+      return String(data?.error || 'Book search is temporarily unavailable.');
+    }
+
     function schedulePartialRefresh(data) {
       if (!topicMode || !responseNeedsRefresh(data) || partialRefreshCount >= 4) return;
       if (partialRefreshTimer) window.clearTimeout(partialRefreshTimer);
@@ -667,7 +686,10 @@
       const controller = new AbortController();
       partialRefreshRequest = controller;
       fetch(apiDiscoverUrl(1), { cache: 'no-store', signal: controller.signal })
-        .then(response => response.json())
+        .then(async response => ({
+          ...(await response.json()),
+          http_status: response.status
+        }))
         .then(data => {
           if (pageDisposed || partialRefreshRequest !== controller) return;
           if (!data.success) {
@@ -741,7 +763,10 @@
       const controller = new AbortController();
       activePageRequest = controller;
       fetch(apiDiscoverUrl(nextPage), { signal: controller.signal })
-        .then(response => response.json())
+        .then(async response => ({
+          ...(await response.json()),
+          http_status: response.status
+        }))
         .then(data => {
           if (pageDisposed || activePageRequest !== controller) return;
           const books = Array.isArray(data.books) ? data.books : [];
@@ -760,7 +785,7 @@
             schedulePartialRefresh(data);
             showEmptyResults(data.success
               ? (isTopicResponse ? 'No strong matches yet. Try a more specific topic.' : 'No books found. Try a different title or author.')
-              : 'Book search is temporarily unavailable.', !data.success);
+              : discoverErrorMessage(data), !data.success);
             finishLoading();
             return;
           }

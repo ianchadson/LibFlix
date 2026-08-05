@@ -1,6 +1,9 @@
 import unittest
+from dataclasses import replace
 
 from topic_discovery import (
+    DiscoveryCandidate,
+    DiscoveryResult,
     TOPIC_EXPANSIONS,
     build_inventaire_request,
     build_openlibrary_request,
@@ -59,6 +62,15 @@ class TopicIntentTests(unittest.TestCase):
 
         self.assertEqual(plan.queries[0], "startup")
         self.assertIn("startups", plan.queries)
+
+    def test_parenting_expands_to_child_development(self):
+        self.assertIn("child development", plan_topic_query("parenting").queries)
+
+    def test_productivity_expands_to_getting_things_done(self):
+        self.assertIn(
+            "getting things done",
+            plan_topic_query("productivity").queries,
+        )
 
 
 class TopicProviderParsingTests(unittest.TestCase):
@@ -172,6 +184,226 @@ class TopicRankingTests(unittest.TestCase):
         self.assertNotIn("The Hiding Place", titles)
         self.assertNotIn("Popular but unrelated", titles)
 
+    def test_focus_rejects_unrelated_subject_senses(self):
+        records = [
+            self.ol_record(
+                "/works/OL1W", "Using Focus Groups", "Researcher",
+                ["Focus groups", "Qualitative research"],
+            ),
+            self.ol_record(
+                "/works/OL2W", "Ford Focus Repair Manual", "Mechanic",
+                ["Focus automobile", "Maintenance and repair"],
+            ),
+            self.ol_record(
+                "/works/OL3W", "The Grammar of Focus", "Linguist",
+                ["Focus (Linguistics)", "Pragmatics"],
+            ),
+            self.ol_record(
+                "/works/OL4W", "My One Word", "Helpful Author",
+                ["Attention", "Focus (Linguistics)", "Self-help"],
+            ),
+            self.ol_record(
+                "/works/OL5W", "Focus on Today", "Useful Author",
+                ["Focus", "Productivity"],
+            ),
+            self.ol_record(
+                "/works/OL6W", "Breaking Boundaries", "Theatre Historian",
+                ["Focus Theatre (Dublin, Ireland)"],
+            ),
+            self.ol_record(
+                "/works/OL7W", "Family Man", "Organization Historian",
+                ["Focus on the Family (Organization)"],
+            ),
+            self.ol_record(
+                "/works/OL8W", "Creating Drop-in Centers", "Social Worker",
+                ["Family Focus, Inc."],
+            ),
+        ]
+        page = parse_openlibrary_payload({"docs": records}, "focus")
+        results = merge_topic_candidates([page], plan_topic_query("focus"))
+        titles = [result.candidate.title for result in results]
+
+        self.assertIn("My One Word", titles)
+        self.assertIn("Focus on Today", titles)
+        self.assertNotIn("Using Focus Groups", titles)
+        self.assertNotIn("Ford Focus Repair Manual", titles)
+        self.assertNotIn("The Grammar of Focus", titles)
+        self.assertNotIn("Breaking Boundaries", titles)
+        self.assertNotIn("Family Man", titles)
+        self.assertNotIn("Creating Drop-in Centers", titles)
+
+    def test_productivity_rejects_industrial_engineering_senses(self):
+        records = [
+            self.ol_record(
+                "/works/OL1W", "Well Productivity Handbook", "Engineer",
+                ["Petroleum engineering", "Oil wells"],
+            ),
+            self.ol_record(
+                "/works/OL2W", "MOST Work Measurement Systems", "Engineer",
+                ["Work measurement", "Industrial engineering", "Productivity"],
+            ),
+            self.ol_record(
+                "/works/OL3W", "Personal Productivity", "Useful Author",
+                ["Time management", "Personal efficiency"],
+            ),
+        ]
+
+        results = merge_topic_candidates(
+            [parse_openlibrary_payload({"docs": records}, "productivity")],
+            plan_topic_query("productivity"),
+        )
+        titles = [result.candidate.title for result in results]
+
+        self.assertEqual(titles, ["Personal Productivity"])
+
+    def test_communication_rejects_nonhuman_and_clinical_senses(self):
+        records = [
+            self.ol_record(
+                "/works/OL1W", "Intelligent Life in the Universe", "Astronomer",
+                ["Interstellar communication", "Astronomy"],
+            ),
+            self.ol_record(
+                "/works/OL2W", "Clinical Language", "Clinician",
+                ["Communication disorders", "Neurology"],
+            ),
+            self.ol_record(
+                "/works/OL3W", "How to Talk", "Useful Author",
+                ["Interpersonal communication", "Conversation"],
+            ),
+        ]
+
+        results = merge_topic_candidates(
+            [parse_openlibrary_payload({"docs": records}, "communication")],
+            plan_topic_query("communication"),
+        )
+
+        self.assertEqual(
+            [result.candidate.title for result in results],
+            ["How to Talk"],
+        )
+
+    def test_startups_rejects_children_activity_books(self):
+        records = [
+            self.ol_record(
+                "/works/OL1W", "50 Money-Making Ideas for Kids", "Author",
+                ["Entrepreneurship", "Juvenile literature"],
+            ),
+            self.ol_record(
+                "/works/OL2W", "The Startup Owner's Manual", "Founder",
+                ["Startups", "Entrepreneurship"],
+            ),
+        ]
+        results = merge_topic_candidates(
+            [parse_openlibrary_payload({"docs": records}, "startups")],
+            plan_topic_query("startups"),
+        )
+
+        self.assertEqual(
+            [result.candidate.title for result in results],
+            ["The Startup Owner's Manual"],
+        )
+
+    def test_investing_rejects_legal_and_industrial_subject_collisions(self):
+        records = [
+            self.ol_record(
+                "/works/OL1W", "No Choirboy", "Author",
+                ["Capital punishment", "Death row inmates", "Capital investments"],
+            ),
+            self.ol_record(
+                "/works/OL2W", "Advances in Management Research", "Editor",
+                ["Operations research", "Investments", "Manufacturing"],
+            ),
+            self.ol_record(
+                "/works/OL3W", "Investing for the Long Term", "Benjamin Graham",
+                ["Investments", "Investment strategy", "Stocks", "Bonds"],
+            ),
+        ]
+        results = merge_topic_candidates(
+            [parse_openlibrary_payload({"docs": records}, "investing")],
+            plan_topic_query("investing"),
+        )
+
+        self.assertEqual(
+            [result.candidate.title for result in results],
+            ["Investing for the Long Term"],
+        )
+
+    def test_ambiguous_topic_titles_do_not_defeat_intent(self):
+        cases = (
+            ("habits", "Habits of the Heart", ["Sociology"]),
+            (
+                "mental health",
+                "Eligible for Execution",
+                ["Mental health", "Capital punishment", "Insanity (Law)"],
+            ),
+            (
+                "writing",
+                "Writing Women in Late Medieval and Early Modern Spain",
+                [],
+            ),
+            (
+                "health",
+                "Health Sciences Information Sources",
+                [],
+            ),
+        )
+        for index, (topic, title, subjects) in enumerate(cases, start=1):
+            with self.subTest(topic=topic, title=title):
+                page = parse_openlibrary_payload({"docs": [self.ol_record(
+                    f"/works/OL{index}W",
+                    title,
+                    "Author",
+                    subjects,
+                )]}, topic)
+
+                self.assertEqual(
+                    merge_topic_candidates([page], plan_topic_query(topic)),
+                    [],
+                )
+
+    def test_duplicate_work_records_do_not_repeat_a_title_and_author(self):
+        records = [
+            self.ol_record(
+                "/works/OL1W", "Focus", "Daniel Goleman", ["Focus"],
+                readinglog_count=500,
+            ),
+            self.ol_record(
+                "/works/OL2W", "Focus", "Daniel Goleman", ["Attention"],
+                readinglog_count=100,
+            ),
+        ]
+
+        results = merge_topic_candidates(
+            [parse_openlibrary_payload({"docs": records}, "focus")],
+            plan_topic_query("focus"),
+        )
+
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].candidate.title, "Focus")
+
+    def test_duplicate_titles_ignore_a_leading_article(self):
+        records = [
+            self.ol_record(
+                "/works/OL1W",
+                "The 7 Habits of Highly Effective Teens",
+                "Sean Covey",
+                ["Habits"],
+            ),
+            self.ol_record(
+                "/works/OL2W",
+                "7 Habits of Highly Effective Teens",
+                "Sean Covey",
+                ["Habits"],
+            ),
+        ]
+
+        results = merge_topic_candidates(
+            [parse_openlibrary_payload({"docs": records}, "habits")],
+            plan_topic_query("habits"),
+        )
+
+        self.assertEqual(len(results), 1)
+
     def test_short_ai_alias_matches_tokens_not_substrings(self):
         records = [
             self.ol_record(
@@ -191,6 +423,21 @@ class TopicRankingTests(unittest.TestCase):
             [result.candidate.title for result in results],
             ["Artificial Intelligence"],
         )
+
+    def test_subject_does_not_reverse_match_a_longer_expansion(self):
+        page = parse_openlibrary_payload({"docs": [self.ol_record(
+            "/works/OL3W",
+            "Contract Pricing",
+            "Government Office",
+            ["Management"],
+        )]}, "time management", 1)
+
+        results = merge_topic_candidates(
+            [page],
+            plan_topic_query("productivity"),
+        )
+
+        self.assertEqual(results, [])
 
     def test_cjk_topic_matches_unsegmented_title(self):
         record = self.ol_record(
@@ -239,6 +486,85 @@ class TopicRankingTests(unittest.TestCase):
         self.assertEqual([item.candidate.title for item in recent], ["Modern Meditation"])
         classic = filter_topic_results(results, published="classic")
         self.assertEqual([item.candidate.title for item in classic], ["Classic Meditation"])
+
+    def test_nonfiction_filter_recognizes_subjects_ending_in_fiction(self):
+        page = parse_openlibrary_payload({"docs": [self.ol_record(
+            "/works/OL9W",
+            "From Head to Toe",
+            "Eric Carle",
+            ["Physical fitness", "Animals, fiction", "Children's fiction"],
+        )]}, "fitness")
+        results = merge_topic_candidates([page], plan_topic_query("fitness"))
+
+        self.assertEqual(
+            filter_topic_results(results, book_type="nonfiction"),
+            [],
+        )
+
+    def test_novel_is_exact_and_does_not_hide_novelty_or_coronavirus(self):
+        records = [
+            self.ol_record(
+                "/works/OL1W",
+                "Coronavirus Medicine",
+                "Doctor",
+                ["Novel coronavirus infections", "Medicine", "Nonfiction"],
+            ),
+            self.ol_record(
+                "/works/OL2W",
+                "The Psychology of Novelty",
+                "Psychologist",
+                ["Novelty (Psychology)", "Psychology", "Nonfiction"],
+            ),
+            self.ol_record(
+                "/works/OL3W",
+                "A Fictional Health Story",
+                "Novelist",
+                ["Health", "Novel"],
+            ),
+        ]
+        self.assertEqual(
+            [
+                candidate.fiction
+                for candidate in parse_openlibrary_payload(
+                    {"docs": records},
+                    "health",
+                ).candidates
+            ],
+            [False, False, True],
+        )
+
+    def test_nonfiction_filter_rejects_untyped_inventaire_text_matches(self):
+        raw = DiscoveryResult(
+            candidate=DiscoveryCandidate(
+                provider="inventaire",
+                provider_id="wd:novel",
+                native_rank=1,
+                query_rank=0,
+                title="Doctor Sleep",
+                work_key="/works/OL1W",
+            ),
+            score=1,
+            reasons=("Related: Sleep",),
+            sources=("inventaire",),
+        )
+        semantic = DiscoveryResult(
+            candidate=replace(
+                raw.candidate,
+                provider_id="wd:mindfulness",
+                title="Mindfulness in Plain English",
+                work_key="/works/OL2W",
+                semantic_terms=("meditation",),
+            ),
+            score=1,
+            reasons=("Related: Meditation",),
+            sources=("inventaire",),
+        )
+
+        filtered = filter_topic_results([raw, semantic], book_type="nonfiction")
+
+        self.assertEqual([item.candidate.title for item in filtered], [
+            "Mindfulness in Plain English",
+        ])
 
     def test_filters_run_before_author_diversity_cap(self):
         records = [

@@ -90,10 +90,20 @@ class TopicBrowsePageTests(unittest.TestCase):
             nonfiction = app.app.test_client().get("/")
             fiction = app.app.test_client().get("/fiction")
 
-        self.assertIn(b"Explore by topic", nonfiction.data)
-        self.assertIn(b"Browse all topics", nonfiction.data)
+        page = BeautifulSoup(nonfiction.data, "html.parser")
+        cards = page.select(".home-topic-card")
+        self.assertEqual(len(cards), 6)
+        self.assertEqual(cards[0]["href"], "/topics#topicGroup1")
+        self.assertEqual(cards[-1]["href"], "/topics#topicGroup6")
+        self.assertTrue(all(card.select_one("svg") for card in cards))
+        self.assertFalse(any("/discover" in card["href"] for card in cards))
+        self.assertIn(b'id="homeTopicsTitle">Topics</h2>', nonfiction.data)
+        self.assertIn(b">All topics <", nonfiction.data)
+        self.assertNotIn(b"The reading map", nonfiction.data)
+        self.assertNotIn(b"Choose a direction", nonfiction.data)
+        self.assertNotIn(b"Move from a broad interest", nonfiction.data)
         self.assertIn(b'href="/topics"', nonfiction.data)
-        self.assertNotIn(b"Explore by topic", fiction.data)
+        self.assertNotIn(b'id="homeTopicsTitle">Topics</h2>', fiction.data)
         self.assertNotIn(b'href="/topics"', fiction.data)
 
     def test_deploy_smoke_check_covers_the_topic_catalog(self):
