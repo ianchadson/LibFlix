@@ -5,6 +5,8 @@
 - Preserved bounded provider descriptions in topic results, repaired minor
   joined-word source defects, rejected heavily malformed summaries, and used a
   clean edition description before declaring a book description unavailable.
+- Sanitized legacy assembled-detail cache entries on read so an older malformed
+  summary cannot bypass the new quality checks during cache migration.
 - Added real two-line descriptions to topic cards without duplicating reason
   chips when a source has no usable summary.
 - Made book-page hydration monotonic: populated title, author, description, and

@@ -3841,19 +3841,31 @@ def book_detail_cache_key(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
     return f"book_detail:v6:{lang}:{work_id}"
 
+def sanitize_cached_book_detail(detail):
+    if not isinstance(detail, dict):
+        return detail
+    sanitized = dict(detail)
+    raw_description = sanitized.get("description")
+    if raw_description:
+        description = extract_desc({"description": raw_description})
+        sanitized["description"] = description
+        if not description:
+            sanitized["complete"] = False
+    return sanitized
+
 def cached_book_detail(work_id, lang=None, allow_stale=True):
     key = book_detail_cache_key(work_id, lang)
     cached = cache_get(key, BOOK_DETAIL_FRESH_TTL)
     if cached is not None:
-        return cached, "memory"
+        return sanitize_cached_book_detail(cached), "memory"
     cached = disk_cache_get(key, BOOK_DETAIL_FRESH_TTL)
     if cached is not None:
         cache_set(key, cached)
-        return cached, "disk"
+        return sanitize_cached_book_detail(cached), "disk"
     if allow_stale:
         stale = disk_cache_get_stale(key, BOOK_DETAIL_STALE_TTL)
         if stale is not None:
-            return stale, "stale"
+            return sanitize_cached_book_detail(stale), "stale"
         normalized_lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
         for version in ("v5", "v4", "v3"):
             legacy_key = f"book_detail:{version}:{normalized_lang}:{work_id}"
@@ -3862,7 +3874,7 @@ def cached_book_detail(work_id, lang=None, allow_stale=True):
                 or disk_cache_get_stale(legacy_key, BOOK_DETAIL_STALE_TTL)
             )
             if legacy is not None:
-                legacy = {**legacy, "complete": False}
+                legacy = sanitize_cached_book_detail({**legacy, "complete": False})
                 return legacy, "stale"
     return None, "miss"
 
@@ -3877,7 +3889,7 @@ def alternate_canonical_book_detail(work_id, lang=None):
             or disk_cache_get_stale(key, BOOK_DETAIL_STALE_TTL)
         )
         if detail:
-            candidates.append(detail)
+            candidates.append(sanitize_cached_book_detail(detail))
     return max(
         candidates,
         key=lambda detail: (

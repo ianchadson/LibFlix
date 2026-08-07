@@ -921,6 +921,28 @@ class BookDescriptionFallbackTests(unittest.TestCase):
         self.assertTrue(complete)
         archive.assert_not_called()
 
+    def test_malformed_legacy_detail_is_not_rendered_while_v6_refreshes(self):
+        legacy = {
+            "title": "Rapt",
+            "author": "Winifred Gallagher",
+            "description": "lifeIn Rapt questionsCan we focus?driving onward.attention.Gallagher explains.",
+            "complete": True,
+        }
+
+        def memory_lookup(key, _ttl):
+            return legacy if key == "book_detail:v5:en:OL1932184W" else None
+
+        with (
+            patch.object(app, "cache_get", side_effect=memory_lookup),
+            patch.object(app, "disk_cache_get", return_value=None),
+            patch.object(app, "disk_cache_get_stale", return_value=None),
+        ):
+            detail, state = app.cached_book_detail("OL1932184W", "en")
+
+        self.assertEqual(state, "stale")
+        self.assertEqual(detail["description"], "")
+        self.assertFalse(detail["complete"])
+
     def test_description_list_uses_longest_readable_value(self):
         description = app.extract_desc({
             "description": [
