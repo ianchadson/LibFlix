@@ -119,7 +119,15 @@
     let lastSimilarSeedSignature = '';
     let activeDetailRequest = null;
     let activeSimilarRequest = null;
-    let bookDetailRefreshing = {{ (not complete) | default(true) | tojson }};
+    const INITIAL_DETAIL_COMPLETE = {{ complete | default(false) | tojson }};
+    const INITIAL_PRIMARY_CONTENT_READY = Boolean(
+      olKey
+      && String(bookTitle || '').trim()
+      && !['book', 'untitled'].includes(String(bookTitle || '').trim().toLowerCase())
+      && String(bookAuthor || '').trim()
+      && String(bookDescription || '').trim()
+    );
+    let bookDetailRefreshing = !INITIAL_DETAIL_COMPLETE && !INITIAL_PRIMARY_CONTENT_READY;
     let pageDisposed = false;
     let downloadRequested = false;
     let downloadState = 'idle';
@@ -130,6 +138,7 @@
     let similarRetryTimer = null;
     let similarWarmTimer = null;
     let similarObserver = null;
+    let similarResultsRendered = false;
 
     function escapeHtml(value) {
       return window.LibFlixDownloads.escapeHtml(value);
@@ -170,18 +179,12 @@
       const frame = document.getElementById('detailCoverFrame');
       const spotlight = document.getElementById('bookSpotlight');
       const canonicalUrl = String(url || '');
-      if (frame.dataset.failedCover === canonicalUrl) {
-        frame.innerHTML = '<div class="detail-cover-placeholder" aria-label="No cover available">?</div>';
-        spotlight.style.removeProperty('--book-cover');
-        return;
-      }
+      if (frame.dataset.failedCover === canonicalUrl) return;
       delete frame.dataset.failedCover;
       const largeUrl = sizedDetailCoverUrl(url, 'L');
       const mediumUrl = sizedDetailCoverUrl(url, 'M');
-      frame.innerHTML = '';
       const image = document.createElement('img');
       image.className = 'detail-cover';
-      image.src = largeUrl;
       image.alt = 'Cover of ' + (title || bookTitle);
       image.decoding = 'async';
       image.fetchPriority = 'high';
@@ -191,23 +194,31 @@
       placeholder.setAttribute('aria-label', 'No cover available');
       placeholder.textContent = '?';
       placeholder.hidden = true;
-      image.addEventListener('load', () => {
+      const commitImage = () => {
+        if (pageDisposed) return;
         image.classList.add('loaded');
+        frame.replaceChildren(image, placeholder);
         delete frame.dataset.failedCover;
         spotlight.style.setProperty('--book-cover', 'url("' + image.src + '")');
+      };
+      image.addEventListener('load', () => {
+        const decoded = typeof image.decode === 'function' ? image.decode() : Promise.resolve();
+        decoded.catch(() => {}).then(commitImage);
       });
       image.addEventListener('error', () => {
-        if (image.dataset.coverFallback !== '1' && mediumUrl !== image.src) {
+        if (image.dataset.coverFallback !== '1' && mediumUrl && mediumUrl !== largeUrl) {
           image.dataset.coverFallback = '1';
           image.src = mediumUrl;
           return;
         }
-        image.hidden = true;
-        placeholder.hidden = false;
         frame.dataset.failedCover = canonicalUrl;
-        spotlight.style.removeProperty('--book-cover');
+        if (!frame.querySelector('.detail-cover, .detail-cover-placeholder')) {
+          placeholder.hidden = false;
+          frame.appendChild(placeholder);
+          spotlight.style.removeProperty('--book-cover');
+        }
       });
-      frame.append(image, placeholder);
+      image.src = largeUrl;
     }
 
     function bookUrl(book) {
@@ -228,6 +239,11 @@
       const text = document.getElementById('descText');
       const toggle = document.getElementById('descriptionToggle');
       if (!text || text.style.display === 'none') return;
+      if (toggle.getAttribute('aria-expanded') === 'true') {
+        text.classList.remove('is-collapsed');
+        toggle.classList.add('visible');
+        return;
+      }
       text.classList.remove('is-collapsed');
       const fullHeight = text.scrollHeight;
       text.classList.add('is-collapsed');
@@ -250,22 +266,15 @@
 
     function showNoDescription() {
       document.getElementById('descSkeleton').style.display = 'none';
+      if (bookDescription || document.getElementById('descText').textContent.trim()) {
+        document.getElementById('descNone').style.display = 'none';
+        return;
+      }
       document.getElementById('descNone').style.display = 'block';
     }
 
     function buildSearchQuery(queryIndex) {
       return String(downloadQueries[queryIndex || 0] || downloadTitle || '').trim();
-    }
-
-    function downloadQuerySignature() {
-      return JSON.stringify({
-        queries: downloadQueries,
-        title: String(bookTitle || '').trim(),
-        author: String(bookAuthor || '').trim(),
-        titleAliases: bookTitleAliases,
-        authors: bookAuthors,
-        isbns: bookIsbns,
-      });
     }
 
     function hasResolvedBookIdentity() {
@@ -275,40 +284,42 @@
 
     function hydrateBookIdentity(data) {
       if (!data || !data.success) return;
-      const previousDownloadSignature = downloadQuerySignature();
       if (data.title) {
+        const titleNode = document.getElementById('detailTitle');
+        const visibleTitle = String(titleNode.textContent || '').trim().toLowerCase();
         bookTitle = data.title;
-        document.getElementById('detailTitle').textContent = data.title;
-        document.title = data.title + ' - LibFlix';
+        if (!visibleTitle || visibleTitle === 'book' || visibleTitle === 'untitled') {
+          titleNode.textContent = data.title;
+          document.title = data.title + ' - LibFlix';
+        }
       }
       const localized = document.getElementById('detailLocalizedTitle');
-      localized.textContent = data.localized_title || '';
-      localized.hidden = !data.localized_title;
+      if (data.localized_title && (!localized.textContent.trim() || localized.hidden)) {
+        localized.textContent = data.localized_title;
+        localized.hidden = false;
+      }
       if (data.author) {
         bookAuthor = data.author;
         const author = document.getElementById('detailAuthor');
-        author.textContent = data.author;
-        author.hidden = false;
+        if (!author.textContent.trim() || author.hidden) {
+          author.textContent = data.author;
+          author.hidden = false;
+        }
       }
       if (data.download_title) downloadTitle = data.download_title;
       if (Array.isArray(data.title_aliases)) bookTitleAliases = data.title_aliases;
       if (Array.isArray(data.authors)) bookAuthors = data.authors;
       if (Array.isArray(data.isbns)) bookIsbns = data.isbns;
       downloadQueries = normalizeDownloadQueries(data.download_queries);
-      const downloadIdentityChanged = previousDownloadSignature !== downloadQuerySignature();
       if (data.cover_url) {
         bookCoverUrl = data.cover_url;
         const frame = document.getElementById('detailCoverFrame');
         const existing = frame.querySelector('.detail-cover');
-        const largeUrl = sizedDetailCoverUrl(data.cover_url, 'L');
-        if (!existing || existing.getAttribute('src') !== largeUrl) {
+        if (!existing || existing.hidden) {
           loadDetailCover(data.cover_url, data.title || bookTitle);
         }
       }
-      const shouldRestartDownloadSearch = downloadRequested
-        && downloadIdentityChanged
-        && ['loading', 'empty', 'error', 'results'].includes(downloadState);
-      if ((!downloadRequested || shouldRestartDownloadSearch) && buildSearchQuery(0)) {
+      if (!downloadRequested && buildSearchQuery(0)) {
         doSearch(1, 0);
       }
     }
@@ -341,18 +352,33 @@
       if (pageDisposed || !data?.success) return false;
       const previousSimilarSignature = similarSeedSignature();
       hydrateBookIdentity(data);
-      const detailRefreshPending = Boolean(allowRefreshRetry && data.refreshing && scheduleDetailRetry());
-      bookDetailRefreshing = Boolean(data.refreshing);
       const skeleton = document.getElementById('descSkeleton');
-      if (data.description) {
+      const text = document.getElementById('descText');
+      const hasVisibleDescription = Boolean(bookDescription || text.textContent.trim());
+      const primaryContentReady = Boolean(
+        hasResolvedBookIdentity()
+        && String(bookAuthor || '').trim()
+        && (data.description || hasVisibleDescription)
+      );
+      const detailRefreshPending = Boolean(
+        allowRefreshRetry
+        && data.refreshing
+        && !primaryContentReady
+        && scheduleDetailRetry()
+      );
+      bookDetailRefreshing = Boolean(data.refreshing && detailRefreshPending);
+      if (data.description && !hasVisibleDescription) {
         bookDescription = data.description;
         skeleton.style.display = 'none';
         document.getElementById('descNone').style.display = 'none';
-        const text = document.getElementById('descText');
         text.textContent = data.description;
         text.style.display = '';
         requestAnimationFrame(updateDescriptionClamp);
-      } else if (detailRefreshPending) {
+      } else if (hasVisibleDescription) {
+        skeleton.style.display = 'none';
+        document.getElementById('descNone').style.display = 'none';
+        text.style.display = '';
+      } else if (bookDetailRefreshing) {
         skeleton.style.display = '';
         document.getElementById('descNone').style.display = 'none';
       } else {
@@ -363,7 +389,11 @@
         similarSubjects = data.similar_subjects;
       }
       const nextSimilarSignature = similarSeedSignature();
-      if (previousSimilarSignature !== nextSimilarSignature && lastSimilarSeedSignature) {
+      if (
+        !similarResultsRendered
+        && previousSimilarSignature !== nextSimilarSignature
+        && lastSimilarSeedSignature
+      ) {
         activeSimilarRequest?.abort();
         activeSimilarRequest = null;
         similarRequested = false;
@@ -372,10 +402,12 @@
         if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
         similarRetryTimer = null;
       }
-      if (hasSimilarSeed()) {
+      if (similarResultsRendered) {
+        showSimilarSection();
+      } else if (hasStableSimilarSeed()) {
         renderSimilarLoading();
         requestSimilarIfReady(true);
-      } else if (detailRefreshPending || data.refreshing) {
+      } else if (bookDetailRefreshing) {
         renderSimilarLoading();
       } else {
         hideSimilarSection();
@@ -415,8 +447,10 @@
           if (pageDisposed || activeDetailRequest !== controller) return;
           if (!data.success && data.refreshing && scheduleDetailRetry()) return;
           if (!applyBookDetails(data)) {
-            showNoDescription();
-            renderSimilarRetry('Recommendations could not be loaded.');
+            bookDetailRefreshing = false;
+            if (!bookDescription) showNoDescription();
+            if (hasSimilarSeed()) requestSimilarIfReady(true);
+            else renderSimilarRetry('Recommendations could not be loaded.');
             requestDownloadsIfReady();
             return;
           }
@@ -428,9 +462,10 @@
         .catch(error => {
           if (error.name === 'AbortError' || pageDisposed) return;
           if (scheduleDetailRetry()) return;
-          showNoDescription();
           bookDetailRefreshing = false;
-          renderSimilarRetry('Recommendations could not be loaded.');
+          if (!bookDescription) showNoDescription();
+          if (hasSimilarSeed()) requestSimilarIfReady(true);
+          else renderSimilarRetry('Recommendations could not be loaded.');
           requestDownloadsIfReady();
         })
         .finally(() => {
@@ -440,6 +475,10 @@
 
     function hasSimilarSeed() {
       return Boolean(similarSubjects.length || bookAuthor || bookAuthors.length);
+    }
+
+    function hasStableSimilarSeed() {
+      return hasSimilarSeed() && (!bookDetailRefreshing || similarSubjects.length > 0);
     }
 
     function similarSeedSignature() {
@@ -466,7 +505,7 @@
       const row = document.getElementById('similarRow');
       showSimilarSection();
       row.setAttribute('aria-busy', 'true');
-      if (!force && row.querySelector('.book-card-link')) return;
+      if (!force && row.querySelector('.book-card-link, .similar-loading')) return;
       row.innerHTML = '<div class="similar-loading" role="status"><div class="spinner-book" aria-hidden="true"></div><span>Finding similar books…</span></div>';
     }
 
@@ -523,7 +562,8 @@
     }
 
     function fetchSimilar(subjects) {
-      if (pageDisposed || !hasSimilarSeed()) {
+      if (pageDisposed || similarResultsRendered) return;
+      if (!hasStableSimilarSeed()) {
         if (bookDetailRefreshing) renderSimilarLoading();
         else hideSimilarSection();
         return;
@@ -584,6 +624,7 @@
             hideSimilarSection();
             return;
           }
+          if (similarResultsRendered) return;
           similarRetryDeadline = 0;
           similarRetryCount = 0;
           if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
@@ -601,6 +642,7 @@
           showSimilarSection();
           row.setAttribute('aria-busy', 'false');
           row.innerHTML = html;
+          similarResultsRendered = true;
           window.LibFlixCoverLoader?.register(row);
         })
         .catch(error => {
@@ -621,7 +663,14 @@
     }
 
     function requestSimilarIfReady(force = false) {
-      if (!pageDisposed && !similarRetryTimer && !similarRequested && (force || similarVisible) && hasSimilarSeed()) {
+      if (
+        !pageDisposed
+        && !similarResultsRendered
+        && !similarRetryTimer
+        && !similarRequested
+        && (force || similarVisible)
+        && hasStableSimilarSeed()
+      ) {
         fetchSimilar(similarSubjects);
       }
     }
@@ -770,9 +819,9 @@
       similarVisible = true;
     }
 
-    loadBookDetails();
+    if (bookDetailRefreshing) loadBookDetails();
     similarWarmTimer = window.setTimeout(() => requestSimilarIfReady(true), 500);
-    if (BOOK_LANG !== 'cn' && downloadTitle.trim() && bookTitle !== 'Book') doSearch(1, 0);
+    if (BOOK_LANG !== 'cn' && downloadTitle.trim() && bookTitle !== 'Book') requestDownloadsIfReady();
     if (document.getElementById('descText').textContent.trim()) requestAnimationFrame(updateDescriptionClamp);
 
     window.LibFlixPageCleanup = () => {

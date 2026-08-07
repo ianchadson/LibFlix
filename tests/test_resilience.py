@@ -890,6 +890,37 @@ class BookApiFallbackTests(unittest.TestCase):
 
 
 class BookDescriptionFallbackTests(unittest.TestCase):
+    def test_description_repairs_joined_source_paragraphs(self):
+        description = app.extract_desc({
+            "description": "the interested lifeIn Rapt. attention.Gallagher explains."
+        })
+
+        self.assertEqual(
+            description,
+            "the interested life In Rapt. attention. Gallagher explains.",
+        )
+
+    def test_heavily_joined_work_description_falls_back_to_clean_edition(self):
+        malformed = "lifeIn Rapt questionsCan we focus?driving onward.attention.Gallagher explains."
+        edition_description = (
+            "A clean edition summary explains how attention shapes the quality "
+            "of an interested and fully lived life."
+        )
+        with (
+            patch.object(app, "ol_get", return_value={
+                "entries": [{"description": edition_description}],
+            }),
+            patch.object(app, "archive_description") as archive,
+        ):
+            description, complete = app.english_description_result(
+                "/works/OL1932184W",
+                {"description": malformed},
+            )
+
+        self.assertEqual(description, edition_description)
+        self.assertTrue(complete)
+        archive.assert_not_called()
+
     def test_description_list_uses_longest_readable_value(self):
         description = app.extract_desc({
             "description": [
@@ -924,6 +955,68 @@ class BookDescriptionFallbackTests(unittest.TestCase):
 
         self.assertEqual(description, edition_description)
         self.assertTrue(complete)
+
+    def test_search_description_is_used_before_edition_or_archive_requests(self):
+        search_description = (
+            "A clear description supplied by the Open Library search record "
+            "when the canonical work record has no summary."
+        )
+        with patch.object(app, "ol_get") as upstream:
+            description, complete = app.english_description_result(
+                "/works/OL1932184W",
+                {"title": "Rapt"},
+                search_description,
+            )
+
+        self.assertEqual(description, search_description)
+        self.assertTrue(complete)
+        upstream.assert_not_called()
+
+    def test_topic_hint_keeps_the_richest_description_for_fallback(self):
+        rich_description = (
+            "A substantive explanation of attention, concentration, and the "
+            "practical conditions that make focused work possible."
+        )
+        with (
+            patch.object(app, "BOOK_HINTS", {}),
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_cache_get_stale", return_value=None),
+            patch.object(app, "alternate_canonical_book_detail", return_value={}),
+        ):
+            app.remember_book_hint({
+                "ol_key": "/works/OL17713267W",
+                "title": "Deep Work",
+                "author": "Cal Newport",
+                "description": rich_description,
+            })
+            app.remember_book_hint({
+                "ol_key": "/works/OL17713267W",
+                "title": "Deep Work",
+                "author": "Cal Newport",
+                "description": "Short note.",
+            })
+
+            detail = app.fallback_book_detail("OL17713267W", "en")
+
+        self.assertEqual(detail["description"], rich_description)
+
+    def test_incomplete_book_html_is_not_cached(self):
+        detail = {
+            "title": "Provisional title",
+            "localized_title": "",
+            "download_title": "Provisional title",
+            "author": "Example Author",
+            "cover_url": "",
+            "description": "",
+            "similar_subjects": [],
+            "download_queries": ["Provisional title Example Author"],
+            "complete": False,
+        }
+        with patch.object(app, "get_book_detail", return_value=(detail, "fallback")):
+            response = app.app.test_client().get("/book/OL1W")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
 
     def test_failed_edition_lookup_is_marked_incomplete(self):
         with (

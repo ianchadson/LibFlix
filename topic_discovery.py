@@ -7,6 +7,7 @@ responses into canonical Open Library work cards.
 
 from __future__ import annotations
 
+import html as htmlmod
 import math
 import re
 import unicodedata
@@ -18,11 +19,12 @@ from nyt_bestsellers import match_nyt_bestseller
 
 
 EXPANSION_VERSION = "topic-v3"
-RANKER_VERSION = "rrf-v4"
+RANKER_VERSION = "rrf-v5"
 RRF_K = 60
 MAX_PROVIDER_RECORDS = 100
 MAX_TEXT = 500
 MAX_DESCRIPTION = 2_000
+RESULT_DESCRIPTION_MAX = MAX_DESCRIPTION
 MAX_LIST_VALUES = 64
 
 ISBN_RE = re.compile(r"^(?:\d{9}[\dX]|97[89]\d{10})$")
@@ -306,6 +308,27 @@ def _bounded_text(value: Any, limit: int = MAX_TEXT) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()[:limit]
 
 
+def _bounded_description(value: Any, limit: int = MAX_DESCRIPTION) -> str:
+    if isinstance(value, dict):
+        value = value.get("value") or value.get("en") or list(value.values())
+    values = value if isinstance(value, (list, tuple, set)) else (value,)
+    candidates: list[str] = []
+    for item in list(values)[:16]:
+        if not isinstance(item, str):
+            continue
+        boundary_issues = len(re.findall(r"\b[a-z]{4,}(?=[A-Z][a-z])|[.!?](?=[A-Za-z])", item))
+        if boundary_issues >= 3:
+            continue
+        text = htmlmod.unescape(re.sub(r"<[^>]+>", " ", item))
+        text = re.sub(r"(?<=[.!?])(?=[A-Z])", " ", text)
+        text = re.sub(r"(?<=[!?])(?=[a-z])", " ", text)
+        text = re.sub(r"\b([a-z]{4,})([A-Z][a-z])", r"\1 \2", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            candidates.append(text)
+    return max(candidates, key=len, default="")[:limit]
+
+
 def _bounded_strings(value: Any, *, limit: int = MAX_LIST_VALUES) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -520,7 +543,7 @@ def parse_openlibrary_payload(
             isbns=isbns,
             languages=languages,
             subjects=subjects,
-            description=_bounded_text(record.get("description"), MAX_DESCRIPTION),
+            description=_bounded_description(record.get("description")),
             published_year=_year(record.get("first_publish_year")),
             cover_id=cover_id,
             ratings_count=_safe_int(record.get("ratings_count")),
@@ -540,7 +563,7 @@ def parse_openlibrary_payload(
 
 def _inventaire_description(record: dict[str, Any]) -> str:
     description = record.get("description") or record.get("descriptions")
-    return _bounded_text(description, MAX_DESCRIPTION)
+    return _bounded_description(description)
 
 
 def _author_from_description(description: str) -> tuple[str, ...]:
@@ -1090,6 +1113,7 @@ def candidate_to_book(result: DiscoveryResult) -> dict[str, Any]:
         "published_year": candidate.published_year,
         "languages": list(candidate.languages),
         "subjects": list(candidate.subjects[:8]),
+        "description": _bounded_description(candidate.description, RESULT_DESCRIPTION_MAX),
         "fiction": candidate.fiction,
         "reasons": list(result.reasons),
         "reason": result.reasons[0] if result.reasons else "",

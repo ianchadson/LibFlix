@@ -15,8 +15,9 @@
   {% if not reason_payload and book.reason | default('', true) %}
     {% set reason_payload = [book.reason] %}
   {% endif %}
+  {% set description_payload = book.description | default('', true) %}
   <a href="{{ book_url(book, mode | default('nonfiction'), book_lang) }}" class="book-card-link topic-book-item" data-topic-book="true" aria-label="{{ book.title | default('Untitled') }}{% if book.author %} by {{ book.author }}{% endif %}. Find an edition.">
-    <div class="book-card{% if not book.cover_url %} no-cover{% endif %}" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}" data-quick-peek-action="Find an edition">
+    <div class="book-card{% if not book.cover_url %} no-cover{% endif %}" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}" data-description="{{ book.description | default('', true) | e }}" data-quick-peek-action="Find an edition">
       {% if book.cover_url %}
       <div class="cover-skeleton"></div>
       <img data-cover-src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';this.parentNode.classList.add('no-cover');">
@@ -31,6 +32,7 @@
     </div>
     <span class="topic-card-copy">
       <span class="topic-reasons" data-reasons='{{ reason_payload | tojson | forceescape }}'></span>
+      <span class="topic-card-description">{{ description_payload }}</span>
       <span class="topic-card-action">Find an edition <span aria-hidden="true">→</span></span>
     </span>
   </a>
@@ -96,9 +98,11 @@
     .topic-start-row { display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden; padding: 4px 0 12px; scroll-snap-type: x proximity; scrollbar-width: none; }
     .topic-start-row::-webkit-scrollbar { display: none; }
     .topic-book-item { width: 150px; min-width: 0; flex: 0 0 150px; color: inherit; text-decoration: none; scroll-snap-align: start; }
-    .topic-card-copy { display: grid; min-width: 0; grid-template-rows: 18px 18px; gap: 4px; padding: 7px 0 0; }
+    .topic-card-copy { display: grid; min-width: 0; grid-template-rows: 18px 34px 18px; gap: 4px; padding: 7px 0 0; }
     .topic-reasons { display: flex; min-width: 0; height: 18px; min-height: 18px; flex-wrap: nowrap; gap: 4px; overflow: hidden; }
     .topic-reason-chip { display: inline-block; max-width: 100%; overflow: hidden; padding: 3px 6px; border: 1px solid rgba(255,255,255,.09); border-radius: 999px; color: #a9abb1; background: rgba(255,255,255,.035); font-size: .62rem; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+    .topic-card-description { display: -webkit-box; min-width: 0; min-height: 34px; overflow: hidden; color: #a9abb1; font-size: .66rem; line-height: 1.3; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .topic-card-description:empty { visibility: hidden; }
     .topic-card-action { display: block; overflow: hidden; color: #e1e2e5; font-size: .69rem; font-weight: 650; line-height: 18px; opacity: .8; text-overflow: ellipsis; white-space: nowrap; }
     .topic-book-item:hover .topic-card-action, .topic-book-item:focus-visible .topic-card-action { color: #fff; opacity: 1; }
     .topic-book-item .book-card.no-cover .info { opacity: 1; transform: translateY(0); }
@@ -382,6 +386,8 @@
       const author = String(book?.author || (Array.isArray(book?.authors) ? book.authors.join(', ') : book?.authors || ''));
       const olKey = normalizeKey(book?.ol_key || book?.key || book?.open_library_key);
       const coverUrl = String(book?.cover_url || book?.cover || '');
+      const description = String(book?.description || '').trim();
+      const reasonValues = getReasonValues(book);
       const card = document.createElement('a');
       card.href = bookUrl(book);
       card.className = 'book-card-link' + (withTopicCopy ? ' topic-book-item' : '');
@@ -396,6 +402,7 @@
       bookCard.dataset.olKey = canonicalWorkKey(olKey);
       bookCard.dataset.title = title;
       bookCard.dataset.author = author;
+      bookCard.dataset.description = description;
       if (withTopicCopy) bookCard.dataset.quickPeekAction = 'Find an edition';
       if (coverUrl) {
         const skeleton = document.createElement('div');
@@ -443,7 +450,10 @@
         copy.className = 'topic-card-copy';
         const reasons = document.createElement('span');
         reasons.className = 'topic-reasons';
-        populateReasonChips(reasons, getReasonValues(book));
+        populateReasonChips(reasons, reasonValues);
+        const descriptionNode = document.createElement('span');
+        descriptionNode.className = 'topic-card-description';
+        descriptionNode.textContent = description;
         const action = document.createElement('span');
         action.className = 'topic-card-action';
         action.append('Find an edition ');
@@ -451,7 +461,7 @@
         arrow.setAttribute('aria-hidden', 'true');
         arrow.textContent = '→';
         action.appendChild(arrow);
-        copy.append(reasons, action);
+        copy.append(reasons, descriptionNode, action);
         card.appendChild(copy);
       }
       return card;
@@ -469,13 +479,22 @@
     }
 
     function refreshRenderedBook(container, key, book, withTopicCopy = topicMode) {
-      const existing = [...container.children].find(link => domBookIdentity(link) === key);
+      let existing = [...container.children].find(link => domBookIdentity(link) === key);
       if (!existing) return false;
       const incomingCover = String(book?.cover_url || book?.cover || '');
       const existingCover = existing.querySelector('img')?.getAttribute('data-cover-src') || '';
       if (incomingCover && incomingCover !== existingCover) {
-        existing.replaceWith(createBookLink(book, withTopicCopy));
+        const replacement = createBookLink(book, withTopicCopy);
+        existing.replaceWith(replacement);
+        existing = replacement;
         window.LibFlixCoverLoader?.register(container);
+      }
+      const incomingDescription = String(book?.description || '').trim();
+      const existingCard = existing.querySelector('.book-card');
+      if (incomingDescription && existingCard?.dataset.description !== incomingDescription) {
+        existingCard.dataset.description = incomingDescription;
+        const descriptionNode = existing.querySelector('.topic-card-description');
+        if (descriptionNode) descriptionNode.textContent = incomingDescription;
       }
       return true;
     }

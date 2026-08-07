@@ -167,9 +167,9 @@ current and previous year pages provide the optional NYT number-one signal.
   pointer hover, keyboard focus, or touch intent and retained briefly in a
   bounded in-memory cache. Revisiting a recent category avoids another request.
 - **Instant book shells** - every rendered card registers its title, author,
-  cover, and work key as a lightweight server hint. Opening that card can
-  render the book page immediately while descriptions and secondary metadata
-  hydrate independently.
+  cover, available description, and work key as a lightweight server hint.
+  Opening a content-ready card renders the book page immediately without a
+  duplicate detail request; genuinely missing fields hydrate independently.
 - **Compact More affordance** - a small round arrow button remains as a fallback
   at the end of each shelf instead of a full-height tile.
 - **Hidden horizontal scrollbars** - homepage shelf rows hide scrollbars while
@@ -193,9 +193,13 @@ current and previous year pages provide the optional NYT number-one signal.
 
 - **Focused book spotlight** - cover, title, author, and description use a
   responsive reading layout with a restrained cover-derived backdrop.
-- **Async Open Library details** - the description loads after the preview shell
-  renders, strips source markup, and collapses behind `Read more` on smaller
-  screens when needed.
+- **Stable async details** - cached descriptions render with the preview shell;
+  a missing description can fill once after render. Provider markup and broken
+  boundaries are cleaned, malformed summaries fall through to edition
+  metadata, and populated content is never torn down or rewritten.
+- **Monotonic secondary content** - downloads and More Like This may transition
+  from one loading state to results, but later metadata cannot restart or hide
+  an already-visible result set.
 - **More Like This** - up to two specific subjects plus the current author feed
   a bounded, locally ranked single-row shelf. Multi-subject and same-author
   books win over tangential popularity matches. Its API request waits until the

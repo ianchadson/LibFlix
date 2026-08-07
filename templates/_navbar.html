@@ -514,6 +514,8 @@
       }).then(async response => {
         if (!response.ok) throw new Error('Navigation failed');
         const contentType = response.headers.get('content-type') || '';
+        const cacheControl = response.headers.get('cache-control') || '';
+        const cacheable = !/(?:^|,)\s*no-store(?:\s|,|$)/i.test(cacheControl);
         let page;
         if (contentType.includes('application/json')) {
           const payload = await response.json();
@@ -532,7 +534,7 @@
           };
         }
         if (!page.html) throw new Error('Navigation returned no content');
-        return storeCachedPage(url.href, page);
+        return cacheable ? storeCachedPage(url.href, page) : page;
       }).finally(() => {
         if (pendingPages.get(cacheKey) === entry) pendingPages.delete(cacheKey);
       });
@@ -1121,7 +1123,9 @@
     let quickPeekPointer = null;
     let quickPeekScrollFrame = null;
     let quickPeekAbortController = null;
+    let quickPeekRetryTimer = null;
     let suppressFocusQuickPeek = false;
+    const QUICK_PEEK_MAX_RETRIES = 4;
 
     const truncate = (value, length) => {
       const text = String(value || '').trim();
@@ -1130,7 +1134,7 @@
     const renderQuickPeek = (card, state, details) => {
       const title = card.dataset.title || 'Untitled';
       const author = card.dataset.author || '';
-      const desc = details?.description || '';
+      const desc = details?.description || card.dataset.description || '';
       const titleNode = document.createElement('div');
       titleNode.className = 'quick-peek-title';
       titleNode.textContent = truncate(title, 92);
@@ -1175,12 +1179,52 @@
       quickPeek.style.left = left + 'px';
       quickPeek.style.top = top + 'px';
     };
+    const fetchQuickPeekDetails = (link, card, quickPeekLang, cacheKey, attempt = 0) => {
+      if (quickPeekActiveLink !== link) return;
+      if (quickPeekAbortController) quickPeekAbortController.abort();
+      quickPeekAbortController = new AbortController();
+      const activeController = quickPeekAbortController;
+      fetch('/api/book?ol_key=' + encodeURIComponent(card.dataset.olKey || '') + '&book_lang=' + quickPeekLang, { signal: activeController.signal })
+        .then(response => response.json())
+        .then(data => {
+          if (quickPeekActiveLink !== link) return;
+          const details = data.success ? data : {};
+          if (!data.refreshing || data.description) {
+            details._previewCachedAt = Date.now();
+            quickPeekCache.set(cacheKey, details);
+          }
+          if (data.description || !data.refreshing) {
+            renderQuickPeek(card, 'done', details);
+            positionQuickPeek(link, quickPeekPointer);
+            return;
+          }
+          if (attempt >= QUICK_PEEK_MAX_RETRIES) {
+            renderQuickPeek(card, 'done', details);
+            positionQuickPeek(link, quickPeekPointer);
+            return;
+          }
+          quickPeekRetryTimer = window.setTimeout(() => {
+            quickPeekRetryTimer = null;
+            fetchQuickPeekDetails(link, card, quickPeekLang, cacheKey, attempt + 1);
+          }, 550 + attempt * 450);
+        })
+        .catch(() => {
+          if (quickPeekActiveLink !== link) return;
+          renderQuickPeek(card, 'done', {});
+          positionQuickPeek(link, quickPeekPointer);
+        })
+        .finally(() => {
+          if (quickPeekAbortController === activeController) quickPeekAbortController = null;
+        });
+    };
     const showQuickPeek = (link, pointer) => {
       const card = link.querySelector('.book-card');
       if (!card) return;
       quickPeekActiveLink = link;
       if (pointer) quickPeekPointer = pointer;
-      renderQuickPeek(card, 'loading');
+      if (quickPeekRetryTimer) window.clearTimeout(quickPeekRetryTimer);
+      quickPeekRetryTimer = null;
+      renderQuickPeek(card, card.dataset.description ? 'done' : 'loading');
       quickPeek.classList.add('visible');
       positionQuickPeek(link, quickPeekPointer);
       const olKey = card.dataset.olKey || '';
@@ -1196,29 +1240,7 @@
         positionQuickPeek(link, quickPeekPointer);
         return;
       }
-      if (quickPeekAbortController) quickPeekAbortController.abort();
-      quickPeekAbortController = new AbortController();
-      const activeController = quickPeekAbortController;
-      fetch('/api/book?ol_key=' + encodeURIComponent(olKey) + '&book_lang=' + quickPeekLang, { signal: activeController.signal })
-        .then(response => response.json())
-        .then(data => {
-          if (quickPeekActiveLink !== link) return;
-          const details = data.success ? data : {};
-          if (!data.refreshing || data.description) {
-            details._previewCachedAt = Date.now();
-            quickPeekCache.set(cacheKey, details);
-          }
-          renderQuickPeek(card, 'done', details);
-          positionQuickPeek(link, quickPeekPointer);
-        })
-        .catch(() => {
-          if (quickPeekActiveLink !== link) return;
-          renderQuickPeek(card, 'done', {});
-          positionQuickPeek(link, quickPeekPointer);
-        })
-        .finally(() => {
-          if (quickPeekAbortController === activeController) quickPeekAbortController = null;
-        });
+      fetchQuickPeekDetails(link, card, quickPeekLang, cacheKey);
     };
     const hideQuickPeek = () => {
       quickPeekActiveLink = null;
@@ -1227,9 +1249,11 @@
       if (quickPeekTimer) clearTimeout(quickPeekTimer);
       if (quickPeekScrollFrame) cancelAnimationFrame(quickPeekScrollFrame);
       if (quickPeekAbortController) quickPeekAbortController.abort();
+      if (quickPeekRetryTimer) window.clearTimeout(quickPeekRetryTimer);
       quickPeekTimer = null;
       quickPeekScrollFrame = null;
       quickPeekAbortController = null;
+      quickPeekRetryTimer = null;
       quickPeek.classList.remove('visible');
     };
     const syncQuickPeekAfterScroll = () => {

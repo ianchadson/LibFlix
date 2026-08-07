@@ -151,11 +151,13 @@ Filters run before the final two-results-per-author diversity cap so discarded
 language, type, or publication-period records cannot starve valid matches.
 
 The topic UI shows up to six `Start here` cards, then a duplicate-free
-`Explore <topic>` grid. Cards display one strongest factual reason, such as a
-subject match, multiple-source agreement, `Widely read`, `Frequently assigned`,
-or `Highly rated`. A collapsed Filters control supports Type, Language,
-Published, and Best match / Newest sorting. The card action remains `Find an
-edition`; there is no direct-send shortcut before identity verification.
+`Explore <topic>` grid. Cards display one strongest factual reason plus a
+bounded provider description when one is usable. Missing descriptions remain
+empty instead of duplicating the reason chip. Heavily joined or malformed
+source summaries are rejected. A collapsed Filters control supports Type,
+Language, Published, and Best match / Newest sorting. The card action remains
+`Find an edition`; there is no direct-send shortcut before identity
+verification.
 
 ### Book Preview (`GET /book/<work_id>`)
 
@@ -164,7 +166,8 @@ Browser requests /book/OL3431878W
   -> Flask reads assembled detail cache or card-backed local hint
   -> Flask renders title, author, cover, cached description, and work key
      without waiting for Open Library
-  -> JS fetches /api/book?ol_key=...&book_lang=...
+  -> JS fetches /api/book?ol_key=...&book_lang=... only when primary content
+     is still missing
   -> local response is returned immediately and may report refreshing=true
   -> bounded background task refreshes missing/stale metadata
   -> cached subjects seed /api/similar without blocking the page
@@ -182,8 +185,13 @@ Important behavior:
   render.
 - Assembled details stay fresh for seven days and remain eligible as stale
   fallback for up to 90 days.
-- The browser performs at most two quiet detail/similar retries while a
-  background refresh is running.
+- Content-ready and complete server renders skip duplicate detail hydration.
+  A provisional render polls quietly only while primary content is missing.
+- Populated title, author, cover, description, download results, and similar
+  results are monotonic: later metadata may fill an empty slot but never tears
+  down or restarts committed content.
+- Provisional book HTML is `no-store`, and partial navigation honors that
+  header instead of retaining an incomplete page in its five-minute cache.
 - Similar books are Open Library subject searches; subjects remain internal and
   are not rendered as chips in the preview UI.
 - The More Like This shelf hides horizontal scrollbars.
@@ -469,6 +477,7 @@ fields:
       "title": "Deep Work",
       "author": "Cal Newport",
       "ol_key": "/works/OL17713267W",
+      "description": "A bounded provider description...",
       "reasons": ["Subject: Attention", "Matched by multiple sources"],
       "sources": ["inventaire", "openlibrary"]
     }
@@ -829,10 +838,11 @@ The navbar fetches documents only after 260 ms of pointer intent or an explicit
 keyboard/touch interaction, keeps at most four prefetches active, and stores up
 to 16 recent pages for five minutes. There is no idle sweep of category pages.
 Book-card intent may prefetch that one clean book URL. Book cards also populate
-an in-process hint index, so their detail route can render title, author, and
-cover without making an Open Library request. Full descriptions, localized
-titles, and similar-book subjects render from the assembled detail cache or
-hydrate after the initial shell is visible.
+an in-process hint index, so their detail route can render title, author, cover,
+and an available description without making an Open Library request. If those
+primary fields are present, the browser skips duplicate detail polling. Missing
+descriptions, localized titles, and similar-book subjects can still hydrate
+after the initial shell is visible without replacing populated DOM.
 Static CSS/JS assets carry an mtime version and receive immutable one-year cache
 headers. Cover URLs point at LibFlix's persistent local cache. Pillow creates
 size-specific WebP thumbnails when available, a daily background task warms the
@@ -899,7 +909,7 @@ and WebKit scrollbar hiding rules.
 | Complete topic window | memory + SQLite | `topic-discover:<expansion>:<ranker>:<lang>:<query>:<filters>` | 30 minutes fresh; up to 24 hours stale |
 | Chinese title resolution | memory + SQLite | `chinese_title:v1:<ol_key>` | 30 days |
 | CN English display title | memory + SQLite | `english_title:v1:<ol_key>` | 30 days |
-| Assembled book detail | memory + SQLite | `book_detail:v5:<lang>:<work>` | 7 days fresh; up to 90 days stale |
+| Assembled book detail | memory + SQLite | `book_detail:v6:<lang>:<work>` | 7 days fresh; up to 90 days stale |
 | Similar books | memory + SQLite | `similar:v4:...` | 7 days fresh; complete empty results use a 30-minute negative key |
 | Download search results | memory + SQLite | `download_search:v10:...` | 15 minutes for complete searches; stale fallback |
 | Homepage shelves | memory | `shelves_{lang}_{mode}` | 1 hour |

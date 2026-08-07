@@ -470,7 +470,53 @@ class TopicRankingTests(unittest.TestCase):
         self.assertEqual(len(results), 1)
         book = candidate_to_book(results[0])
         self.assertEqual(book["ol_key"], "/works/OL2W")
+        self.assertEqual(book["description"], "2016 book by Cal Newport")
         self.assertIn("Matched by multiple sources", book["reasons"])
+
+    def test_result_description_is_bounded_for_topic_cards(self):
+        description = "A focused summary. " * 100
+        result = DiscoveryResult(
+            candidate=DiscoveryCandidate(
+                provider="openlibrary",
+                provider_id="/works/OL2W",
+                native_rank=0,
+                query_rank=0,
+                title="Deep Work",
+                work_key="/works/OL2W",
+                description=description,
+            ),
+            score=1,
+            reasons=("Subject: Attention",),
+            sources=("openlibrary",),
+        )
+
+        book = candidate_to_book(result)
+
+        self.assertTrue(book["description"].startswith("A focused summary."))
+        self.assertLessEqual(len(book["description"]), 2_000)
+
+    def test_description_repairs_joined_source_paragraphs(self):
+        page = parse_openlibrary_payload({"docs": [{
+            "key": "/works/OL2W",
+            "title": "Rapt",
+            "author_name": ["Winifred Gallagher"],
+            "description": "the interested lifeIn Rapt. attention.Gallagher explains.",
+        }]}, "focus", 0)
+
+        self.assertEqual(
+            page.candidates[0].description,
+            "the interested life In Rapt. attention. Gallagher explains.",
+        )
+
+    def test_heavily_joined_description_is_rejected(self):
+        page = parse_openlibrary_payload({"docs": [{
+            "key": "/works/OL2W",
+            "title": "Rapt",
+            "author_name": ["Winifred Gallagher"],
+            "description": "lifeIn Rapt questionsCan we focus?driving onward.attention.Gallagher explains.",
+        }]}, "focus", 0)
+
+        self.assertEqual(page.candidates[0].description, "")
 
     def test_filters_and_newest_sort_are_applied_after_relevance(self):
         records = [

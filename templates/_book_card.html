@@ -1,5 +1,5 @@
 <a href="{{ book_url(book, mode | default('nonfiction'), book_lang) }}" class="book-card-link">
-  <div class="book-card" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}">
+  <div class="book-card" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}" data-description="{{ book.description | default('', true) | e }}">
     {% if book.cover_url %}
     <div class="cover-skeleton"></div>
     <img data-cover-src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';">

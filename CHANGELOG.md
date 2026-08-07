@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-08-07 - Stable book hydration and restored descriptions
+
+- Preserved bounded provider descriptions in topic results, repaired minor
+  joined-word source defects, rejected heavily malformed summaries, and used a
+  clean edition description before declaring a book description unavailable.
+- Added real two-line descriptions to topic cards without duplicating reason
+  chips when a source has no usable summary.
+- Made book-page hydration monotonic: populated title, author, description, and
+  cover nodes are no longer rewritten; decoded covers replace placeholders
+  atomically; and expanded descriptions stay expanded.
+- Stopped richer metadata from restarting an already-visible download search or
+  recommendation shelf. Complete and content-ready pages skip duplicate detail
+  polling, while provisional HTML bypasses both browser and in-app page caches.
+- Kept Quick Peek in a bounded loading/retry state while a description refresh
+  is still pending instead of flashing a false unavailable message.
+
 ## 2026-08-07 - Aligned Topics and attributed NYT #1 history
 
 - Unified the topic result header, Start here, Explore, and grid widths; aligned

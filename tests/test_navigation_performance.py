@@ -152,8 +152,10 @@ class DiscoveryShellTests(unittest.TestCase):
             ".page-discover.topic-mode .book-grid { justify-content: start !important; }",
             template,
         )
-        self.assertIn("grid-template-rows: 18px 18px", template)
+        self.assertIn("grid-template-rows: 18px 34px 18px", template)
         self.assertIn("}).filter(Boolean))].slice(0, 1);", template)
+        self.assertIn('class="topic-card-description"', template)
+        self.assertIn("descriptionNode.textContent = description", template)
 
     def test_home_topics_share_shelf_gutters(self):
         template = (Path(app.APP_DIR) / "templates" / "index.html").read_text()
@@ -209,6 +211,48 @@ class SimilarRecommendationShellTests(unittest.TestCase):
         self.assertIn("if (!hasSimilarSeed())", template)
         self.assertIn("loadBookDetails();", template)
         self.assertIn("Finding similar books…", template)
+
+
+class BookPageStabilityTests(unittest.TestCase):
+    def test_complete_server_render_skips_duplicate_detail_hydration(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+
+        self.assertIn("const INITIAL_DETAIL_COMPLETE", template)
+        self.assertIn("const INITIAL_PRIMARY_CONTENT_READY", template)
+        self.assertIn("if (bookDetailRefreshing) loadBookDetails();", template)
+        self.assertNotIn("shouldRestartDownloadSearch", template)
+        self.assertIn("if (!downloadRequested && buildSearchQuery(0))", template)
+
+    def test_async_detail_updates_are_monotonic(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+
+        self.assertIn("data.description && !hasVisibleDescription", template)
+        self.assertIn("&& !primaryContentReady", template)
+        self.assertIn("if (toggle.getAttribute('aria-expanded') === 'true')", template)
+        self.assertIn("if (!existing || existing.hidden)", template)
+        self.assertIn("frame.replaceChildren(image, placeholder)", template)
+
+    def test_loaded_recommendations_are_never_restarted(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+
+        self.assertIn("let similarResultsRendered = false", template)
+        self.assertIn("if (pageDisposed || similarResultsRendered) return;", template)
+        self.assertIn("!similarResultsRendered", template)
+        self.assertIn(".book-card-link, .similar-loading", template)
+
+    def test_provisional_partial_pages_bypass_navigation_cache(self):
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+
+        self.assertIn("const cacheControl = response.headers.get('cache-control')", navbar)
+        self.assertIn("cacheable ? storeCachedPage(url.href, page) : page", navbar)
+
+    def test_quick_peek_keeps_loading_until_refresh_finishes(self):
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+
+        self.assertIn("const QUICK_PEEK_MAX_RETRIES = 4", navbar)
+        self.assertIn("fetchQuickPeekDetails(link, card, quickPeekLang, cacheKey, attempt + 1)", navbar)
+        self.assertIn("details?.description || card.dataset.description", navbar)
+        self.assertIn("window.clearTimeout(quickPeekRetryTimer)", navbar)
 
 
 class DownloadShellTests(unittest.TestCase):

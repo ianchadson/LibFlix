@@ -127,7 +127,7 @@ KINDLE_RELAY_SENDER = os.environ.get("KINDLE_RELAY_SENDER", "").strip()
 SHELF_REFRESH_TTL = 21600
 OL_LIST_FIELDS = "key,title,author_name,cover_i,cover_id,language"
 OL_COVER_FIELDS = f"{OL_LIST_FIELDS},editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id"
-OL_IDENTITY_FIELDS = f"{OL_COVER_FIELDS},alternative_title,isbn,editions.author_name,editions.isbn_10,editions.isbn_13"
+OL_IDENTITY_FIELDS = f"{OL_COVER_FIELDS},description,alternative_title,isbn,editions.author_name,editions.isbn_10,editions.isbn_13"
 # Backwards-compatible name for list/cover consumers; identity fields are
 # intentionally reserved for a single work-detail lookup.
 OL_BOOK_FIELDS = OL_COVER_FIELDS
@@ -1816,18 +1816,25 @@ def remember_book_hint(book, lang=None):
     ol_key = str((book or {}).get("ol_key") or "").strip()
     if not re.fullmatch(r"/works/OL\d+W", ol_key):
         return
+    description = (book or {}).get("description") or ""
+    if isinstance(description, dict):
+        description = description.get("value") or description.get("en") or ""
     hint = {
         "title": str(book.get("title") or "").strip(),
         "author": str(book.get("author") or "").strip(),
         "cover_url": str(book.get("cover_url") or "").strip(),
+        "description": re.sub(r"\s+", " ", str(description)).strip()[:2000],
         "ol_key": ol_key,
     }
     with BOOK_HINTS_LOCK:
         current = BOOK_HINTS.get((lang, ol_key), {})
-        BOOK_HINTS[(lang, ol_key)] = {
+        merged = {
             key: value or current.get(key, "")
             for key, value in hint.items()
         }
+        if len(current.get("description", "")) > len(merged.get("description", "")):
+            merged["description"] = current["description"]
+        BOOK_HINTS[(lang, ol_key)] = merged
 
 def hinted_book_metadata(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
@@ -1858,6 +1865,7 @@ def hinted_book_metadata(work_id, lang=None):
         "download_title": download_title,
         "author": hint.get("author") or english_hint.get("author", ""),
         "cover_url": hint.get("cover_url") or english_hint.get("cover_url", ""),
+        "description": hint.get("description") or english_hint.get("description", ""),
         "ol_key": ol_key,
     }
     result.update(collect_book_identity_metadata(result))
@@ -3547,6 +3555,16 @@ def strip_html(text):
     text = htmlmod.unescape(text)
     return re.sub(r'\s+', ' ', text).strip()
 
+def normalize_description_text(text):
+    text = strip_html(str(text or ""))
+    text = re.sub(r"(?<=[.!?])(?=[A-Z])", " ", text)
+    text = re.sub(r"(?<=[!?])(?=[a-z])", " ", text)
+    text = re.sub(r"\b([a-z]{4,})([A-Z][a-z])", r"\1 \2", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+def description_boundary_issues(text):
+    return len(re.findall(r"\b[a-z]{4,}(?=[A-Z][a-z])|[.!?](?=[A-Za-z])", str(text or "")))
+
 def extract_desc(work):
     desc = work.get("description", "")
     values = desc if isinstance(desc, list) else [desc]
@@ -3556,7 +3574,9 @@ def extract_desc(work):
             value = value.get("value", "")
         if not isinstance(value, str):
             continue
-        value = strip_html(value)
+        if description_boundary_issues(value) >= 3:
+            continue
+        value = normalize_description_text(value)
         value = re.sub(r"\[([^\]]+)\]\((?:https?://)?[^)]+\)", "", value)
         value = re.sub(r"(?:\*\*|__|`)", "", value)
         value = re.sub(r"\[source\]\[\d+\]", "", value, flags=re.I)
@@ -3650,11 +3670,15 @@ def archive_description(identifier):
         disk_cache_set(ckey, payload)
         return description, True
 
-def english_description_result(ol_key, work=None):
+def english_description_result(ol_key, work=None, fallback_description=""):
     work = work or ol_get_work(ol_key) or {}
     description = extract_desc(work)
     if is_english_text(description):
         return description, True
+
+    fallback_description = normalize_description_text(fallback_description)
+    if is_english_text(fallback_description):
+        return fallback_description, True
 
     editions_data = ol_get(f"{ol_key}/editions.json", {"limit": 100})
     if editions_data is None:
@@ -3733,7 +3757,7 @@ def known_book_metadata(work_id, lang=None):
 
 def book_metadata_from_work(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    ckey = f"book_meta:v3:{lang}:{work_id}"
+    ckey = f"book_meta:v4:{lang}:{work_id}"
     cached = cache_get(ckey, API_DISK_CACHE_TTL)
     if cached is None:
         cached = disk_cache_get(ckey, API_DISK_CACHE_TTL)
@@ -3797,6 +3821,7 @@ def book_metadata_from_work(work_id, lang=None):
         "download_title": download_title,
         "author": primary_author,
         "cover_url": open_library_cover_url(cover_id) or archive_cover_url(archive_id),
+        "description": extract_desc(search_record),
         "ol_key": ol_key,
         "_complete": bool(work) and (bool(search_record) or editions_checked),
     }
@@ -3814,7 +3839,7 @@ def book_metadata_from_work(work_id, lang=None):
 
 def book_detail_cache_key(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    return f"book_detail:v5:{lang}:{work_id}"
+    return f"book_detail:v6:{lang}:{work_id}"
 
 def cached_book_detail(work_id, lang=None, allow_stale=True):
     key = book_detail_cache_key(work_id, lang)
@@ -3830,7 +3855,7 @@ def cached_book_detail(work_id, lang=None, allow_stale=True):
         if stale is not None:
             return stale, "stale"
         normalized_lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-        for version in ("v4", "v3"):
+        for version in ("v5", "v4", "v3"):
             legacy_key = f"book_detail:{version}:{normalized_lang}:{work_id}"
             legacy = (
                 cache_get(legacy_key, BOOK_DETAIL_STALE_TTL)
@@ -3845,7 +3870,7 @@ def alternate_canonical_book_detail(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
     other_lang = "cn" if lang == "en" else "en"
     candidates = []
-    for version in ("v5", "v4", "v3"):
+    for version in ("v6", "v5", "v4", "v3"):
         key = f"book_detail:{version}:{other_lang}:{work_id}"
         detail = (
             cache_get(key, BOOK_DETAIL_STALE_TTL)
@@ -3877,10 +3902,12 @@ def merge_canonical_book_detail(detail, canonical):
 
 def fallback_book_detail(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    metadata_key = f"book_meta:v3:{lang}:{work_id}"
+    metadata_key = f"book_meta:v4:{lang}:{work_id}"
     metadata = (
         cache_get(metadata_key, BOOK_DETAIL_STALE_TTL)
         or disk_cache_get_stale(metadata_key, BOOK_DETAIL_STALE_TTL)
+        or cache_get(f"book_meta:v3:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
+        or disk_cache_get_stale(f"book_meta:v3:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
         or cache_get(f"book_meta:v2:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
         or disk_cache_get_stale(f"book_meta:v2:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
         or hinted_book_metadata(work_id, lang)
@@ -3913,7 +3940,7 @@ def fallback_book_detail(work_id, lang=None):
         ),
         "download_queries": download_queries,
         **identity,
-        "description": canonical.get("description", ""),
+        "description": metadata.get("description") or canonical.get("description", ""),
         "subjects": canonical.get("subjects", []),
         "similar_subjects": canonical.get("similar_subjects", []),
         "complete": False,
@@ -3931,12 +3958,16 @@ def build_book_detail(work_id, lang=None):
             key: value for key, value in metadata.items()
             if key in {
                 "title", "localized_title", "download_title", "author", "cover_url",
-                "title_aliases", "authors", "isbns", "_complete",
+                "title_aliases", "authors", "isbns", "description", "_complete",
             }
         }
     if not work and not metadata:
         return None
-    description, description_complete = english_description_result(ol_key, work)
+    description, description_complete = english_description_result(
+        ol_key,
+        work,
+        metadata.get("description", ""),
+    )
     subjects = work.get("subjects", [])[:20]
     identity = collect_book_identity_metadata(metadata, work=work)
     enriched_metadata = {**metadata, **identity}
@@ -4939,6 +4970,8 @@ def book_page(work_id, clean_mode, clean_lang):
             "download_queries": [],
             "complete": False,
         }
+    if not detail.get("complete"):
+        g.cache_control_override = "no-store"
     return render_template(
         "book.html",
         mode=mode,
