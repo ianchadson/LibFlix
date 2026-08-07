@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-08-07 - Aligned Topics and attributed NYT #1 history
+
+- Unified the topic result header, Start here, Explore, and grid widths; aligned
+  homepage Topics with Trending; and stabilized reason/action baselines.
+- Added a bounded, no-key background fetch of the current and previous
+  Wikipedia NYT number-one year pages as an exact title-and-author ranking
+  signal. Open Library remains canonical and the signal never supplies books.
+- Added fail-closed HTML validation, seven-day stale fallback, versioned topic
+  cache invalidation, one strongest reason per card, and source attribution.
+
 ## 2026-08-05 - Browseable topic catalog
 
 - Added a dedicated `/topics` surface with featured starting points, six

@@ -141,6 +141,34 @@ class DiscoveryShellTests(unittest.TestCase):
             template,
         )
 
+    def test_topic_layout_uses_one_container_and_one_reason_row(self):
+        template = (Path(app.APP_DIR) / "templates" / "discover.html").read_text()
+
+        self.assertIn(
+            ".topic-section { width: min(var(--app-content), calc(100% - 48px));",
+            template,
+        )
+        self.assertIn(
+            ".page-discover.topic-mode .book-grid { justify-content: start !important; }",
+            template,
+        )
+        self.assertIn("grid-template-rows: 18px 18px", template)
+        self.assertIn("}).filter(Boolean))].slice(0, 1);", template)
+
+    def test_home_topics_share_shelf_gutters(self):
+        template = (Path(app.APP_DIR) / "templates" / "index.html").read_text()
+
+        self.assertIn(
+            ".home-topics { width:100%; max-width:1560px; margin:0 auto; padding:28px 24px 2px; }",
+            template,
+        )
+        self.assertIn(
+            "grid-template-columns:30px minmax(0, 1fr)",
+            template,
+        )
+        self.assertNotIn(".home-topic-card::after", template)
+        self.assertIn(".home-topic-rail { margin-right:-16px; }", template)
+
 
 class SimilarRecommendationShellTests(unittest.TestCase):
     def test_book_page_supports_author_only_recommendations(self):

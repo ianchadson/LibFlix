@@ -14,9 +14,11 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any, Iterable, Protocol, Sequence
 
+from nyt_bestsellers import match_nyt_bestseller
+
 
 EXPANSION_VERSION = "topic-v3"
-RANKER_VERSION = "rrf-v3"
+RANKER_VERSION = "rrf-v4"
 RRF_K = 60
 MAX_PROVIDER_RECORDS = 100
 MAX_TEXT = 500
@@ -241,6 +243,10 @@ class DiscoveryCandidate:
     fiction: bool | None = None
     source_url: str = ""
     semantic_terms: tuple[str, ...] = ()
+    nyt_rank: int = 0
+    nyt_weeks_at_number_one: int = 0
+    nyt_list_names: tuple[str, ...] = ()
+    nyt_published_date: str = ""
 
 
 @dataclass(frozen=True)
@@ -259,6 +265,7 @@ class DiscoveryResult:
     score: float
     reasons: tuple[str, ...]
     sources: tuple[str, ...]
+    ranking_sources: tuple[str, ...] = ()
 
 
 def normalize_text(value: Any) -> str:
@@ -614,6 +621,47 @@ def parse_inventaire_payload(
     return ProviderPage("inventaire", query, query_rank, tuple(candidates), warnings=warnings)
 
 
+def apply_nyt_bestseller_signals(
+    pages: Iterable[ProviderPage],
+    index: Any,
+) -> list[ProviderPage]:
+    """Annotate canonical candidates with exact NYT number-one history matches."""
+
+    enriched = []
+    for page in pages:
+        if page.provider != "openlibrary" or not page.available:
+            enriched.append(page)
+            continue
+        candidates = []
+        for candidate in page.candidates:
+            signal = match_nyt_bestseller(
+                index,
+                isbns=candidate.isbns,
+                title=candidate.title,
+                authors=candidate.authors,
+            )
+            if not signal:
+                candidates.append(candidate)
+                continue
+            candidates.append(replace(
+                candidate,
+                nyt_rank=_safe_int(signal.get("rank"), 100),
+                nyt_weeks_at_number_one=_safe_int(
+                    signal.get("weeks_at_number_one")
+                ),
+                nyt_list_names=_bounded_strings(
+                    signal.get("list_names"),
+                    limit=8,
+                ),
+                nyt_published_date=_bounded_text(
+                    signal.get("published_date"),
+                    10,
+                ),
+            ))
+        enriched.append(replace(page, candidates=tuple(candidates)))
+    return enriched
+
+
 def _identity_key(candidate: DiscoveryCandidate) -> tuple[str, ...] | None:
     if candidate.work_key:
         return ("work", candidate.work_key.casefold())
@@ -648,6 +696,22 @@ def _merge_candidates(primary: DiscoveryCandidate, other: DiscoveryCandidate) ->
         popularity=max(preferred.popularity, other.popularity),
         fiction=preferred.fiction if preferred.fiction is not None else other.fiction,
         semantic_terms=choose_tuple(preferred.semantic_terms, other.semantic_terms),
+        nyt_rank=min(
+            (rank for rank in (preferred.nyt_rank, other.nyt_rank) if rank),
+            default=0,
+        ),
+        nyt_weeks_at_number_one=max(
+            preferred.nyt_weeks_at_number_one,
+            other.nyt_weeks_at_number_one,
+        ),
+        nyt_list_names=choose_tuple(
+            preferred.nyt_list_names,
+            other.nyt_list_names,
+        )[:8],
+        nyt_published_date=max(
+            preferred.nyt_published_date,
+            other.nyt_published_date,
+        ),
     )
 
 
@@ -883,12 +947,26 @@ def _quality_score(candidate: DiscoveryCandidate) -> float:
     return score
 
 
+def _nyt_quality_score(candidate: DiscoveryCandidate) -> float:
+    if candidate.nyt_rank:
+        # Historical number-one status remains a bounded tiebreaker inside the
+        # primary relevance tier and can never admit an off-topic book.
+        weeks_signal = min(
+            math.log1p(candidate.nyt_weeks_at_number_one) * 0.16,
+            0.55,
+        )
+        return min(1.65 + weeks_signal, 2.2)
+    return 0.0
+
+
 def _result_reasons(
     candidate: DiscoveryCandidate,
     evidence_labels: Sequence[str],
     sources: Sequence[str],
 ) -> tuple[str, ...]:
     reasons: list[str] = []
+    if candidate.nyt_rank:
+        reasons.append("NYT #1 bestseller")
     if evidence_labels:
         label = re.sub(r"\s+", " ", str(evidence_labels[0])).strip()
         if label:
@@ -897,7 +975,8 @@ def _result_reasons(
                 reasons.append(f"{prefix.title()}: {value.strip()[:42].title()}")
             else:
                 reasons.append(f"Related: {label[:42].title()}")
-    if len(sources) > 1:
+    discovery_sources = set(sources).intersection({"openlibrary", "inventaire"})
+    if len(discovery_sources) > 1:
         reasons.append("Matched by multiple sources")
     if candidate.readinglog_count >= 500:
         reasons.append("Widely read")
@@ -942,10 +1021,14 @@ def merge_topic_candidates(
         evidence, labels = _topic_evidence(candidate, plan)
         if evidence <= 0:
             continue
-        sources = tuple(sorted(group_sources.get(key, ())))
-        consensus = 1.4 if len(sources) > 1 else 0.0
+        source_set = set(group_sources.get(key, ()))
+        discovery_sources = source_set.intersection({"openlibrary", "inventaire"})
+        consensus = 1.4 if len(discovery_sources) > 1 else 0.0
+        sources = tuple(sorted(source_set))
+        ranking_sources = ("nyt_wikipedia",) if candidate.nyt_rank else ()
         secondary = (
             min(_quality_score(candidate), 12.0)
+            + _nyt_quality_score(candidate)
             + consensus
             + group_rrf.get(key, 0.0) * 100
         )
@@ -959,6 +1042,7 @@ def merge_topic_candidates(
             score=score,
             reasons=_result_reasons(candidate, labels, sources),
             sources=sources,
+            ranking_sources=ranking_sources,
         )
         ranked.append((
             evidence_tier,
@@ -997,7 +1081,7 @@ def merge_topic_candidates(
 
 def candidate_to_book(result: DiscoveryResult) -> dict[str, Any]:
     candidate = result.candidate
-    return {
+    book = {
         "title": candidate.title,
         "author": candidate.authors[0] if candidate.authors else "",
         "ol_key": candidate.work_key,
@@ -1010,8 +1094,17 @@ def candidate_to_book(result: DiscoveryResult) -> dict[str, Any]:
         "reasons": list(result.reasons),
         "reason": result.reasons[0] if result.reasons else "",
         "sources": list(result.sources),
+        "ranking_sources": list(result.ranking_sources),
         "score": round(result.score, 4),
     }
+    if candidate.nyt_rank:
+        book["nyt_number_one"] = {
+            "rank": candidate.nyt_rank,
+            "weeks_at_number_one": candidate.nyt_weeks_at_number_one,
+            "lists": list(candidate.nyt_list_names),
+            "latest_issue_date": candidate.nyt_published_date,
+        }
+    return book
 
 
 def filter_topic_results(

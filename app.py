@@ -34,11 +34,17 @@ from security_runtime import (
     json_rate_limit_body,
     request_client_identity,
 )
+from nyt_bestsellers import (
+    INDEX_VERSION as NYT_INDEX_VERSION,
+    nyt_index_valid,
+    parse_nyt_number_one_pages,
+)
 from topic_discovery import (
     BROWSE_TOPIC_GROUPS as TOPIC_BROWSE_GROUPS,
     EXPANSION_VERSION as TOPIC_EXPANSION_VERSION,
     FEATURED_TOPIC_QUERIES,
     RANKER_VERSION as TOPIC_RANKER_VERSION,
+    apply_nyt_bestseller_signals,
     build_inventaire_request,
     build_openlibrary_request,
     candidate_to_book,
@@ -65,6 +71,14 @@ warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.
 
 OL = "https://openlibrary.org"
 INVENTAIRE = "https://inventaire.io/api"
+NYT_WIKIPEDIA_PAGE = (
+    "https://en.wikipedia.org/wiki/"
+    "List_of_The_New_York_Times_number-one_books_of_{year}"
+)
+NYT_WIKIPEDIA_ATTRIBUTION = (
+    "https://en.wikipedia.org/wiki/"
+    "Lists_of_The_New_York_Times_number-one_books"
+)
 CACHE = {}
 CACHE_TTL_OL = 3600
 API_DISK_CACHE_TTL = 21600
@@ -99,6 +113,7 @@ KINDLE_SOURCE_CACHE_DIR = os.path.join(DATA_DIR, "kindle-source-cache")
 KINDLE_DELIVERY_LOCK_FILE = os.path.join(DATA_DIR, "kindle-delivery.lock")
 RATE_LIMIT_SQLITE = os.path.join(DATA_DIR, "rate_limits.sqlite3")
 METRICS_SQLITE = os.path.join(DATA_DIR, "metrics.sqlite3")
+NYT_REFRESH_LOCK_FILE = os.path.join(DATA_DIR, "nyt-bestsellers.lock")
 KINDLE_SOURCE_CACHE_TTL = max(0, int(os.environ.get("KINDLE_SOURCE_CACHE_TTL", "86400")))
 KINDLE_SOURCE_CACHE_MAX_BYTES = max(
     0,
@@ -147,6 +162,20 @@ TOPIC_LOCAL_READY_CANDIDATES = 4
 TOPIC_PROVIDER_WAIT_TIMEOUT = max(
     3.0,
     min(float(os.environ.get("TOPIC_PROVIDER_WAIT_TIMEOUT", "10")), 15.0),
+)
+NYT_CACHE_KEY = f"nyt-bestsellers:{NYT_INDEX_VERSION}:year-pages"
+NYT_FAILURE_CACHE_KEY = f"nyt-bestsellers:{NYT_INDEX_VERSION}:failure"
+NYT_FRESH_TTL = 43200
+NYT_MAX_CACHE_TTL = 604800
+NYT_FAILURE_TTL = 900
+NYT_HTML_MAX_BYTES = 768 * 1024
+NYT_CONNECT_TIMEOUT = max(
+    1.0,
+    min(float(os.environ.get("NYT_CONNECT_TIMEOUT", "3")), 5.0),
+)
+NYT_READ_TIMEOUT = max(
+    2.0,
+    min(float(os.environ.get("NYT_READ_TIMEOUT", "8")), 12.0),
 )
 INVENTAIRE_FRESH_TTL = 21600
 INVENTAIRE_STALE_TTL = 604800
@@ -352,6 +381,12 @@ INVENTAIRE_FAILURES = 0
 INVENTAIRE_CIRCUIT_OPEN_UNTIL = 0.0
 INVENTAIRE_CIRCUIT_FAILURE_THRESHOLD = 3
 INVENTAIRE_CIRCUIT_COOLDOWN = 60
+NYT_REFRESH_LOCK = threading.Lock()
+NYT_REFRESHING = False
+NYT_REFRESH_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="nyt-bestsellers",
+)
 TOPIC_OL_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="topic-openlibrary")
 TOPIC_INVENTAIRE_EXECUTOR = ThreadPoolExecutor(max_workers=3, thread_name_prefix="topic-inventaire")
 TOPIC_OL_SLOTS = threading.BoundedSemaphore(6)
@@ -401,6 +436,26 @@ def prune_disk_cache(connection, now=None):
         "DELETE FROM api_cache WHERE created_at < ?",
         (now - API_CACHE_RETENTION_TTL,),
     )
+    nyt_expired_rows = []
+    for row_id, payload in connection.execute(
+        "SELECT rowid, payload FROM api_cache "
+        "WHERE payload LIKE ? OR payload LIKE ?",
+        (f'%"version":"{NYT_INDEX_VERSION}"%', '%"nyt_expires_at"%'),
+    ).fetchall():
+        try:
+            data = json.loads(payload)
+            expires_at = float(
+                data.get("nyt_expires_at") or data.get("expires_at") or 0
+            )
+        except (TypeError, ValueError, json.JSONDecodeError):
+            expires_at = 0
+        if not expires_at or expires_at <= now:
+            nyt_expired_rows.append((row_id,))
+    if nyt_expired_rows:
+        connection.executemany(
+            "DELETE FROM api_cache WHERE rowid = ?",
+            nyt_expired_rows,
+        )
     count = connection.execute("SELECT COUNT(*) FROM api_cache").fetchone()[0]
     overflow = max(0, count - API_CACHE_MAX_ROWS)
     if overflow:
@@ -620,6 +675,29 @@ def bounded_upstream_json(response, maximum=UPSTREAM_JSON_MAX_BYTES):
     if not isinstance(data, dict):
         raise ValueError("Upstream JSON response is not an object")
     return data
+
+
+def bounded_upstream_text(response, maximum=NYT_HTML_MAX_BYTES):
+    """Decode a bounded UTF-8 HTML response without trusting Content-Length."""
+
+    content_length = response.headers.get("Content-Length", "")
+    if content_length:
+        try:
+            declared_length = int(content_length)
+        except (TypeError, ValueError):
+            declared_length = 0
+        if declared_length > maximum:
+            raise ValueError("Upstream HTML response is too large")
+    chunks = []
+    received = 0
+    for chunk in response.iter_content(chunk_size=64 * 1024):
+        if not chunk:
+            continue
+        received += len(chunk)
+        if received > maximum:
+            raise ValueError("Upstream HTML response is too large")
+        chunks.append(chunk)
+    return b"".join(chunks).decode("utf-8")
 
 
 def openlibrary_payload_valid(path, data):
@@ -945,6 +1023,169 @@ def inventaire_get(path, params=None, allow_stale=True):
             inflight = INVENTAIRE_INFLIGHT.pop(key, None)
             if inflight:
                 inflight.set()
+
+
+def _nyt_index_usable(index, now=None):
+    now = time.time() if now is None else float(now)
+    if not nyt_index_valid(index):
+        return False
+    try:
+        fetched_at = float(index.get("fetched_at") or 0)
+        expires_at = float(index.get("expires_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    lifetime = expires_at - fetched_at
+    return bool(
+        0 < lifetime <= NYT_MAX_CACHE_TTL
+        and fetched_at <= now + 60
+        and now < expires_at
+    )
+
+
+def _nyt_index_age(index, now=None):
+    now = time.time() if now is None else float(now)
+    try:
+        fetched_at = float(index.get("fetched_at") or 0)
+    except (AttributeError, TypeError, ValueError):
+        return float("inf")
+    return max(0, now - fetched_at) if fetched_at else float("inf")
+
+
+def _nyt_cached_entry():
+    now = time.time()
+    entries = []
+    memory = CACHE.get(NYT_CACHE_KEY)
+    if isinstance(memory, dict):
+        index = memory.get("d")
+        if _nyt_index_usable(index, now):
+            entries.append({
+                "age": _nyt_index_age(index, now),
+                "data": index,
+                "source": "memory",
+            })
+        elif index is not None:
+            CACHE.pop(NYT_CACHE_KEY, None)
+    disk = disk_cache_entry(NYT_CACHE_KEY)
+    if disk:
+        index = disk.get("data")
+        if _nyt_index_usable(index, now):
+            entries.append({
+                **disk,
+                "age": _nyt_index_age(index, now),
+                "source": "disk",
+            })
+        else:
+            disk_cache_delete(NYT_CACHE_KEY)
+    return min(entries, key=lambda item: item["age"]) if entries else None
+
+
+def _nyt_request():
+    started = time.perf_counter()
+    pages = {}
+    source_urls = []
+    current_year = time.gmtime().tm_year
+    for year in (current_year, current_year - 1):
+        url = NYT_WIKIPEDIA_PAGE.format(year=year)
+        try:
+            response = SESSION.get(
+                url,
+                timeout=(NYT_CONNECT_TIMEOUT, NYT_READ_TIMEOUT),
+                stream=True,
+                allow_redirects=False,
+                headers={"Accept": "text/html,application/xhtml+xml"},
+            )
+            try:
+                response.raise_for_status()
+                content_type = str(response.headers.get("Content-Type") or "").lower()
+                if not content_type.startswith("text/html"):
+                    raise ValueError("Wikipedia returned a non-HTML response")
+                pages[year] = bounded_upstream_text(response)
+                source_urls.append(url)
+            finally:
+                response.close()
+        except (requests.RequestException, ValueError, UnicodeDecodeError):
+            continue
+    index = parse_nyt_number_one_pages(pages, source_urls=source_urls)
+    if not nyt_index_valid(index):
+        add_server_timing("nyt", started, description="failed")
+        return None
+    now = time.time()
+    index["fetched_at"] = now
+    index["expires_at"] = now + NYT_MAX_CACHE_TTL
+    add_server_timing("nyt", started, description="wikipedia")
+    return index
+
+
+def _refresh_nyt_bestsellers():
+    global NYT_REFRESHING
+    try:
+        with filesystem_lock(NYT_REFRESH_LOCK_FILE):
+            current = _nyt_cached_entry()
+            if current and current["age"] < NYT_FRESH_TTL:
+                return
+            if disk_cache_get(NYT_FAILURE_CACHE_KEY, NYT_FAILURE_TTL):
+                return
+            index = _nyt_request()
+            if index is None:
+                disk_cache_set(NYT_FAILURE_CACHE_KEY, {"failed_at": time.time()})
+                return
+            cache_set(NYT_CACHE_KEY, index)
+            disk_cache_set(NYT_CACHE_KEY, index)
+            CACHE.pop(NYT_FAILURE_CACHE_KEY, None)
+            disk_cache_delete(NYT_FAILURE_CACHE_KEY)
+    finally:
+        with NYT_REFRESH_LOCK:
+            NYT_REFRESHING = False
+
+
+def schedule_nyt_bestseller_refresh():
+    global NYT_REFRESHING
+    with NYT_REFRESH_LOCK:
+        if NYT_REFRESHING:
+            return False
+        NYT_REFRESHING = True
+    try:
+        NYT_REFRESH_EXECUTOR.submit(_refresh_nyt_bestsellers)
+    except RuntimeError:
+        with NYT_REFRESH_LOCK:
+            NYT_REFRESHING = False
+        return False
+    return True
+
+
+def nyt_bestseller_index(*, schedule=True):
+    entry = _nyt_cached_entry()
+    if entry:
+        if schedule and entry["age"] >= NYT_FRESH_TTL:
+            schedule_nyt_bestseller_refresh()
+        if entry.get("source") == "disk":
+            cache_set(NYT_CACHE_KEY, entry["data"])
+        return entry["data"]
+    if schedule:
+        schedule_nyt_bestseller_refresh()
+    return None
+
+
+def nyt_bestseller_revision(index=None):
+    index = index or nyt_bestseller_index(schedule=False)
+    if not _nyt_index_usable(index):
+        return "pending"
+    return str(index.get("revision") or "pending")
+
+
+def nyt_status():
+    entry = _nyt_cached_entry()
+    with NYT_REFRESH_LOCK:
+        refreshing = NYT_REFRESHING
+    return {
+        "source": "wikipedia_nyt_number_one",
+        "available": bool(entry),
+        "refreshing": refreshing,
+        "cache_age": round(entry["age"]) if entry else None,
+        "latest_issue_date": (
+            entry["data"].get("published_date") if entry else None
+        ),
+    }
 
 SHELVES_DEF = [
     ("Trending", "trending"),
@@ -1923,14 +2164,25 @@ def normalize_topic_filters(values=None):
     return normalized
 
 
-def topic_discovery_cache_key(query, lang, filters):
+def topic_discovery_cache_key(query, lang, filters, editorial_revision=None):
     normalized_filters = normalize_topic_filters(filters)
+    editorial_revision = (
+        str(editorial_revision).strip()
+        if editorial_revision is not None
+        else nyt_bestseller_revision()
+    )
+    editorial_revision = re.sub(
+        r"[^a-zA-Z0-9_-]+",
+        "-",
+        editorial_revision,
+    )[:32] or "disabled"
     filter_key = ":".join(normalized_filters[name] for name in (
         "type", "language", "published", "sort",
     ))
     return (
         f"topic-discover:{TOPIC_EXPANSION_VERSION}:{TOPIC_RANKER_VERSION}:"
-        f"{lang}:{normalize_topic_text(query)}:{filter_key}"
+        f"editorial-{editorial_revision}:{lang}:"
+        f"{normalize_topic_text(query)}:{filter_key}"
     )
 
 
@@ -1949,12 +2201,32 @@ def _topic_cache_entry(key):
     return min(entries, key=lambda item: item["age"]) if entries else None
 
 
-def cached_topic_discovery_payload(query, lang, filters, *, allow_stale=True):
-    key = topic_discovery_cache_key(query, lang, filters)
+def cached_topic_discovery_payload(
+    query,
+    lang,
+    filters,
+    *,
+    allow_stale=True,
+    editorial_revision=None,
+):
+    key = topic_discovery_cache_key(
+        query,
+        lang,
+        filters,
+        editorial_revision,
+    )
     entry = _topic_cache_entry(key)
     if not entry:
         return None
     payload = entry["data"]
+    try:
+        nyt_expires_at = float(payload.get("nyt_expires_at") or 0)
+    except (TypeError, ValueError):
+        nyt_expires_at = 0
+    if nyt_expires_at and time.time() >= nyt_expires_at:
+        CACHE.pop(key, None)
+        disk_cache_delete(key)
+        return None
     partial = bool(payload.get("partial"))
     fresh_ttl = TOPIC_PARTIAL_FRESH_TTL if partial else TOPIC_MERGED_FRESH_TTL
     if entry["age"] < fresh_ttl:
@@ -2558,11 +2830,14 @@ def normalize_topic_work_key(value):
 
 def fetch_topic_discovery_payload(query, lang, filters):
     filters = normalize_topic_filters(filters)
+    nyt_index = nyt_bestseller_index(schedule=False)
+    editorial_revision = nyt_bestseller_revision(nyt_index)
     cached = cached_topic_discovery_payload(
         query,
         lang,
         filters,
         allow_stale=False,
+        editorial_revision=editorial_revision,
     )
     if cached is not None:
         return cached
@@ -2571,6 +2846,7 @@ def fetch_topic_discovery_payload(query, lang, filters):
         lang,
         filters,
         allow_stale=True,
+        editorial_revision=editorial_revision,
     )
     plan = plan_topic_query(query, "topic")
     selected_language = filters.get("language", "current")
@@ -2651,6 +2927,21 @@ def fetch_topic_discovery_payload(query, lang, filters):
                 for candidate in page.candidates
                 if candidate.work_key
             }
+    # The attributed Wikipedia index refreshes in the background and never
+    # joins the provider deadline. Recheck after the book providers complete so
+    # a just-warmed index can enrich this response without adding latency.
+    latest_nyt_index = nyt_bestseller_index(schedule=False) or nyt_index
+    latest_editorial_revision = nyt_bestseller_revision(latest_nyt_index)
+    if latest_editorial_revision != editorial_revision:
+        editorial_revision = latest_editorial_revision
+        stale_complete = cached_topic_discovery_payload(
+            query,
+            lang,
+            filters,
+            allow_stale=True,
+            editorial_revision=editorial_revision,
+        )
+    pages = apply_nyt_bestseller_signals(pages, latest_nyt_index)
     merged = merge_topic_candidates(
         pages,
         plan,
@@ -2678,6 +2969,12 @@ def fetch_topic_discovery_payload(query, lang, filters):
         for source in book.get("sources", [])
         if source in {"openlibrary", "inventaire"}
     })
+    ranking_sources = sorted({
+        source
+        for book in books
+        for source in book.get("ranking_sources", [])
+        if source == "nyt_wikipedia"
+    })
     retry_after = max(
         openlibrary_status().get("retry_after", 0),
         inventaire_status().get("retry_after", 0),
@@ -2697,6 +2994,7 @@ def fetch_topic_discovery_payload(query, lang, filters):
         "partial": partial,
         "cache_fallback": cache_fallback,
         "sources": sources,
+        "ranking_sources": ranking_sources,
         "source_unavailable": bool(partial and not available_sources and not books),
         "retry_after": retry_after,
         "filters": filters,
@@ -2704,11 +3002,18 @@ def fetch_topic_discovery_payload(query, lang, filters):
         "ranker_version": TOPIC_RANKER_VERSION,
         "snapshot_id": topic_discovery_snapshot_id(books),
     }
+    if "nyt_wikipedia" in ranking_sources and _nyt_index_usable(latest_nyt_index):
+        payload["nyt_expires_at"] = latest_nyt_index["expires_at"]
     # Persist only complete windows. Partial windows remain request-local so a
     # provider recovery can immediately replace them; an outage is never stored
     # as an authoritative empty result.
     if not partial:
-        key = topic_discovery_cache_key(query, lang, filters)
+        key = topic_discovery_cache_key(
+            query,
+            lang,
+            filters,
+            editorial_revision,
+        )
         cache_set(key, payload)
         disk_cache_set(key, payload)
     return payload
@@ -3996,6 +4301,7 @@ def api_health():
         "database": database,
         "openlibrary": openlibrary_status(),
         "inventaire": inventaire_status(),
+        "nyt_bestsellers": nyt_status(),
         "cache": {
             "memory_entries": len(CACHE),
             "book_refreshes": len(BOOK_DETAIL_REFRESHING),
@@ -4403,6 +4709,7 @@ def discover(clean_mode, clean_lang):
     refresh_partial = False
     snapshot_id = ""
     sources = []
+    ranking_sources = []
     if topic_mode:
         cached_payload = cached_topic_discovery_payload(
             q,
@@ -4430,6 +4737,7 @@ def discover(clean_mode, clean_lang):
                 or paged_payload.get("refresh_partial")
             )
             sources = paged_payload.get("sources") or []
+            ranking_sources = paged_payload.get("ranking_sources") or []
             snapshot_id = paged_payload.get("snapshot_id") or ""
             search_unavailable = bool(paged_payload.get("source_unavailable"))
             page = requested_page
@@ -4464,6 +4772,8 @@ def discover(clean_mode, clean_lang):
         refresh_partial=refresh_partial,
         snapshot_id=snapshot_id,
         sources=sources,
+        ranking_sources=ranking_sources,
+        nyt_source_url=NYT_WIKIPEDIA_ATTRIBUTION,
         active_filters=topic_filters,
     )
 
@@ -4519,9 +4829,13 @@ def api_discover():
                     "snapshot_id": current_snapshot,
                 }), 409
         else:
+            schedule_nyt_bestseller_refresh()
             payload = fetch_topic_discovery_payload(q, lang, filters)
         paged = paginate_topic_discovery_payload(payload, page)
-        if paged.get("partial") or paged.get("refresh_partial"):
+        if (
+            paged.get("partial")
+            or paged.get("refresh_partial")
+        ):
             g.cache_control_override = "no-store"
         if paged.get("source_unavailable"):
             return jsonify({

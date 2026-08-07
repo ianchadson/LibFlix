@@ -3,9 +3,10 @@
 LibFlix is a Netflix-style web app for browsing books, previewing metadata, and
 finding download options. Open Library remains the canonical source for book
 identity, browsing, details, covers, and similar books. Broad-topic discovery
-also uses Inventaire as a tightly gated supplemental signal. Downloads are
-handled separately through the modular downloader layer, currently backed by
-libgen.li.
+also uses Inventaire as a tightly gated supplemental signal. An attributed
+public-web index of NYT number-one history can add a bounded ranking tie-breaker
+to exact book matches. Downloads are handled separately through the modular
+downloader layer, currently backed by libgen.li.
 
 The app supports fiction and non-fiction browsing, English and Chinese discovery
 filters, intent-aware topic and identity search, book previews, similar-book
@@ -34,8 +35,9 @@ python3 app.py
 # http://127.0.0.1:5800
 ```
 
-No API key is required. Open Library provides the canonical catalog, while
-Inventaire supplements broad-topic searches with public semantic metadata.
+No API key is required. Open Library provides the canonical catalog, Inventaire
+supplements broad-topic searches with public semantic metadata, and Wikipedia's
+current and previous year pages provide the optional NYT number-one signal.
 
 ## Screenshots
 
@@ -74,11 +76,18 @@ Inventaire supplements broad-topic searches with public semantic metadata.
   edition ids and unresolved native records are rejected. Book identity,
   details, covers, download aliases, and final book routes remain Open Library
   canonical.
+- **Attributed NYT number-one signal** - a bounded background web request reads
+  Wikipedia's current and previous calendar-year NYT number-one tables. A unique
+  exact title-and-author match can reorder an already-relevant book within its
+  relevance tier, but cannot create a card or make an unrelated book pass the
+  topic gate. This is a historical #1 signal rather than a complete current
+  bestseller list; attribution appears only when a ranked result uses it.
 - **Relevance-first ranking** - subject, title, description, and semantic
   evidence must pass a local relevance gate before popularity can matter.
   Weighted reciprocal-rank fusion combines source/query ranks, then bounded
-  reading, syllabus, rating, edition, source-consensus, and cover signals break
-  close calls. Duplicate works merge and one author is capped at two results.
+  reading, syllabus, rating, edition, source-consensus, cover, and optional
+  historical number-one signals break close calls. Duplicate works merge and one
+  author is capped at two results.
 - **Topic browsing surface** - topic results lead with up to six `Start here`
   books, followed by a deduplicated `Explore <topic>` grid. Cards can explain
   concise signals such as subject match, multiple-source agreement, widely
@@ -293,7 +302,9 @@ Inventaire supplements broad-topic searches with public semantic metadata.
   durable stale fallback. Topic search has a bounded overall provider wait and
   can identify a partial response without letting one source failure poison a
   complete cached result. An unavailable upstream no longer turns a cached
-  category, topic, or book into a blank page.
+  category, topic, or book into a blank page. The Wikipedia editorial refresh
+  runs outside the provider deadline and its absence or failure never makes
+  Topics partial.
 - **Operational visibility** - `/api/health` reports local dependency state,
   server timing is attached to key responses, and lightweight browser
   performance metrics are accepted by `/api/metrics/web-vitals`.
@@ -356,6 +367,8 @@ Inventaire supplements broad-topic searches with public semantic metadata.
 | `INVENTAIRE_MIN_INTERVAL` | `0.5` seconds | Minimum process-wide interval between upstream Inventaire requests |
 | `INVENTAIRE_CONNECT_TIMEOUT` | `2.5` seconds | Inventaire connection timeout |
 | `INVENTAIRE_READ_TIMEOUT` | `5` seconds | Inventaire response timeout |
+| `NYT_CONNECT_TIMEOUT` | `3` seconds | Wikipedia NYT-history page connection timeout |
+| `NYT_READ_TIMEOUT` | `8` seconds | Wikipedia NYT-history page response timeout |
 | `TOPIC_PROVIDER_WAIT_TIMEOUT` | `10` seconds | Bounded total wait for concurrent topic providers |
 | `LIBFLIX_UPSTREAM_JSON_MAX_BYTES` | `2097152` | Maximum decoded Open Library or Inventaire JSON response size |
 | `LIBFLIX_OL_REFRESH_PENDING_LIMIT` | `12` | Maximum active and queued stale Open Library refreshes per worker |
@@ -430,7 +443,7 @@ See [CHANGELOG.md](CHANGELOG.md) for dated implementation details.
 
 - **Backend:** Flask, requests, BeautifulSoup4
 - **Frontend:** Local CSS and vanilla JavaScript
-- **Discovery:** Open Library Search/Works/Covers APIs, with Inventaire topic enrichment
+- **Discovery:** Open Library Search/Works/Covers APIs, Inventaire topic enrichment, and an attributed Wikipedia NYT number-one history signal
 - **Downloads:** Modular downloader interface, currently libgen.li
 - **Port:** 5800
 
@@ -441,7 +454,7 @@ Useful local checks:
 ```bash
 LIBFLIX_DATA_DIR="$(mktemp -d)" LIBFLIX_RATE_LIMITING_ENABLED=0 \
   python3 -m unittest discover -s tests -v
-python3 -m py_compile app.py topic_discovery.py book_preparation.py kindle_delivery.py security_runtime.py downloaders/base.py downloaders/libgen.py
+python3 -m py_compile app.py topic_discovery.py nyt_bestsellers.py book_preparation.py kindle_delivery.py security_runtime.py downloaders/base.py downloaders/libgen.py
 python3 app.py
 ```
 

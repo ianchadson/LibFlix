@@ -60,14 +60,20 @@
     .discover-head { padding: 1.6rem 1rem .8rem; }
     .discover-title { font-size: 1.55rem; font-weight: 700; line-height: 1.15; margin: 0; }
     .discover-meta { color: #777; font-size: .83rem; margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    .intent-switch { display: inline-flex; align-items: center; gap: 2px; margin-top: 12px; padding: 3px; border: 1px solid rgba(255,255,255,.1); border-radius: 999px; background: rgba(255,255,255,.035); }
+    .discover-controls { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
+    .intent-switch { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; margin: 0; padding: 3px; border: 1px solid rgba(255,255,255,.1); border-radius: 999px; background: rgba(255,255,255,.035); }
     .intent-switch a { min-height:44px; display:inline-flex; align-items:center; padding: 5px 12px; border-radius: 999px; color: #989ba2; font-size: .74rem; font-weight: 650; line-height: 1; text-decoration: none; transition: color .15s ease, background .15s ease; }
     .intent-switch a:hover { color: #fff; }
     .intent-switch a.active { background: #34363b; color: #fff; }
-    .topic-tools { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-top: 13px; }
+    .topic-tools { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; gap: 14px; margin: 0; }
+    .topic-status-copy { display: grid; flex: 1 1 auto; gap: 2px; min-width: 0; }
     .topic-source-note { min-height: 20px; padding-top: 5px; color: #777b83; font-size: .75rem; }
     .topic-source-note:empty { display: none; }
-    .topic-filters { position: relative; flex: 0 0 auto; }
+    .topic-attribution { margin: 0; color: #6f7279; font-size: .68rem; }
+    .topic-attribution[hidden] { display: none; }
+    .topic-attribution a { color: #a7a9ae; text-decoration: none; }
+    .topic-attribution a:hover, .topic-attribution a:focus-visible { color: #fff; text-decoration: underline; }
+    .topic-filters { position: relative; flex: 0 0 auto; margin-left: auto; }
     .topic-filters summary { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 6px 12px; border: 1px solid rgba(255,255,255,.13); border-radius: 5px; color: #b8bac0; background: #1c1e22; font-size: .75rem; font-weight: 650; cursor: pointer; list-style: none; user-select: none; }
     .topic-filters summary::-webkit-details-marker { display: none; }
     .topic-filters summary::after { content: '▾'; color: #72757c; font-size: .65rem; transition: transform .15s ease; }
@@ -82,22 +88,22 @@
     .topic-filter-reset { color: #8d9097; font-size: .74rem; text-decoration: none; }
     .topic-filter-reset:hover { color: #fff; }
     .topic-filter-apply { min-height: 32px; padding: 6px 12px; border: 0; border-radius: 5px; color: #fff; background: #e50914; font-size: .75rem; font-weight: 700; cursor: pointer; }
-    .topic-section { width: min(1560px, calc(100% - 48px)); margin: 0 auto; }
+    .topic-section { width: min(var(--app-content), calc(100% - 48px)); margin: 0 auto; }
     .topic-section[hidden], .topic-tools[hidden] { display: none !important; }
-    .topic-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 5px 0 10px; }
+    .topic-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
     .topic-section-title { margin: 0; color: #f2f2f3; font-size: 1.02rem; font-weight: 730; letter-spacing: 0; }
     .topic-start { margin-bottom: 22px; }
-    .topic-start-row { display: flex; gap: 12px; overflow-x: auto; overflow-y: hidden; padding: 2px 2px 10px; scroll-snap-type: x proximity; scrollbar-width: none; }
+    .topic-start-row { display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden; padding: 4px 0 12px; scroll-snap-type: x proximity; scrollbar-width: none; }
     .topic-start-row::-webkit-scrollbar { display: none; }
-    .topic-book-item { width: 150px; color: inherit; text-decoration: none; scroll-snap-align: start; }
-    .topic-card-copy { display: grid; gap: 5px; padding: 7px 2px 0; }
-    .topic-reasons { display: flex; flex-wrap: wrap; gap: 4px; min-height: 18px; }
-    .topic-reasons:empty { min-height: 0; }
+    .topic-book-item { width: 150px; min-width: 0; flex: 0 0 150px; color: inherit; text-decoration: none; scroll-snap-align: start; }
+    .topic-card-copy { display: grid; min-width: 0; grid-template-rows: 18px 18px; gap: 4px; padding: 7px 0 0; }
+    .topic-reasons { display: flex; min-width: 0; height: 18px; min-height: 18px; flex-wrap: nowrap; gap: 4px; overflow: hidden; }
     .topic-reason-chip { display: inline-block; max-width: 100%; overflow: hidden; padding: 3px 6px; border: 1px solid rgba(255,255,255,.09); border-radius: 999px; color: #a9abb1; background: rgba(255,255,255,.035); font-size: .62rem; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
-    .topic-card-action { color: #e1e2e5; font-size: .69rem; font-weight: 650; opacity: .8; }
+    .topic-card-action { display: block; overflow: hidden; color: #e1e2e5; font-size: .69rem; font-weight: 650; line-height: 18px; opacity: .8; text-overflow: ellipsis; white-space: nowrap; }
     .topic-book-item:hover .topic-card-action, .topic-book-item:focus-visible .topic-card-action { color: #fff; opacity: 1; }
     .topic-book-item .book-card.no-cover .info { opacity: 1; transform: translateY(0); }
     .topic-explore-head { margin-top: 4px; }
+    .page-discover.topic-mode .book-grid { justify-content: start !important; }
     .book-grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 1rem 2rem; justify-content: center; }
     .book-card { width: 150px; cursor: pointer; transition: transform .2s ease, box-shadow .2s ease; position: relative; border-radius: 8px; overflow: hidden; background:#242424; box-shadow: 0 8px 22px rgba(0,0,0,.18); }
     .book-card:hover { transform: scale(1.06); z-index: 5; box-shadow: 0 18px 42px rgba(0,0,0,.46); }
@@ -129,7 +135,7 @@
       .book-card .placeholder { width: 120px; height: 180px; }
       .cat-tab { font-size: .65rem; padding: 2px 6px; }
       .topic-section { width: calc(100% - 32px); }
-      .topic-book-item { width: 120px; }
+      .topic-book-item { width: 120px; flex-basis: 120px; }
       .topic-filter-panel { position: fixed; right: 16px; left: 16px; width: auto; }
     }
     @media (max-width: 520px) {
@@ -146,53 +152,58 @@
   <main id="mainContent">
     <section class="discover-head">
       <h1 class="discover-title" id="discoverTitle">{% if topic_active %}Books about {{ topic_label }}{% else %}Results for “{{ query }}”{% endif %}</h1>
-      <nav class="intent-switch" aria-label="Search intent">
-        <a id="topicIntentLink" href="#"{% if topic_active %} class="active" aria-current="page"{% endif %}>About</a>
-        <a id="identityIntentLink" href="#"{% if not topic_active %} class="active" aria-current="page"{% endif %}>Title or author</a>
-      </nav>
-      <div class="topic-tools" id="topicTools"{% if not topic_active %} hidden{% endif %}>
-        <div class="topic-source-note" id="topicSourceNote" aria-live="polite">{% if partial | default(false) %}Some book sources are temporarily unavailable.{% endif %}</div>
-        <details class="topic-filters" id="topicFilters">
-          <summary>Filters <span class="topic-filter-count" id="topicFilterCount"></span></summary>
-          <form class="topic-filter-panel" id="topicFilterForm" method="get" action="{{ request.path }}">
-            <input type="hidden" name="q" value="{{ query }}">
-            <input type="hidden" name="intent" value="topic">
-            <div class="topic-filter-grid">
-              <label class="topic-filter-field">Type
-                <select name="type">
-                  <option value="any"{% if request.args.get('type', 'any') == 'any' %} selected{% endif %}>Any</option>
-                  <option value="nonfiction"{% if request.args.get('type') == 'nonfiction' %} selected{% endif %}>Non-fiction</option>
-                  <option value="fiction"{% if request.args.get('type') == 'fiction' %} selected{% endif %}>Fiction</option>
-                </select>
-              </label>
-              <label class="topic-filter-field">Language
-                <select name="language">
-                  <option value="current"{% if request.args.get('language', 'current') == 'current' %} selected{% endif %}>Current</option>
-                  <option value="any"{% if request.args.get('language') == 'any' %} selected{% endif %}>Any</option>
-                  <option value="en"{% if request.args.get('language') == 'en' %} selected{% endif %}>English</option>
-                  <option value="cn"{% if request.args.get('language') == 'cn' %} selected{% endif %}>Chinese</option>
-                </select>
-              </label>
-              <label class="topic-filter-field">Published
-                <select name="published">
-                  <option value="any"{% if request.args.get('published', 'any') == 'any' %} selected{% endif %}>Any time</option>
-                  <option value="recent"{% if request.args.get('published') == 'recent' %} selected{% endif %}>Recent</option>
-                  <option value="classic"{% if request.args.get('published') == 'classic' %} selected{% endif %}>Classic</option>
-                </select>
-              </label>
-              <label class="topic-filter-field">Sort
-                <select name="sort">
-                  <option value="best"{% if request.args.get('sort', 'best') == 'best' %} selected{% endif %}>Best match</option>
-                  <option value="newest"{% if request.args.get('sort') == 'newest' %} selected{% endif %}>Newest</option>
-                </select>
-              </label>
-            </div>
-            <div class="topic-filter-actions">
-              <a class="topic-filter-reset" id="topicFilterReset" href="#">Reset</a>
-              <button class="topic-filter-apply" type="submit">Apply</button>
-            </div>
-          </form>
-        </details>
+      <div class="discover-controls">
+        <nav class="intent-switch" aria-label="Search intent">
+          <a id="topicIntentLink" href="#"{% if topic_active %} class="active" aria-current="page"{% endif %}>About</a>
+          <a id="identityIntentLink" href="#"{% if not topic_active %} class="active" aria-current="page"{% endif %}>Title or author</a>
+        </nav>
+        <div class="topic-tools" id="topicTools"{% if not topic_active %} hidden{% endif %}>
+          <div class="topic-status-copy">
+            <div class="topic-source-note" id="topicSourceNote" aria-live="polite">{% if partial | default(false) %}Some book sources are temporarily unavailable.{% endif %}</div>
+            <p class="topic-attribution" id="nytAttribution"{% if 'nyt_wikipedia' not in (ranking_sources | default([], true)) %} hidden{% endif %}>NYT #1 · <a href="{{ nyt_source_url }}">Wikipedia ↗</a></p>
+          </div>
+          <details class="topic-filters" id="topicFilters">
+            <summary>Filters <span class="topic-filter-count" id="topicFilterCount"></span></summary>
+            <form class="topic-filter-panel" id="topicFilterForm" method="get" action="{{ request.path }}">
+              <input type="hidden" name="q" value="{{ query }}">
+              <input type="hidden" name="intent" value="topic">
+              <div class="topic-filter-grid">
+                <label class="topic-filter-field">Type
+                  <select name="type">
+                    <option value="any"{% if request.args.get('type', 'any') == 'any' %} selected{% endif %}>Any</option>
+                    <option value="nonfiction"{% if request.args.get('type') == 'nonfiction' %} selected{% endif %}>Non-fiction</option>
+                    <option value="fiction"{% if request.args.get('type') == 'fiction' %} selected{% endif %}>Fiction</option>
+                  </select>
+                </label>
+                <label class="topic-filter-field">Language
+                  <select name="language">
+                    <option value="current"{% if request.args.get('language', 'current') == 'current' %} selected{% endif %}>Current</option>
+                    <option value="any"{% if request.args.get('language') == 'any' %} selected{% endif %}>Any</option>
+                    <option value="en"{% if request.args.get('language') == 'en' %} selected{% endif %}>English</option>
+                    <option value="cn"{% if request.args.get('language') == 'cn' %} selected{% endif %}>Chinese</option>
+                  </select>
+                </label>
+                <label class="topic-filter-field">Published
+                  <select name="published">
+                    <option value="any"{% if request.args.get('published', 'any') == 'any' %} selected{% endif %}>Any time</option>
+                    <option value="recent"{% if request.args.get('published') == 'recent' %} selected{% endif %}>Recent</option>
+                    <option value="classic"{% if request.args.get('published') == 'classic' %} selected{% endif %}>Classic</option>
+                  </select>
+                </label>
+                <label class="topic-filter-field">Sort
+                  <select name="sort">
+                    <option value="best"{% if request.args.get('sort', 'best') == 'best' %} selected{% endif %}>Best match</option>
+                    <option value="newest"{% if request.args.get('sort') == 'newest' %} selected{% endif %}>Newest</option>
+                  </select>
+                </label>
+              </div>
+              <div class="topic-filter-actions">
+                <a class="topic-filter-reset" id="topicFilterReset" href="#">Reset</a>
+                <button class="topic-filter-apply" type="submit">Apply</button>
+              </div>
+            </form>
+          </details>
+        </div>
       </div>
     </section>
 
@@ -260,6 +271,7 @@
     const INITIAL_TOPIC_LABEL = {{ topic_label | tojson }};
     const INITIAL_TOPIC_REFRESH = {{ (refresh_partial | default(false)) | tojson }};
     const INITIAL_TOPIC_SNAPSHOT = {{ (snapshot_id | default('')) | tojson }};
+    const INITIAL_RANKING_SOURCES = {{ (ranking_sources | default([], true)) | tojson }};
     const INITIAL_BATCH_SIZE = 12;
     const REQUESTED_PAGE = {{ requested_page | default(page) | int }};
     let topicMode = INITIAL_TOPIC_MODE;
@@ -339,12 +351,12 @@
       return [...new Set(values.map(value => {
         if (value && typeof value === 'object') value = value.label || value.text || value.reason || '';
         return String(value || '').trim().replace(/\s+/g, ' ');
-      }).filter(Boolean))].slice(0, 2);
+      }).filter(Boolean))].slice(0, 1);
     }
 
     function populateReasonChips(container, values) {
       container.replaceChildren();
-      for (const reason of values.slice(0, 2)) {
+      for (const reason of values.slice(0, 1)) {
         const chip = document.createElement('span');
         chip.className = 'topic-reason-chip';
         chip.textContent = reason.length > 54 ? reason.slice(0, 51).trim() + '...' : reason;
@@ -582,6 +594,10 @@
         : topicMode && data?.refresh_partial
           ? 'Showing saved results while book sources refresh.'
           : '';
+      const rankingSources = Array.isArray(data?.ranking_sources) ? data.ranking_sources : null;
+      const attribution = document.getElementById('nytAttribution');
+      if (!topicMode) attribution.hidden = true;
+      else if (rankingSources) attribution.hidden = !rankingSources.includes('nyt_wikipedia');
       updateIntentLinks();
     }
 
@@ -853,7 +869,8 @@
     finished = !initialLoading && currentPage >= totalPages && !pendingBooks.length;
     const initialTopicState = {
       partial: {{ (partial | default(false)) | tojson }},
-      refresh_partial: INITIAL_TOPIC_REFRESH
+      refresh_partial: INITIAL_TOPIC_REFRESH,
+      ranking_sources: INITIAL_RANKING_SOURCES
     };
     setTopicPresentation(topicMode, topicLabel, initialTopicState);
     if (topicMode) schedulePartialRefresh(initialTopicState);

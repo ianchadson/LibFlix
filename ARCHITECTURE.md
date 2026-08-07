@@ -7,13 +7,17 @@ LibFlix is a Flask app with two distinct data paths:
 1. **Discovery path:** Open Library powers browsing, shelves, category pages,
    strict identity search, book details, covers, and similar books. Topic
    search combines Open Library candidates with bounded Inventaire enrichment,
-   but only after every candidate resolves to an Open Library work.
+   but only after every candidate resolves to an Open Library work. An
+   attributed Wikipedia index of NYT number-one history can annotate and rerank
+   exact existing candidates; it never creates book identity.
 2. **Download path:** the `downloaders/` package powers libgen search, download
    resolution, streaming, and Send to Kindle delivery.
 
 Open Library is the canonical identity boundary between these paths. Inventaire
 can improve topic candidate recall or add source consensus, but it cannot create
 a native LibFlix book route, cover, detail record, or download identity.
+The NYT/Wikipedia signal is a ranking overlay rather than a discovery provider
+and is reported under `ranking_sources`, not candidate `sources`.
 
 The product is intentionally stateless from the reader's perspective. There are
 no user accounts, personal library, reading history, reading-progress tracking,
@@ -111,6 +115,7 @@ Navbar search form submits to /discover
        -> Open Library and Inventaire searches run concurrently
        -> Inventaire records require a valid Open Library-work P648 mapping
        -> candidates pass a local relevance gate
+       -> a cached NYT #1 history index annotates exact book identities
        -> weighted RRF, bounded quality signals, dedupe, and author cap rank them
        -> page one separates Start here from the Explore window
   -> bottom scroll sentinel fetches stable /api/discover pages automatically
@@ -139,11 +144,14 @@ provider and expansion ranks. Reading-log, Open Syllabus, rating, edition,
 cover, Inventaire popularity, and cross-source-consensus signals are bounded
 quality tie-breakers after that gate; they cannot admit unrelated filler. Work
 identity dedupes cross-source records and stable keys break remaining ties.
+Historical NYT number-one status adds at most a small secondary boost inside
+the same relevance tier. Matching requires one unique exact normalized title
+and author; the source cannot bypass the relevance gate.
 Filters run before the final two-results-per-author diversity cap so discarded
 language, type, or publication-period records cannot starve valid matches.
 
 The topic UI shows up to six `Start here` cards, then a duplicate-free
-`Explore <topic>` grid. Cards display at most two factual reasons, such as a
+`Explore <topic>` grid. Cards display one strongest factual reason, such as a
 subject match, multiple-source agreement, `Widely read`, `Frequently assigned`,
 or `Highly rated`. A collapsed Filters control supports Type, Language,
 Published, and Best match / Newest sorting. The card action remains `Find an
@@ -233,6 +241,7 @@ caching, timeouts, circuits, and API pagination.
 | `build_inventaire_request(...)` | Build bounded Inventaire work-text or approved semantic-claim requests |
 | `parse_openlibrary_payload(...)` | Normalize Open Library results with canonical work keys, subjects, descriptions, covers, and bounded quality signals |
 | `parse_inventaire_payload(...)` | Accept only work records with a valid Wikidata `P648` Open Library work mapping; reject edition and unresolved records |
+| `apply_nyt_bestseller_signals(...)` | Annotate existing Open Library candidates with exact NYT #1-history matches without admitting new candidates |
 | `merge_topic_candidates(...)` | Merge by work identity, apply the relevance gate and weighted RRF, and add bounded quality/consensus tie-breakers |
 | `filter_topic_results(...)` | Apply type, language, publication-period, and Newest sorting, then enforce the final two-books-per-author cap |
 | `fetch_topic_discovery_payload(...)` | Coordinate concurrent provider pages, stale-complete fallback, complete-window caching, and app-facing Open Library cards |
@@ -244,8 +253,10 @@ unknown ids, missing authors at render time, and arbitrary provider cover URLs
 never cross the canonical boundary. Supplemental-only cards still link to an
 Open Library work and must satisfy the selected language-safety checks.
 
-The expansion and ranker versions are included in cache keys and API responses.
-Changing either invalidates old merged windows without changing route shapes.
+The expansion, ranker, and editorial-index revisions are included in cache
+keys. Changing one invalidates old merged windows without changing route
+shapes. A merged window carrying the ranking signal inherits the source index's
+expiry and cannot outlive that index.
 
 ### CN Title Presentation
 
@@ -321,6 +332,22 @@ request has an overall timeout (`TOPIC_PROVIDER_WAIT_TIMEOUT`, 10 seconds by
 default) and a short grace period after a useful provider result arrives, so a
 slow supplement cannot indefinitely hold the page. Provider availability is
 reported independently and a usable response may be explicitly `partial`.
+
+### Attributed NYT Number-One Overlay
+
+`nyt_bestsellers.py` parses the public Wikipedia pages for the current and
+previous calendar year's NYT number-one books into a bounded exact-match index.
+A single background executor refreshes it outside the user-facing topic
+provider deadline, while a filesystem lock prevents multiple Gunicorn workers
+from cold-fetching it together. Requests reject redirects, non-HTML content,
+oversized bodies, and malformed table schemas.
+
+The index refreshes after 12 hours and remains usable as stale fallback for up
+to seven days. Timeouts or page changes leave Open Library and Inventaire
+ranking unchanged and never make a response `partial`. A result using the
+signal is labelled `NYT #1 bestseller` and links its on-screen attribution to
+the source Wikipedia page. This is historical number-one evidence, not a
+complete or necessarily current NYT bestseller list.
 
 ### Download Helpers
 
