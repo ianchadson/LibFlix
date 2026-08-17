@@ -57,6 +57,19 @@ class TopicIntentTests(unittest.TestCase):
         self.assertNotIn("lang", ol_params)
         self.assertNotIn("lang", dict(inv_params))
 
+    def test_inventaire_raw_fallback_searches_the_reader_topic(self):
+        plan = plan_topic_query("meditation", "topic")
+
+        _, params, semantic = build_inventaire_request(
+            plan,
+            len(plan.queries) - 1,
+            limit=40,
+        )
+
+        self.assertFalse(semantic)
+        self.assertEqual(dict(params)["search"], "meditation")
+        self.assertEqual(dict(params)["limit"], "40")
+
     def test_singular_topic_is_preserved_before_aliases(self):
         plan = plan_topic_query("startup", "topic")
 
@@ -80,6 +93,7 @@ class TopicProviderParsingTests(unittest.TestCase):
             "title": "Deep Work",
             "author_name": ["Cal Newport"],
             "cover_i": 7988607,
+            "ia": ["deepworkarchive"],
             "language": ["eng"],
             "subject": ["Attention", "Distraction (Psychology)"],
             "first_publish_year": 2016,
@@ -92,6 +106,7 @@ class TopicProviderParsingTests(unittest.TestCase):
         self.assertTrue(page.available)
         self.assertEqual(page.candidates[0].work_key, "/works/OL17713267W")
         self.assertEqual(page.candidates[0].cover_id, 7988607)
+        self.assertEqual(page.candidates[0].archive_id, "deepworkarchive")
 
     def test_inventaire_accepts_work_p648_and_rejects_edition_or_unresolved(self):
         payload = {"results": [
@@ -99,6 +114,7 @@ class TopicProviderParsingTests(unittest.TestCase):
                 "uri": "wd:Q54408847",
                 "label": "Deep Work",
                 "description": "2016 book by Cal Newport",
+                "image": {"url": "/img/entities/" + "a" * 40},
                 "claims": {
                     "wdt:P648": ["OL17713267W"],
                     "wdt:P407": ["wd:Q1860"],
@@ -119,6 +135,7 @@ class TopicProviderParsingTests(unittest.TestCase):
         self.assertEqual(candidate.authors, ("Cal Newport",))
         self.assertEqual(candidate.languages, ("eng",))
         self.assertEqual(candidate.description, "2016 book by Cal Newport")
+        self.assertEqual(candidate.cover_hash, "a" * 40)
 
     def test_inventaire_preserves_known_non_supported_language_as_other(self):
         page = parse_inventaire_payload({"results": [{
@@ -140,6 +157,38 @@ class TopicProviderParsingTests(unittest.TestCase):
             filter_topic_results(results, language="current", current_language="en"),
             [],
         )
+
+    def test_inventaire_prefers_hydrated_author_labels(self):
+        page = parse_inventaire_payload({"results": [{
+            "uri": "inv:" + "a" * 32,
+            "label": "Insight Meditation",
+            "authors": ["Joseph Goldstein", "Sharon Salzberg"],
+            "claims": {
+                "wdt:P648": ["OL269802W"],
+                "wdt:P407": ["wd:Q1860"],
+            },
+        }]}, "meditation")
+
+        self.assertEqual(
+            page.candidates[0].authors,
+            ("Joseph Goldstein", "Sharon Salzberg"),
+        )
+
+    def test_inventaire_semantic_term_becomes_a_recommendation_seed(self):
+        page = parse_inventaire_payload({"results": [{
+            "uri": "inv:" + "b" * 32,
+            "label": "Mindfulness in Plain English",
+            "authors": ["Henepola Gunaratana"],
+            "claims": {"wdt:P648": ["OL4305347W"]},
+        }]}, "meditation", semantic=True)
+        result = DiscoveryResult(
+            candidate=page.candidates[0],
+            score=1,
+            reasons=("Related: Meditation",),
+            sources=("inventaire",),
+        )
+
+        self.assertEqual(candidate_to_book(result)["subjects"], ["meditation"])
 
 
 class TopicRankingTests(unittest.TestCase):
@@ -183,6 +232,29 @@ class TopicRankingTests(unittest.TestCase):
         self.assertEqual(titles[:2], ["Deep Work", "Stolen Focus"])
         self.assertNotIn("The Hiding Place", titles)
         self.assertNotIn("Popular but unrelated", titles)
+
+    def test_meditation_rejects_murder_mystery_title_collision(self):
+        page = parse_inventaire_payload({"results": [
+            {
+                "uri": "inv:" + "a" * 32,
+                "label": "A meditation on murder",
+                "authors": ["Mystery Author"],
+                "claims": {"wdt:P648": ["OL1W"]},
+            },
+            {
+                "uri": "inv:" + "b" * 32,
+                "label": "Insight Meditation",
+                "authors": ["Practice Author"],
+                "claims": {"wdt:P648": ["OL2W"]},
+            },
+        ]}, "meditation")
+
+        results = merge_topic_candidates([page], plan_topic_query("meditation"))
+
+        self.assertEqual(
+            [result.candidate.title for result in results],
+            ["Insight Meditation"],
+        )
 
     def test_focus_rejects_unrelated_subject_senses(self):
         records = [

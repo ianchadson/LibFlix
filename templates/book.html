@@ -16,9 +16,9 @@
         <figure class="detail-cover-frame" id="detailCoverFrame">
           {% if cover_url %}
           <img class="detail-cover" src="{{ cover_url | size_url('L') }}" data-cover-canonical="{{ cover_url | e }}" data-cover-medium="{{ cover_url | size_url('M') | e }}" alt="Cover of {{ title }}" decoding="async" fetchpriority="high" referrerpolicy="no-referrer" onload="this.classList.add('loaded');document.getElementById('bookSpotlight').style.setProperty('--book-cover','url(&quot;'+this.src+'&quot;)')" onerror="if(this.dataset.coverFallback!=='1'){this.dataset.coverFallback='1';this.src=this.dataset.coverMedium}else{this.hidden=true;this.nextElementSibling.hidden=false;this.parentElement.dataset.failedCover=this.dataset.coverCanonical;document.getElementById('bookSpotlight').style.removeProperty('--book-cover')}">
-          <div class="detail-cover-placeholder" aria-label="No cover available" hidden>?</div>
+          <div class="detail-cover-placeholder" aria-label="No cover available" hidden></div>
           {% else %}
-          <div class="detail-cover-placeholder" aria-label="No cover available">?</div>
+          <div class="detail-cover-placeholder" aria-label="No cover available"></div>
           {% endif %}
         </figure>
 
@@ -168,7 +168,7 @@
 
     function sizedDetailCoverUrl(url, size) {
       const value = String(url || '');
-      const local = value.match(/^(\/(?:olcover\/\d+|iacover\/[A-Za-z0-9_.-]+))(?:\/[SML])?(\.webp)?(\?.*)?$/);
+      const local = value.match(/^(\/(?:olcover\/\d+|iacover\/[A-Za-z0-9_.-]+|invcover\/[a-f0-9]{40}))(?:\/[SML])?(\.webp)?(\?.*)?$/);
       if (local) {
         return local[1] + '/' + size + (local[2] || '') + (local[3] || '');
       }
@@ -192,7 +192,6 @@
       const placeholder = document.createElement('div');
       placeholder.className = 'detail-cover-placeholder';
       placeholder.setAttribute('aria-label', 'No cover available');
-      placeholder.textContent = '?';
       placeholder.hidden = true;
       const commitImage = () => {
         if (pageDisposed) return;
@@ -634,8 +633,8 @@
             const title = escapeHtml(book.title || 'Untitled');
             const author = escapeHtml(book.author || '');
             const cover = book.cover_url
-              ? '<div class="cover-skeleton"></div><img data-cover-src="' + escapeHtml(book.cover_url) + '" alt="' + title + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="placeholder" hidden>?</div>'
-              : '<div class="placeholder">?</div>';
+              ? '<div class="cover-skeleton"></div><img data-cover-src="' + escapeHtml(book.cover_url) + '" alt="' + title + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="placeholder" hidden aria-label="No cover available"></div>'
+              : '<div class="placeholder" aria-label="No cover available"></div>';
             return '<a href="' + href + '" class="book-card-link"><div class="book-card" data-ol-key="' + escapeHtml(book.ol_key || '') + '" data-title="' + title + '" data-author="' + author + '">' + cover + '<div class="info"><div class="t">' + title + '</div>' + (author ? '<div class="a">' + author + '</div>' : '') + '</div></div></a>';
           }).join('');
           const row = document.getElementById('similarRow');
@@ -708,7 +707,9 @@
     }
 
     function showDownloadResults(data) {
-      const renderedCount = window.LibFlixDownloads.renderEditions(resultsBody, data.books);
+      const renderedCount = window.LibFlixDownloads.renderEditions(resultsBody, data.books, {
+        fallbackCoverUrl: bookCoverUrl,
+      });
       if (!renderedCount) {
         showDownloadState('empty');
         window.LibFlixDownloads.renderPagination(downloadPagination, data.page, data.total_pages, page => {

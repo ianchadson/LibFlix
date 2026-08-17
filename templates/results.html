@@ -159,9 +159,9 @@
               <img class="cover-thumb" src="/cover/{{ book.md5 }}/S.webp?dir={{ book.cover_dir }}"
                    alt="cover"
                    onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
-              <div class="cover-placeholder" style="display:none">?</div>
+              <div class="cover-placeholder" style="display:none" aria-label="No cover available"></div>
               {% else %}
-              <div class="cover-placeholder">?</div>
+              <div class="cover-placeholder" aria-label="No cover available"></div>
               {% endif %}
             </td>
             <td class="text-muted text-center">{{ loop.index + (page-1) * limit }}</td>

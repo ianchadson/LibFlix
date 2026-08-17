@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-08-17 - Discovery and cover outage hardening
+
+- Kept strict title/author discovery available through directly mapped
+  Inventaire works when Open Library is unavailable.
+- Corrected topic fallback text search to use the reader's actual query, raised
+  the useful-result threshold before ending provider waits, and hydrated mapped
+  author labels without admitting unresolved native records.
+- Added a validated Inventaire cover proxy and Open Library-to-Internet Archive
+  cover fallback, including MIME detection when image conversion is unavailable.
+- Replaced question-mark artwork failures with an intentional book treatment and
+  reused canonical book covers for download editions missing their own image.
+- Ensured failed lazy cover requests cannot be repainted as broken-image glyphs
+  by card sizing rules while the intentional fallback is active.
+- Preserved decoded covers and card nodes across unchanged partial-source polls,
+  and moved the mobile recovery message below the intent/filter controls.
+- Added mapped Inventaire subject and same-author recovery for More Like This,
+  retained semantic topic evidence as an internal recommendation seed, and
+  rejected meditation/murder title collisions from topical shelves.
+- Versioned topic-card caches and added outage, route, security, cover, and Kindle
+  metadata regression coverage.
+
 ## 2026-08-17 - Managed Kindle sender
 
 - Verified `fomalhaut.app` for Resend with DKIM, SPF, MX, and DMARC records.

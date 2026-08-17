@@ -7,15 +7,19 @@ LibFlix is a Flask app with two distinct data paths:
 1. **Discovery path:** Open Library powers browsing, shelves, category pages,
    strict identity search, book details, covers, and similar books. Topic
    search combines Open Library candidates with bounded Inventaire enrichment,
-   but only after every candidate resolves to an Open Library work. An
+   while mapped Inventaire works can also preserve exact search and similar-book
+   shelves during an Open Library outage. Every candidate still resolves to an
+   Open Library work. An
    attributed Wikipedia index of NYT number-one history can annotate and rerank
    exact existing candidates; it never creates book identity.
 2. **Download path:** the `downloaders/` package powers libgen search, download
    resolution, streaming, and Send to Kindle delivery.
 
-Open Library is the canonical identity boundary between these paths. Inventaire
-can improve topic candidate recall or add source consensus, but it cannot create
-a native LibFlix book route, cover, detail record, or download identity.
+Open Library work ids are the canonical identity boundary between these paths.
+Inventaire can improve topic recall, provide a strict identity-search fallback,
+and supply validated author labels or entity artwork, but only when `P648` maps
+directly to that canonical work. It cannot create an unresolved native route or
+download identity.
 The NYT/Wikipedia signal is a ranking overlay rather than a discovery provider
 and is reported under `ranking_sources`, not candidate `sources`.
 
@@ -110,6 +114,7 @@ Navbar search form submits to /discover
        -> explicit About / Title or author selection overrides detection
   -> identity mode uses fetch_discovery_books(q, page, lang)
        -> strict Open Library title/author relevance path
+       -> concurrent mapped Inventaire fallback when Open Library is unavailable
   -> topic mode renders a local cached window or an immediate loading shell
        -> /api/discover plans the raw topic plus at most two versioned aliases
        -> Open Library and Inventaire searches run concurrently
@@ -192,8 +197,14 @@ Important behavior:
   down or restarts committed content.
 - Provisional book HTML is `no-store`, and partial navigation honors that
   header instead of retaining an incomplete page in its five-minute cache.
-- Similar books are Open Library subject searches; subjects remain internal and
-  are not rendered as chips in the preview UI.
+- Similar books primarily use Open Library subject and author searches. During
+  an outage, directly mapped Inventaire works may supply a partial subject or
+  same-author shelf; semantic topic evidence can seed this path when canonical
+  subjects are not yet available. Subjects remain internal and are not rendered
+  as chips in the preview UI.
+- Partial topic recovery compares snapshot identities and patches unchanged
+  cards in place. Loaded covers and scroll state survive repeated provider polls;
+  a full reconciliation occurs only when the ranked work window changes.
 - The More Like This shelf hides horizontal scrollbars.
 - More Like This uses the shared card and quick-peek behavior.
 - Long descriptions clamp on compact screens and can be expanded in place.
@@ -257,8 +268,9 @@ caching, timeouts, circuits, and API pagination.
 
 Open Library records carry their work identity directly. Inventaire records can
 participate only when `wdt:P648` normalizes to `OL...W`; `OL...M` edition ids,
-unknown ids, missing authors at render time, and arbitrary provider cover URLs
-never cross the canonical boundary. Supplemental-only cards still link to an
+unknown ids, and arbitrary provider URLs never cross the canonical boundary.
+Hydrated authors and entity-image hashes are accepted only from mapped works and
+are re-exposed through local validated fields. Supplemental-only cards still link to an
 Open Library work and must satisfy the selected language-safety checks.
 
 The expansion, ranker, and editorial-index revisions are included in cache
@@ -634,11 +646,14 @@ non-streaming JSON behavior remains available for compatibility.
 
 ### Cover endpoints
 
-`GET /olcover/<cover_id>/<size>` and
+`GET /olcover/<cover_id>/<size>`, `GET /iacover/<archive_id>/<size>`,
+`GET /invcover/<entity_image_hash>/<size>`, and
 `GET /cover/<md5>/<size>?dir=<directory>` validate identifiers, fetch a bounded
 upstream rendition, optionally convert it to a size-specific WebP thumbnail,
 and store it under `LIBFLIX_DATA_DIR/covers`. Responses expose
-`X-LibFlix-Cover-Cache` and long-lived browser caching.
+`X-LibFlix-Cover-Cache`, `X-LibFlix-Cover-Source`, and long-lived browser
+caching. Open Library cover requests can carry a validated Internet Archive
+fallback; no arbitrary remote URL is accepted from the client.
 
 ### Health and browser timing
 
@@ -906,11 +921,11 @@ and WebKit scrollbar hiding rules.
 | Open Library JSON | memory | `ol:{path}:{params}` | 1 hour fresh |
 | Open Library JSON | SQLite `api_cache.sqlite3` | SHA-256 of request key | 6 hours fresh; up to 90 days stale |
 | Inventaire JSON | memory + SQLite | `inventaire:{path}:{params}` | 6 hours fresh; up to 7 days stale |
-| Complete topic window | memory + SQLite | `topic-discover:<expansion>:<ranker>:<lang>:<query>:<filters>` | 30 minutes fresh; up to 24 hours stale |
+| Complete topic window | memory + SQLite | `topic-discover:<expansion>:<ranker>:<cards>:<lang>:<query>:<filters>` | 30 minutes fresh; up to 24 hours stale |
 | Chinese title resolution | memory + SQLite | `chinese_title:v1:<ol_key>` | 30 days |
 | CN English display title | memory + SQLite | `english_title:v1:<ol_key>` | 30 days |
 | Assembled book detail | memory + SQLite | `book_detail:v6:<lang>:<work>` | 7 days fresh; up to 90 days stale |
-| Similar books | memory + SQLite | `similar:v4:...` | 7 days fresh; complete empty results use a 30-minute negative key |
+| Similar books | memory + SQLite | `similar:v6:...` | 7 days fresh; complete empty results use a 30-minute negative key |
 | Download search results | memory + SQLite | `download_search:v10:...` | 15 minutes for complete searches; stale fallback |
 | Homepage shelves | memory | `shelves_{lang}_{mode}` | 1 hour |
 | Homepage shelves | disk | `shelf_cache_{lang}_{mode}.json` | immediate restart hydration; stale after 6 hours |
@@ -1011,16 +1026,19 @@ without delaying startup.
 
 ## Discovery Source Boundaries
 
-Open Library remains the canonical source for homepage/category browsing, work
-identity, detail hydration, descriptions, covers, similar books, edition
-aliases, book routes, and the handoff into download matching. Strict title,
-author, ISBN, and Open Library-id discovery uses Open Library alone.
+Open Library remains canonical for homepage/category browsing, work identity,
+detail hydration, descriptions, similar books, edition aliases, book routes,
+and the handoff into download matching. Strict title/author identity search also
+runs a concurrent Inventaire fallback, but admits only directly mapped Open
+Library works that pass the same local language and relevance guards.
 
 Broad-topic discovery can also use Inventaire work search and a small approved
 set of semantic Wikidata subject claims. Inventaire contributes a candidate only
 when its `P648` claim resolves directly to an Open Library work. The local
 relevance gate and ranker may use provider rank, semantic agreement, and bounded
-popularity, but rendered identity and covers remain Open Library canonical.
+popularity. Validated entity-image hashes and hydrated author labels may fill
+presentation gaps through LibFlix's local proxy; the work identity remains Open
+Library canonical.
 
 Douban is used only as an optional ISBN metadata fallback for the secondary
 Chinese title on a book page when a Chinese Open Library edition lacks Han

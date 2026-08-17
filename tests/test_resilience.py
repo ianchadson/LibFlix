@@ -8,6 +8,7 @@ from contextlib import closing
 from unittest.mock import patch
 
 import app
+from topic_discovery import DiscoveryCandidate, ProviderPage
 
 
 class TemporaryCacheTest(unittest.TestCase):
@@ -218,8 +219,16 @@ class CategoryFallbackTests(unittest.TestCase):
 class DiscoveryFallbackTests(TemporaryCacheTest):
     def setUp(self):
         super().setUp()
+        self.original_inventaire_identity = app.fetch_inventaire_identity_books
+        self.inventaire_patcher = patch.object(
+            app,
+            "fetch_inventaire_identity_books",
+            return_value=([], False),
+        )
+        self.inventaire_patcher.start()
 
     def tearDown(self):
+        self.inventaire_patcher.stop()
         super().tearDown()
 
     @staticmethod
@@ -453,6 +462,90 @@ class DiscoveryFallbackTests(TemporaryCacheTest):
         memory_set.assert_not_called()
         disk_set.assert_not_called()
 
+    def test_inventaire_identity_keeps_search_working_during_openlibrary_outage(self):
+        cover_hash = "a" * 40
+        fallback = [{
+            "title": "Catching Fire",
+            "author": "Suzanne Collins",
+            "cover_url": app.inventaire_cover_url(cover_hash),
+            "ol_key": "/works/OL5735360W",
+            "description": "2009 novel by Suzanne Collins",
+        }]
+        with (
+            patch.object(app, "ol_get", return_value=None),
+            patch.object(
+                app,
+                "fetch_inventaire_identity_books",
+                return_value=(fallback, True),
+            ),
+        ):
+            books, total, total_pages = app.fetch_discovery_books(
+                "catching fire suzanne collins",
+                lang="en",
+            )
+
+        self.assertEqual(books, fallback)
+        self.assertEqual((total, total_pages), (1, 1))
+
+    def test_inventaire_identity_fallback_is_not_repeated_on_later_pages(self):
+        with (
+            patch.object(
+                app,
+                "ol_get",
+                return_value={"numFound": 0, "docs": []},
+            ),
+            patch.object(app, "fetch_inventaire_identity_books") as inventaire,
+        ):
+            books, total, total_pages = app.fetch_discovery_books(
+                "later fallback page",
+                page=2,
+                lang="en",
+            )
+
+        inventaire.assert_not_called()
+        self.assertEqual(books, [])
+        self.assertEqual((total, total_pages), (0, 1))
+
+    def test_inventaire_identity_requires_a_mapped_relevant_work(self):
+        relevant = DiscoveryCandidate(
+            provider="inventaire",
+            provider_id="wd:Q837140",
+            native_rank=0,
+            query_rank=0,
+            title="Catching Fire",
+            authors=("Suzanne Collins",),
+            work_key="/works/OL5735360W",
+            languages=("eng",),
+            description="2009 novel by Suzanne Collins",
+            cover_hash="b" * 40,
+        )
+        unrelated = DiscoveryCandidate(
+            provider="inventaire",
+            provider_id="wd:Q2",
+            native_rank=1,
+            query_rank=0,
+            title="An Unrelated Book",
+            authors=("Different Author",),
+            work_key="/works/OL2W",
+            languages=("eng",),
+            cover_hash="c" * 40,
+        )
+        page = ProviderPage(
+            provider="inventaire",
+            query="catching fire suzanne collins",
+            query_rank=0,
+            candidates=(relevant, unrelated),
+        )
+        with patch.object(app, "_topic_inventaire_pages", return_value=[page]):
+            books, available = self.original_inventaire_identity(
+                "catching fire suzanne collins",
+                "en",
+            )
+
+        self.assertTrue(available)
+        self.assertEqual([book["ol_key"] for book in books], ["/works/OL5735360W"])
+        self.assertEqual(books[0]["cover_url"], f"/invcover/{'b' * 40}/M.webp")
+
     def test_english_discovery_uses_fast_list_fields(self):
         with patch.object(
             app,
@@ -502,6 +595,27 @@ class CoverSelectionTests(unittest.TestCase):
 
         self.assertEqual(books[0]["cover_url"], "/olcover/12345/M.webp")
         self.assertEqual(books[1]["cover_url"], "/iacover/example-id/M.webp")
+
+    def test_cover_localization_preserves_valid_archive_fallback(self):
+        source = app.open_library_cover_url(12345, "S", "archive-id")
+
+        self.assertEqual(
+            app.localize_cover_url(source, "L"),
+            "/olcover/12345/L.webp?ia=archive-id",
+        )
+        self.assertEqual(
+            app.size_url(source, "M"),
+            "/olcover/12345/M.webp?ia=archive-id",
+        )
+
+    def test_inventaire_cover_urls_accept_only_entity_hashes(self):
+        cover_hash = "d" * 40
+
+        self.assertEqual(
+            app.inventaire_cover_url(cover_hash, "L"),
+            f"/invcover/{cover_hash}/L.webp",
+        )
+        self.assertEqual(app.inventaire_cover_url("../unsafe", "L"), "")
 
     def test_negative_cover_sentinel_is_not_a_cover(self):
         record = {
@@ -773,21 +887,99 @@ class CoverPipelineTests(unittest.TestCase):
 
     def test_extension_cover_routes_are_canonical_without_redirects(self):
         md5 = "a" * 32
+        cover_hash = "b" * 40
         download_url = app.download_cover_url(md5, "123000")
         self.assertEqual(download_url, f"/cover/{md5}/S.webp?dir=123000")
         self.assertEqual(app.open_library_cover_url(123, "M"), "/olcover/123/M.webp")
         self.assertEqual(app.archive_cover_url("archive-id", "M"), "/iacover/archive-id/M.webp")
+        self.assertEqual(app.inventaire_cover_url(cover_hash, "M"), f"/invcover/{cover_hash}/M.webp")
 
-        with patch.object(app, "cached_cover_response", return_value=("cover", 200)):
+        with patch.object(app, "cached_cover_response", return_value=("cover", 200)) as cached:
             client = app.app.test_client()
             for url in (
                 download_url,
                 "/olcover/123/M.webp",
                 "/iacover/archive-id/M.webp",
+                f"/invcover/{cover_hash}/M.webp",
             ):
                 response = client.get(url, follow_redirects=False)
                 self.assertEqual(response.status_code, 200, url)
                 self.assertNotIn("Location", response.headers, url)
+
+            client.get("/olcover/123/M.webp?ia=archive-id")
+
+        self.assertEqual(
+            cached.call_args.kwargs["fallback"],
+            (
+                "internetarchive",
+                "archive-id",
+                "https://archive.org/services/img/archive-id",
+                "",
+            ),
+        )
+
+    def test_cached_cover_response_uses_validated_fallback(self):
+        fallback_path = os.path.join(self.tempdir.name, "fallback.webp")
+        with (
+            patch.object(
+                app,
+                "ensure_cover_cached",
+                side_effect=[(None, False), (fallback_path, True)],
+            ) as ensure,
+            patch.object(
+                app,
+                "send_file",
+                return_value=app.Response(b"cover", mimetype="image/webp"),
+            ),
+        ):
+            response = app.cached_cover_response(
+                "openlibrary",
+                "123",
+                "M",
+                "https://covers.openlibrary.org/b/id/123-M.jpg",
+                fallback=(
+                    "internetarchive",
+                    "archive-id",
+                    "https://archive.org/services/img/archive-id",
+                    "",
+                ),
+            )
+
+        self.assertEqual(ensure.call_count, 2)
+        self.assertEqual(response.headers["X-LibFlix-Cover-Source"], "internetarchive")
+        self.assertEqual(response.headers["X-LibFlix-Cover-Cache"], "HIT")
+
+    def test_cover_mimetype_matches_unconverted_source_bytes(self):
+        webp_path = os.path.join(self.tempdir.name, "inventaire.webp")
+        with open(webp_path, "wb") as output:
+            output.write(b"RIFF\x10\x00\x00\x00WEBPVP8 " + b"x" * 32)
+
+        with patch.object(app, "Image", None):
+            self.assertEqual(app.cached_cover_mimetype(webp_path), "image/webp")
+
+    def test_kindle_cover_reuses_archive_when_openlibrary_cover_fails(self):
+        with (
+            patch.object(app, "_cached_cover_variant", return_value=""),
+            patch.object(
+                app,
+                "ensure_cover_cached",
+                side_effect=[(None, False), ("archive-cover", False)],
+            ) as ensure,
+            patch.object(
+                app,
+                "_cover_file_as_jpeg",
+                side_effect=lambda path: b"archive-jpeg" if path == "archive-cover" else b"",
+            ),
+        ):
+            content = app._kindle_cover_bytes(
+                "/olcover/123/L.webp?ia=archive-id",
+            )
+
+        self.assertEqual(content, b"archive-jpeg")
+        self.assertEqual(
+            [call.args[0] for call in ensure.call_args_list],
+            ["openlibrary", "internetarchive"],
+        )
 
     def test_warm_plan_covers_every_trending_book_and_possible_hero(self):
         shelves = [{
@@ -1021,6 +1213,33 @@ class BookDescriptionFallbackTests(unittest.TestCase):
             detail = app.fallback_book_detail("OL17713267W", "en")
 
         self.assertEqual(detail["description"], rich_description)
+
+    def test_topic_hint_supplies_missing_recommendation_subjects(self):
+        cached = {
+            "success": True,
+            "title": "Mindfulness in Plain English",
+            "author": "Henepola Gunaratana",
+            "subjects": [],
+            "similar_subjects": [],
+            "complete": True,
+        }
+        with (
+            patch.object(app, "BOOK_HINTS", {}),
+            patch.object(app, "cached_book_detail", return_value=(cached, "memory")),
+            patch.object(app, "alternate_canonical_book_detail", return_value={}),
+        ):
+            app.remember_book_hint({
+                "ol_key": "/works/OL4305347W",
+                "title": "Mindfulness in Plain English",
+                "author": "Henepola Gunaratana",
+                "subjects": ["meditation"],
+            })
+
+            detail, cache_state = app.get_book_detail("OL4305347W", "en")
+
+        self.assertEqual(cache_state, "memory")
+        self.assertEqual(detail["subjects"], ["meditation"])
+        self.assertEqual(detail["similar_subjects"], ["meditation"])
 
     def test_incomplete_book_html_is_not_cached(self):
         detail = {

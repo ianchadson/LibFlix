@@ -236,6 +236,8 @@ class DiscoveryCandidate:
     description: str = ""
     published_year: int | None = None
     cover_id: int | None = None
+    cover_hash: str = ""
+    archive_id: str = ""
     ratings_count: int = 0
     ratings_average: float = 0.0
     readinglog_count: int = 0
@@ -363,6 +365,25 @@ def _safe_float(value: Any, maximum: float = 10_000_000.0) -> float:
     return min(max(number, 0.0), maximum)
 
 
+def _archive_identifier(value: Any) -> str:
+    values = value if isinstance(value, (list, tuple)) else (value,)
+    for candidate in list(values)[:16]:
+        identifier = str(candidate or "").strip()
+        if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", identifier):
+            return identifier
+    return ""
+
+
+def _inventaire_cover_hash(value: Any) -> str:
+    if isinstance(value, dict):
+        value = value.get("url")
+    match = re.fullmatch(
+        r"(?:https://inventaire\.io)?/img/entities/([a-f0-9]{40})",
+        str(value or "").strip(),
+    )
+    return match.group(1) if match else ""
+
+
 def _year(value: Any) -> int | None:
     match = re.search(r"\b(1[4-9]\d{2}|20\d{2}|2100)\b", str(value or ""))
     if not match:
@@ -442,7 +463,7 @@ def build_openlibrary_request(
     fields = (
         "key,title,author_name,cover_i,language,subject,description,"
         "first_publish_year,ratings_count,ratings_average,readinglog_count,"
-        "osp_count,edition_count,isbn"
+        "osp_count,edition_count,isbn,ia"
     )
     params: dict[str, Any] = {
         "subject": query,
@@ -472,7 +493,13 @@ def build_inventaire_request(
     if query_rank < len(plan.inventaire_claims):
         params.append(("claim", plan.inventaire_claims[query_rank]))
         return "/search", params, True
-    query = plan.queries[min(max(query_rank, 0), len(plan.queries) - 1)]
+    # Claim-backed plans reserve the final rank for a literal text search. It
+    # must use what the reader entered, not the last semantic expansion.
+    query = (
+        plan.display_query
+        if plan.inventaire_claims
+        else plan.queries[min(max(query_rank, 0), len(plan.queries) - 1)]
+    )
     params.append(("search", query))
     return "/search", params, False
 
@@ -546,6 +573,7 @@ def parse_openlibrary_payload(
             description=_bounded_description(record.get("description")),
             published_year=_year(record.get("first_publish_year")),
             cover_id=cover_id,
+            archive_id=_archive_identifier(record.get("ia")),
             ratings_count=_safe_int(record.get("ratings_count")),
             ratings_average=min(_safe_float(record.get("ratings_average")), 5.0),
             readinglog_count=_safe_int(record.get("readinglog_count")),
@@ -631,11 +659,15 @@ def parse_inventaire_payload(
             native_rank=native_rank,
             query_rank=max(query_rank, 0),
             title=title,
-            authors=_author_from_description(description),
+            authors=(
+                _bounded_strings(record.get("authors"), limit=12)
+                or _author_from_description(description)
+            ),
             work_key=work_key,
             languages=languages,
             description=description,
             published_year=_year(date_value),
+            cover_hash=_inventaire_cover_hash(record.get("image")),
             popularity=_safe_float(record.get("popularity") or record.get("_popularity")),
             source_url=f"https://inventaire.io/entity/{record.get('uri')}" if record.get("uri") else "",
             semantic_terms=(semantic_term,) if semantic and semantic_term else (),
@@ -711,6 +743,8 @@ def _merge_candidates(primary: DiscoveryCandidate, other: DiscoveryCandidate) ->
         description=preferred.description or other.description,
         published_year=preferred.published_year or other.published_year,
         cover_id=preferred.cover_id or other.cover_id,
+        cover_hash=preferred.cover_hash or other.cover_hash,
+        archive_id=preferred.archive_id or other.archive_id,
         ratings_count=max(preferred.ratings_count, other.ratings_count),
         ratings_average=max(preferred.ratings_average, other.ratings_average),
         readinglog_count=max(preferred.readinglog_count, other.readinglog_count),
@@ -743,6 +777,23 @@ def _topic_evidence(candidate: DiscoveryCandidate, plan: QueryPlan) -> tuple[flo
     description = normalize_text(candidate.description)
     subjects = [(subject, normalize_text(subject)) for subject in candidate.subjects]
     combined = " ".join((title, description, *(value for _, value in subjects)))
+
+    if plan.display_query in {"meditation", "mindfulness"}:
+        fictional_senses = (
+            "murder", "detective fiction", "crime novel", "mystery novel",
+        )
+        practice_signals = (
+            "meditation practice", "mindfulness practice", "meditation guide",
+            "insight meditation", "guided meditation",
+        )
+        if (
+            any(_contains_phrase(combined, sense) for sense in fictional_senses)
+            and not any(
+                _contains_phrase(combined, signal)
+                for signal in practice_signals
+            )
+        ):
+            return 0.0, []
 
     if plan.display_query == "focus":
         # The Open Library subject is highly polysemous. Reject unrelated
@@ -1109,10 +1160,14 @@ def candidate_to_book(result: DiscoveryResult) -> dict[str, Any]:
         "author": candidate.authors[0] if candidate.authors else "",
         "ol_key": candidate.work_key,
         "cover_id": candidate.cover_id,
+        "cover_hash": candidate.cover_hash,
+        "archive_id": candidate.archive_id,
         "cover_url": "",
         "published_year": candidate.published_year,
         "languages": list(candidate.languages),
-        "subjects": list(candidate.subjects[:8]),
+        # Semantic provider claims are also useful recommendation seeds when
+        # the mapped work has no Open Library subjects available yet.
+        "subjects": list((candidate.subjects or candidate.semantic_terms)[:8]),
         "description": _bounded_description(candidate.description, RESULT_DESCRIPTION_MAX),
         "fiction": candidate.fiction,
         "reasons": list(result.reasons),

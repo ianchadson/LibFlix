@@ -3,9 +3,9 @@
     {% if book.cover_url %}
     <div class="cover-skeleton"></div>
     <img data-cover-src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';">
-    <div class="placeholder ph-fallback" style="display:none">?</div>
+    <div class="placeholder ph-fallback" style="display:none" aria-label="No cover available"></div>
     {% else %}
-    <div class="placeholder">?</div>
+    <div class="placeholder" aria-label="No cover available"></div>
     {% endif %}
     <div class="info">
       <div class="t">{{ book.title[:50] }}{% if book.title|length > 50 %}...{% endif %}</div>

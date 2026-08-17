@@ -29,3 +29,4 @@ output/playwright/
 covers/
 kindle-source-cache/
 kindle-delivery.lock
+nyt-bestsellers.lock

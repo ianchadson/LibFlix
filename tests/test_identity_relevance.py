@@ -484,6 +484,80 @@ class SimilarBookRelevanceTests(unittest.TestCase):
         )
         self.assertEqual([book["ol_key"] for book in books], ["/works/OL2W"])
 
+    def test_inventaire_author_fallback_keeps_only_mapped_same_author_works(self):
+        page = app.parse_inventaire_payload({"results": [
+            {
+                "uri": "inv:" + "a" * 32,
+                "label": "Mindfulness in Plain English",
+                "authors": ["Henepola Gunaratana"],
+                "claims": {
+                    "wdt:P648": ["OL4305347W"],
+                    "wdt:P407": ["wd:Q1860"],
+                },
+            },
+            {
+                "uri": "inv:" + "b" * 32,
+                "label": "Eight Mindful Steps to Happiness",
+                "authors": ["Henepola Gunaratana"],
+                "image": {"url": "/img/entities/" + "c" * 40},
+                "claims": {
+                    "wdt:P648": ["OL4305349W"],
+                    "wdt:P407": ["wd:Q1860"],
+                },
+            },
+            {
+                "uri": "inv:" + "d" * 32,
+                "label": "Unrelated Work",
+                "authors": ["Another Author"],
+                "claims": {
+                    "wdt:P648": ["OL9W"],
+                    "wdt:P407": ["wd:Q1860"],
+                },
+            },
+        ]}, "Henepola Gunaratana")
+
+        with patch.object(app, "_topic_inventaire_pages", return_value=[page]):
+            books, complete = app.fetch_inventaire_similar_books(
+                "/works/OL4305347W",
+                [],
+                "en",
+                "Mindfulness in Plain English",
+                ["Henepola Gunaratana"],
+            )
+
+        self.assertTrue(complete)
+        self.assertEqual([book["ol_key"] for book in books], ["/works/OL4305349W"])
+        self.assertEqual(books[0]["reason"], "Same author")
+        self.assertTrue(books[0]["cover_url"].startswith("/invcover/"))
+
+    def test_similar_books_use_inventaire_when_open_library_is_unavailable(self):
+        fallback = {
+            "title": "Eight Mindful Steps to Happiness",
+            "author": "Henepola Gunaratana",
+            "ol_key": "/works/OL4305349W",
+            "cover_url": "/invcover/" + "c" * 40 + "/M.webp",
+        }
+        with (
+            patch.object(app, "ol_get", return_value=None),
+            patch.object(
+                app,
+                "fetch_inventaire_similar_books",
+                return_value=([fallback], True),
+            ) as inventaire,
+        ):
+            books, complete = app.build_similar_books(
+                "/works/OL4305347W",
+                [],
+                "en",
+                current_title="Mindfulness in Plain English",
+                current_authors=["Henepola Gunaratana"],
+                with_status=True,
+            )
+
+        self.assertFalse(complete)
+        self.assertEqual(books, [fallback])
+        inventaire.assert_called_once()
+
     def test_api_similar_accepts_author_only_seed(self):
         with (
             patch.object(app, "cache_get", return_value=None),
@@ -513,7 +587,7 @@ class SimilarBookRelevanceTests(unittest.TestCase):
             ["Henry Kissinger"],
         )
 
-        self.assertTrue(cache_key.startswith("similar:v5:"))
+        self.assertTrue(cache_key.startswith("similar:v6:"))
 
     def test_confirmed_single_subject_candidates_backfill_after_strict_tier(self):
         strict = self.record(

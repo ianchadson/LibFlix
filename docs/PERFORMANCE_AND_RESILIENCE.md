@@ -102,6 +102,21 @@ This is intentional for book metadata: titles, authors, descriptions, and
 subjects change infrequently, while an upstream timeout is immediately visible
 to the user.
 
+## Inventaire Fallback Boundary
+
+Inventaire has an independent cache, request clock, timeout, and circuit breaker.
+Only records with a direct Wikidata `P648` mapping to an Open Library work may
+be rendered. During an Open Library outage, this path can provide strict
+title/author identity matches, topic cards, and partial subject/same-author
+recommendation shelves without changing the canonical book route. Hydrated
+author labels and `/img/entities/<sha1>` values are bounded; the browser receives
+only local `/invcover/...` URLs.
+
+Topic readiness requires at least four unique mapped works before the short
+provider grace window begins. A thin cached response therefore cannot cut off a
+healthy fallback provider. Partial provider windows remain request-local and are
+never cached as authoritative empty results.
+
 ## Cache Layers
 
 | Layer | Scope | Main use |
@@ -109,7 +124,7 @@ to the user.
 | In-process memory | one worker | hottest metadata, shelves, request coalescing |
 | SQLite WAL cache | all workers | metadata, assembled book details, search results, Kindle jobs |
 | Shelf JSON files | all workers/restarts | instant homepage/category seed data |
-| Cover files | all workers/restarts | size-specific Open Library, Internet Archive, and download-result images |
+| Cover files | all workers/restarts | size-specific Open Library, Internet Archive, Inventaire, and download-result images |
 | Kindle source files | all workers/restarts | validated recent EPUB/PDF downloads, with TTL and byte-quota pruning |
 | Browser HTTP cache | one browser | immutable static assets and long-lived cover responses |
 
@@ -123,7 +138,7 @@ cheap while avoiding whole-cache rewrites.
 |---|---|---|
 | Open Library JSON | `ol:*` | 6 hours on disk |
 | Assembled book detail | `book_detail:v5:*` | 7 days |
-| Similar books | `similar:v4:*` | 7 days; complete empty results use a 30-minute negative key |
+| Similar books | `similar:v6:*` | 7 days; complete empty results use a 30-minute negative key |
 | Download source search | `download_search:v10:*` | 15 minutes for complete searches only |
 | CN/English title helpers | language-specific keys | 30 days |
 
@@ -137,10 +152,11 @@ Browser requests use local endpoints:
 ```text
 /olcover/<cover_id>/<size>.webp
 /iacover/<archive_id>/<size>.webp
+/invcover/<entity_image_hash>/<size>.webp
 /cover/<md5>/<size>.webp?dir=<cover_directory>
 ```
 
-Both endpoints:
+All cover endpoints:
 
 - validate identifiers before constructing an upstream URL;
 - use stable hashed disk paths;
@@ -152,7 +168,15 @@ Both endpoints:
   is unavailable;
 - return a 30-day browser cache policy with a stale allowance;
 - expose `X-LibFlix-Cover-Cache: HIT|MISS`;
+- expose the validated source through `X-LibFlix-Cover-Source`;
 - include `Server-Timing` for cache/fetch diagnosis.
+
+An Open Library cover URL may include a validated `ia` identifier. If the
+Open Library image fails or is negatively cached, the same request falls back
+to Internet Archive and remains cacheable. Inventaire images are accepted only
+as 40-character entity-image hashes. When Pillow is unavailable, response MIME
+type is detected from the original bytes rather than inferred from the local
+`.webp` route suffix.
 
 The canonical `.webp` URLs are eligible for a CDN's normal static-asset cache
 without a route-specific rule. Query strings remain part of the cache key, and
@@ -400,6 +424,10 @@ dependency.
 |---|---|
 | Open Library timeout | Cached page/detail remains visible; refresh retries later |
 | Open Library repeated outage | Circuit opens briefly; stale data returns without repeated waits |
+| Open Library identity outage | Directly mapped, locally relevance-checked Inventaire works remain searchable |
+| Open Library recommendation outage | Mapped Inventaire subject and same-author works form a partial More Like This shelf |
+| Open Library cover outage | Validated Internet Archive fallback is served when present; otherwise the intentional book placeholder remains |
+| Inventaire outage | Open Library and durable caches continue independently |
 | Empty cached category page | Populated shelf page 1 is used when available |
 | Download source timeout | Book page remains usable; Download options show retry state |
 | Cover source timeout | Stable placeholder remains; other content is unaffected |
@@ -446,6 +474,15 @@ Run UI checks with headless isolated Chromium. Verify:
 7. Start a mocked Kindle job, navigate away and back, and confirm the global
    progress tray and edition row resume through completion.
 8. Disable the download source and confirm the book page remains usable.
+9. Disable Open Library, search an exact mapped title, and confirm Inventaire
+   returns the canonical work route without unrelated results.
+10. Load a topic during the same outage and confirm mapped Inventaire covers and
+    author labels render while any genuinely missing artwork uses the book-style
+    placeholder rather than a question mark.
+11. Leave that partial topic open through a recovery poll and confirm decoded
+    covers and card DOM nodes are retained when the snapshot id is unchanged.
+12. Open a mapped fallback book and confirm More Like This returns canonical
+    mapped works even while Open Library remains unavailable.
 
 ## Deployment Boundary
 

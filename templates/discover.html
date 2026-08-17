@@ -21,9 +21,9 @@
       {% if book.cover_url %}
       <div class="cover-skeleton"></div>
       <img data-cover-src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';this.parentNode.classList.add('no-cover');">
-      <div class="placeholder ph-fallback" style="display:none">?</div>
+      <div class="placeholder ph-fallback" style="display:none" aria-label="No cover available"></div>
       {% else %}
-      <div class="placeholder">?</div>
+      <div class="placeholder" aria-label="No cover available"></div>
       {% endif %}
       <div class="info">
         <div class="t">{{ book.title[:50] }}{% if book.title|length > 50 %}...{% endif %}</div>
@@ -143,7 +143,11 @@
       .topic-filter-panel { position: fixed; right: 16px; left: 16px; width: auto; }
     }
     @media (max-width: 520px) {
-      .topic-tools { align-items: flex-end; }
+      .discover-controls { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px 10px; }
+      .topic-tools { display: contents; }
+      .topic-status-copy { grid-column: 1 / -1; grid-row: 2; }
+      .topic-source-note { min-height: 0; padding-top: 0; }
+      .topic-filters { grid-column: 2; grid-row: 1; }
       .topic-filter-grid { grid-template-columns: 1fr; }
     }
   </style>
@@ -416,7 +420,7 @@
         const fallback = document.createElement('div');
         fallback.className = 'placeholder ph-fallback';
         fallback.hidden = true;
-        fallback.textContent = '?';
+        fallback.setAttribute('aria-label', 'No cover available');
         image.addEventListener('load', () => image.classList.add('loaded'));
         image.addEventListener('error', () => {
           image.hidden = true;
@@ -428,7 +432,7 @@
         bookCard.classList.add('no-cover');
         const placeholder = document.createElement('div');
         placeholder.className = 'placeholder';
-        placeholder.textContent = '?';
+        placeholder.setAttribute('aria-label', 'No cover available');
         bookCard.appendChild(placeholder);
       }
       const info = document.createElement('div');
@@ -742,8 +746,30 @@
             document.getElementById('topicSourceNote').textContent = '';
             return;
           }
+          const previousSnapshotId = topicSnapshotId;
+          const incomingSnapshotId = String(data.snapshot_id || '');
+          const canRefreshInPlace = Boolean(
+            !forceTopicReconcile
+            && previousSnapshotId
+            && incomingSnapshotId === previousSnapshotId
+          );
           forceTopicReconcile = false;
           setTopicPresentation(true, data.display_query || data.topic || QUERY, data);
+          if (canRefreshInPlace) {
+            renderStartHere(starts, false);
+            enqueueBooks(books);
+            currentPage = Number(data.page) || currentPage;
+            totalPages = Number(data.total_pages) || totalPages;
+            initialLoading = false;
+            document.getElementById('initialResultsLoading')?.remove();
+            if (!responseNeedsRefresh(data)) {
+              partialRefreshCount = 4;
+              document.getElementById('topicSourceNote').textContent = '';
+            } else {
+              schedulePartialRefresh(data);
+            }
+            return;
+          }
           activePageRequest?.abort();
           activePageRequest = null;
           loading = false;

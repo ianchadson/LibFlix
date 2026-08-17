@@ -1,9 +1,10 @@
 # LibFlix - Book Discovery and Delivery
 
 LibFlix is a Netflix-style web app for browsing books, previewing metadata, and
-finding download options. Open Library remains the canonical source for book
-identity, browsing, details, covers, and similar books. Broad-topic discovery
-also uses Inventaire as a tightly gated supplemental signal. An attributed
+finding download options. Open Library remains the canonical identity for every
+rendered work and the primary source for browsing, details, covers, and similar
+books. Broad-topic, exact-search, cover, and recommendation recovery can also
+use Inventaire through a tightly gated Open Library-work mapping. An attributed
 public-web index of NYT number-one history can add a bounded ranking tie-breaker
 to exact book matches. Downloads are handled separately through the modular
 downloader layer, currently backed by libgen.li.
@@ -74,9 +75,9 @@ current and previous year pages provide the optional NYT number-one signal.
 - **Safe multi-source candidates** - Open Library subject results are combined
   with Inventaire text or semantic results. Inventaire records are admitted
   only when their Wikidata `P648` claim maps directly to an Open Library work;
-  edition ids and unresolved native records are rejected. Book identity,
-  details, covers, download aliases, and final book routes remain Open Library
-  canonical.
+  edition ids and unresolved native records are rejected. The mapped work key
+  remains canonical, while validated Inventaire author labels and entity-image
+  hashes can fill missing presentation metadata through LibFlix's own proxy.
 - **Attributed NYT number-one signal** - a bounded background web request reads
   Wikipedia's current and previous calendar-year NYT number-one tables. A unique
   exact title-and-author match can reorder an already-relevant book within its
@@ -102,9 +103,11 @@ current and previous year pages provide the optional NYT number-one signal.
   from different rankings being mixed. A stale complete window wins over a
   newly partial provider response, while partial outages are no-store and never
   persisted as authoritative empty results.
-- **Open Library catalog** - browsing, shelves, categories, metadata, covers,
-  similar books, identity search, and every rendered book work key use Open
-  Library with no API key.
+- **Canonical Open Library catalog** - browsing, shelves, categories, metadata,
+  covers, similar books, identity search, and every rendered book work key use
+  Open Library identity with no API key. Mapped Inventaire results can keep
+  exact title/author search and recommendations usable while Open Library is
+  temporarily unavailable.
 - **Sparse-record recovery** - discovery validates language locally so newly
   catalogued Open Library works remain searchable before language or cover
   metadata has been assigned, without mixing explicitly foreign-language
@@ -203,8 +206,10 @@ current and previous year pages provide the optional NYT number-one signal.
   an already-visible result set.
 - **More Like This** - up to two specific subjects plus the current author feed
   a bounded, locally ranked single-row shelf. Multi-subject and same-author
-  books win over tangential popularity matches. Its API request waits until the
-  section approaches the viewport.
+  books win over tangential popularity matches. If Open Library is unavailable,
+  directly mapped Inventaire works provide a partial shelf without creating
+  native or unresolved routes. Its API request waits until the section
+  approaches the viewport.
 - **Hidden More Like This scrollbar** - the shelf scrolls horizontally without a
   visible scrollbar.
 - **Inline edition picker** - download candidates appear as responsive edition
@@ -292,8 +297,10 @@ current and previous year pages provide the optional NYT number-one signal.
 - **Progressive cover loading** - cover geometry stays stable while images load,
   with a subtle shimmer and no layout shift. Covers already loaded during the
   session retain their visible state across app-shell page swaps.
-- **Persistent optimized covers** - Open Library and download-result covers pass
-  through a validated local cache. When Pillow is available, LibFlix stores
+- **Persistent optimized covers** - Open Library, Inventaire, Internet Archive,
+  and download-result covers pass through a validated local cache. Open Library
+  cover URLs can carry a validated Archive fallback, and download rows reuse the
+  canonical book cover when an edition has none. When Pillow is available, LibFlix stores
   compact size-specific WebP thumbnails; repeat requests are served from disk
   and canonical `.webp` URLs can be cached by the CDN. Likely hero covers and
   the full Trending shelf are warmed in the background once per day.
@@ -306,10 +313,15 @@ current and previous year pages provide the optional NYT number-one signal.
   rate-limited, coalesced gateways with bounded timeouts, circuit breakers, and
   durable stale fallback. Topic search has a bounded overall provider wait and
   can identify a partial response without letting one source failure poison a
-  complete cached result. An unavailable upstream no longer turns a cached
+  complete cached result. Literal title/author search can accept a strict,
+  directly mapped Inventaire work while Open Library is down. An unavailable upstream no longer turns a cached
   category, topic, or book into a blank page. The Wikipedia editorial refresh
   runs outside the provider deadline and its absence or failure never makes
   Topics partial.
+- **Stable partial recovery** - repeated topic recovery polls patch unchanged
+  cards in place, preserving decoded covers and scroll position instead of
+  rebuilding the shelf. Semantic topic evidence is retained as an internal
+  recommendation seed when canonical subjects are not yet cached.
 - **Operational visibility** - `/api/health` reports local dependency state,
   server timing is attached to key responses, and lightweight browser
   performance metrics are accepted by `/api/metrics/web-vitals`.
@@ -348,7 +360,7 @@ current and previous year pages provide the optional NYT number-one signal.
 | `/api/book` | JSON endpoint for Open Library work details |
 | `/api/cn-display-title` | Cached English display-title lookup for CN browse cards |
 | `/api/cn-display-titles` | Batched English display-title lookup for visible CN cards |
-| `/api/similar` | JSON endpoint for similar Open Library books |
+| `/api/similar` | JSON endpoint for canonical similar books with mapped Inventaire outage fallback |
 | `/api/search` | JSON endpoint for libgen download search |
 | `/api/kindle/jobs` | Start a background Send to Kindle delivery |
 | `/api/kindle/jobs/<job_id>` | Poll incremental delivery status |
@@ -356,6 +368,7 @@ current and previous year pages provide the optional NYT number-one signal.
 | `/cover/<md5>/<size>.webp` | Canonical cached download-result cover |
 | `/olcover/<cover_id>/<size>.webp` | Canonical cached Open Library cover |
 | `/iacover/<archive_id>/<size>.webp` | Canonical cached Internet Archive cover |
+| `/invcover/<entity_image_hash>/<size>.webp` | Validated cached Inventaire entity cover |
 | `/api/health` | Local cache, source, and job health summary |
 | `/api/metrics/web-vitals` | Lightweight browser performance metric receiver |
 
@@ -433,6 +446,8 @@ requests. They are ignored by git.
 | `shelf_cache_<lang>_<mode>.json` | Warm shelf cache for each language and mode |
 | `shelf_cache*.json` | Historical and current shelf cache files ignored by git |
 | `covers/openlibrary/...` | Size-specific cached Open Library covers |
+| `covers/internetarchive/...` | Size-specific cached Internet Archive fallbacks |
+| `covers/inventaire/...` | Size-specific cached Inventaire entity covers |
 | `covers/downloads/...` | Size-specific cached download-result covers |
 | `covers/.warm-complete` | Daily successful hero/trending cover warm marker |
 | `kindle-source-cache/...` | Validated 24-hour EPUB/PDF source cache |
@@ -459,7 +474,7 @@ See [CHANGELOG.md](CHANGELOG.md) for dated implementation details.
 
 - **Backend:** Flask, requests, BeautifulSoup4
 - **Frontend:** Local CSS and vanilla JavaScript
-- **Discovery:** Open Library Search/Works/Covers APIs, Inventaire topic enrichment, and an attributed Wikipedia NYT number-one history signal
+- **Discovery:** Open Library Search/Works/Covers APIs, mapped Inventaire identity/topic metadata and covers, and an attributed Wikipedia NYT number-one history signal
 - **Downloads:** Modular downloader interface, currently libgen.li
 - **Port:** 5800
 

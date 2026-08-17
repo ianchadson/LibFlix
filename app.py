@@ -136,8 +136,8 @@ KINDLE_RELAY_MAX_ATTACHMENT_BYTES = max(
     int(os.environ.get("KINDLE_RELAY_MAX_ATTACHMENT_MB", "28")) * 1024 * 1024,
 )
 SHELF_REFRESH_TTL = 21600
-OL_LIST_FIELDS = "key,title,author_name,cover_i,cover_id,language"
-OL_COVER_FIELDS = f"{OL_LIST_FIELDS},editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id"
+OL_LIST_FIELDS = "key,title,author_name,cover_i,cover_id,language,ia"
+OL_COVER_FIELDS = f"{OL_LIST_FIELDS},editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id,editions.ocaid"
 OL_IDENTITY_FIELDS = f"{OL_COVER_FIELDS},description,alternative_title,isbn,editions.author_name,editions.isbn_10,editions.isbn_13"
 # Backwards-compatible name for list/cover consumers; identity fields are
 # intentionally reserved for a single work-detail lookup.
@@ -1366,15 +1366,17 @@ def edition_cover_id(ed):
                 return cover_id
     return valid_cover_id(ed.get("cover_i")) or valid_cover_id(ed.get("cover_id"))
 
-def open_library_cover_url(cover_id, size="M"):
+def open_library_cover_url(cover_id, size="M", archive_id=""):
     cover_id = valid_cover_id(cover_id)
     if not cover_id:
         return ""
     size = size if size in ("S", "M", "L") else "M"
-    return f"/olcover/{cover_id}/{size}.webp"
+    url = f"/olcover/{cover_id}/{size}.webp"
+    archive_id = edition_archive_identifier({"ocaid": archive_id})
+    return f"{url}?{urlencode({'ia': archive_id})}" if archive_id else url
 
 def edition_archive_identifier(edition):
-    values = edition.get("ocaid") or []
+    values = edition.get("ocaid") or edition.get("ia") or []
     if not isinstance(values, list):
         values = [values]
     for value in values:
@@ -1383,6 +1385,13 @@ def edition_archive_identifier(edition):
             return identifier
     return ""
 
+
+def record_archive_identifier(record, edition=None):
+    return (
+        edition_archive_identifier(edition or {})
+        or edition_archive_identifier(record or {})
+    )
+
 def archive_cover_url(identifier, size="M"):
     identifier = str(identifier or "").strip()
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", identifier):
@@ -1390,15 +1399,39 @@ def archive_cover_url(identifier, size="M"):
     size = size if size in ("S", "M", "L") else "M"
     return f"/iacover/{identifier}/{size}.webp"
 
+
+def inventaire_cover_url(cover_hash, size="M"):
+    cover_hash = str(cover_hash or "").strip().lower()
+    if not re.fullmatch(r"[a-f0-9]{40}", cover_hash):
+        return ""
+    size = size if size in ("S", "M", "L") else "M"
+    return f"/invcover/{cover_hash}/{size}.webp"
+
+
+def book_cover_url(cover_id=None, archive_id="", cover_hash="", size="M"):
+    return (
+        open_library_cover_url(cover_id, size, archive_id)
+        or archive_cover_url(archive_id, size)
+        or inventaire_cover_url(cover_hash, size)
+    )
+
 def localize_cover_url(url, size="M"):
     url = str(url or "")
-    local = re.fullmatch(r"/olcover/(\d+)(?:/[SML](?:\.webp)?)?", url)
-    archive = re.fullmatch(r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML](?:\.webp)?)?", url)
+    parsed = urlsplit(url)
+    path = parsed.path if not parsed.scheme and not parsed.netloc else url
+    local = re.fullmatch(r"/olcover/(\d+)(?:/[SML](?:\.webp)?)?", path)
+    archive = re.fullmatch(r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML](?:\.webp)?)?", path)
+    inventaire = re.fullmatch(r"/invcover/([a-f0-9]{40})(?:/[SML](?:\.webp)?)?", path)
     if archive:
         return archive_cover_url(archive.group(1), size)
+    if inventaire:
+        return inventaire_cover_url(inventaire.group(1), size)
     remote = re.search(r"covers\.openlibrary\.org/b/id/(\d+)-[SML]\.jpg", url)
     match = local or remote
-    return open_library_cover_url(match.group(1), size) if match else url
+    if not match:
+        return url
+    archive_id = (parse_qs(parsed.query).get("ia") or [""])[0] if local else ""
+    return open_library_cover_url(match.group(1), size, archive_id)
 
 def canonicalize_book_covers(books, size="M"):
     """Upgrade cached legacy cover paths at every JSON/HTML boundary."""
@@ -1803,7 +1836,8 @@ def extract_book(w, lang=None, allow_missing_cover=False):
         or valid_cover_id(w.get("cover_i"))
         or valid_cover_id(w.get("cover_id"))
     )
-    if not cover_id and lang != "cn" and not allow_missing_cover:
+    archive_id = record_archive_identifier(w, edition)
+    if not cover_id and not archive_id and lang != "cn" and not allow_missing_cover:
         return None
     author = ""
     authors = w.get("author_name") or w.get("authors", [])
@@ -1816,7 +1850,7 @@ def extract_book(w, lang=None, allow_missing_cover=False):
             break
     if not author:
         return None
-    cover_url = open_library_cover_url(cover_id)
+    cover_url = book_cover_url(cover_id, archive_id)
     ol_key = w.get("key", "")
     book = {"title": title, "author": author, "cover_url": cover_url, "ol_key": ol_key}
     remember_book_hint(book, lang)
@@ -1835,6 +1869,7 @@ def remember_book_hint(book, lang=None):
         "author": str(book.get("author") or "").strip(),
         "cover_url": str(book.get("cover_url") or "").strip(),
         "description": re.sub(r"\s+", " ", str(description)).strip()[:2000],
+        "subjects": bounded_identity_values(book.get("subjects"), limit=20),
         "ol_key": ol_key,
     }
     with BOOK_HINTS_LOCK:
@@ -1845,6 +1880,10 @@ def remember_book_hint(book, lang=None):
         }
         if len(current.get("description", "")) > len(merged.get("description", "")):
             merged["description"] = current["description"]
+        merged["subjects"] = bounded_identity_values([
+            hint.get("subjects"),
+            current.get("subjects"),
+        ], limit=20)
         BOOK_HINTS[(lang, ol_key)] = merged
 
 def hinted_book_metadata(work_id, lang=None):
@@ -1877,6 +1916,10 @@ def hinted_book_metadata(work_id, lang=None):
         "author": hint.get("author") or english_hint.get("author", ""),
         "cover_url": hint.get("cover_url") or english_hint.get("cover_url", ""),
         "description": hint.get("description") or english_hint.get("description", ""),
+        "subjects": bounded_identity_values([
+            hint.get("subjects"),
+            english_hint.get("subjects"),
+        ], limit=20),
         "ol_key": ol_key,
     }
     result.update(collect_book_identity_metadata(result))
@@ -2165,6 +2208,7 @@ TOPIC_FILTER_DEFAULTS = {
     "published": "any",
     "sort": "best",
 }
+TOPIC_CARD_VERSION = "cards-v2"
 INVENTAIRE_CLAIM_TERMS = {
     "wd:Q108458": "meditation",
     "wd:Q341045": "mindfulness",
@@ -2200,6 +2244,7 @@ def topic_discovery_cache_key(query, lang, filters, editorial_revision=None):
     ))
     return (
         f"topic-discover:{TOPIC_EXPANSION_VERSION}:{TOPIC_RANKER_VERSION}:"
+        f"{TOPIC_CARD_VERSION}:"
         f"editorial-{editorial_revision}:{lang}:"
         f"{normalize_topic_text(query)}:{filter_key}"
     )
@@ -2577,6 +2622,27 @@ def _inventaire_entity_params(uris):
     return params
 
 
+def _inventaire_label_params(uris):
+    params = [("uris", uri) for uri in uris]
+    params.append(("attributes", "labels"))
+    return params
+
+
+def _inventaire_entity_label(entity, language="en"):
+    labels = entity.get("labels") if isinstance(entity, dict) else None
+    if not isinstance(labels, dict):
+        return ""
+    preferred = ("zh", "en") if language in {"cn", "zh"} else ("en", "zh")
+    for code in preferred:
+        value = str(labels.get(code) or "").strip()
+        if value:
+            return value[:120]
+    return next(
+        (str(value).strip()[:120] for value in labels.values() if str(value).strip()),
+        "",
+    )
+
+
 def _inventaire_semantic_term(claim, fallback):
     value = str(claim or "").rsplit("=", 1)[-1]
     return INVENTAIRE_CLAIM_TERMS.get(value, fallback)
@@ -2590,7 +2656,8 @@ def _topic_inventaire_pages(plan, query_rank, provider_lang, filters):
         limit=20,
     )
     data = inventaire_get(path, params)
-    fallback_query = plan.queries[min(query_rank, len(plan.queries) - 1)]
+    search_query = next((value for name, value in params if name == "search"), "")
+    fallback_query = search_query or plan.queries[min(query_rank, len(plan.queries) - 1)]
     claim = next((value for name, value in params if name == "claim"), "")
     semantic_query = _inventaire_semantic_term(claim, fallback_query)
     if not isinstance(data, dict) or not isinstance(data.get("results"), list):
@@ -2622,6 +2689,30 @@ def _topic_inventaire_pages(plan, query_rank, provider_lang, filters):
         and isinstance(entity_data.get("entities"), dict)
         else {}
     )
+    author_uris = []
+    for entity in entities.values():
+        claims = entity.get("claims") if isinstance(entity, dict) else None
+        values = claims.get("wdt:P50", []) if isinstance(claims, dict) else []
+        if not isinstance(values, list):
+            values = [values]
+        for value in values[:8]:
+            uri = str(value or "").strip()
+            if re.fullmatch(r"(?:wd:Q\d+|inv:[a-f0-9]{32})", uri) and uri not in author_uris:
+                author_uris.append(uri)
+                if len(author_uris) >= 40:
+                    break
+        if len(author_uris) >= 40:
+            break
+    author_data = (
+        inventaire_get("/entities/by-uris", _inventaire_label_params(author_uris))
+        if author_uris else {"entities": {}}
+    )
+    author_entities = (
+        author_data.get("entities")
+        if isinstance(author_data, dict)
+        and isinstance(author_data.get("entities"), dict)
+        else {}
+    )
     hydration_incomplete = bool(
         uris
         and (
@@ -2642,6 +2733,20 @@ def _topic_inventaire_pages(plan, query_rank, provider_lang, filters):
                 if entity.get(name) not in (None, {}, []):
                     combined[name] = entity[name]
             combined["uri"] = uri
+            claims = entity.get("claims") if isinstance(entity.get("claims"), dict) else {}
+            authors = []
+            author_values = claims.get("wdt:P50", [])
+            if not isinstance(author_values, list):
+                author_values = [author_values]
+            for author_uri in author_values[:8]:
+                label = _inventaire_entity_label(
+                    author_entities.get(str(author_uri)),
+                    provider_lang,
+                )
+                if label and label not in authors:
+                    authors.append(label)
+            if authors:
+                combined["authors"] = authors
         enriched.append(combined)
     data["results"] = enriched
     if isinstance(entity_data, dict) and entity_data.get("warnings"):
@@ -2789,7 +2894,19 @@ def _topic_provider_pages(plan, lang, filters, *, fallback_ready=False):
                     )
                 )
             )
-            if (openlibrary_ready or inventaire_ready) and grace_deadline is None:
+            ready_work_keys = {
+                candidate.work_key
+                for page in pages
+                if page.available
+                for candidate in page.candidates
+                if candidate.work_key
+            }
+            enough_results = len(ready_work_keys) >= TOPIC_LOCAL_READY_CANDIDATES
+            if (
+                enough_results
+                and (openlibrary_ready or inventaire_ready)
+                and grace_deadline is None
+            ):
                 grace_deadline = min(deadline, time.monotonic() + 1.35)
         if grace_deadline is not None and time.monotonic() >= grace_deadline:
             break
@@ -2815,8 +2932,8 @@ def _topic_books_from_results(results, lang="en", language_filter="current"):
         # Native supplemental cards require a direct Open Library work mapping.
         # Chinese presentation additionally requires a Chinese language claim;
         # English/current and Any may retain an unknown-language mapped work.
-        # Covers remain Open-Library-only; arbitrary provider images are never
-        # proxied.
+        # Supplemental images are accepted only through the strict Inventaire
+        # entity-image proxy; arbitrary provider URLs never reach the browser.
         if (
             "openlibrary" not in result.sources
             and (
@@ -2833,7 +2950,12 @@ def _topic_books_from_results(results, lang="en", language_filter="current"):
             continue
         book = candidate_to_book(result)
         cover_id = book.pop("cover_id", None)
-        book["cover_url"] = open_library_cover_url(cover_id)
+        cover_hash = book.pop("cover_hash", "")
+        archive_id = book.pop("archive_id", "")
+        book["cover_url"] = (
+            inventaire_cover_url(cover_hash)
+            or book_cover_url(cover_id, archive_id)
+        )
         book["ol_key"] = normalize_topic_work_key(book.get("ol_key"))
         if not book["ol_key"] or not book.get("title"):
             continue
@@ -3079,7 +3201,7 @@ def paginate_topic_discovery_payload(payload, page):
 def cached_discovery_books(q, page=1, lang=None):
     """Return discovery data without ever waiting on Open Library."""
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v8:{lang}:{q}:{page}"
+    ckey = f"discover:v9:{lang}:{q}:{page}"
     cached = cache_get(ckey, 900)
     if cached is None:
         cached = disk_cache_get(ckey, 900)
@@ -3091,9 +3213,51 @@ def cached_discovery_books(q, page=1, lang=None):
     return cached
 
 
+def fetch_inventaire_identity_books(q, lang=None):
+    """Return canonical work cards when Open Library identity search is unavailable."""
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    plan = plan_topic_query(q, intent="identity")
+    if not plan.queries:
+        return [], True
+    pages = _topic_inventaire_pages(plan, 0, lang, {})
+    available = any(page.available for page in pages)
+    books = []
+    seen_keys = set()
+    for page in pages:
+        if not page.available:
+            continue
+        for candidate in page.candidates:
+            record = {
+                "key": candidate.work_key,
+                "title": candidate.title,
+                "author_name": list(candidate.authors),
+                "language": list(candidate.languages),
+            }
+            if not discovery_fallback_matches_language(record, lang):
+                continue
+            if discovery_record_relevance(record, q) <= 0:
+                continue
+            book = {
+                "title": candidate.title,
+                "author": candidate.authors[0] if candidate.authors else "",
+                "cover_url": (
+                    inventaire_cover_url(candidate.cover_hash)
+                    or book_cover_url(candidate.cover_id, candidate.archive_id)
+                ),
+                "ol_key": candidate.work_key,
+                "description": candidate.description,
+            }
+            if not book["ol_key"] or book_seen(book, seen_keys):
+                continue
+            remember_book(book, seen_keys)
+            remember_book_hint(book, lang)
+            books.append(book)
+    return books[:DISCOVERY_PAGE_SIZE], available
+
+
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v8:{lang}:{q}:{page}"
+    ckey = f"discover:v9:{lang}:{q}:{page}"
     cached = cached_discovery_books(q, page, lang)
     if cached is not None:
         return cached
@@ -3120,17 +3284,28 @@ def fetch_discovery_books(q, page=1, lang=None):
 
     # Preserve exact sparse matches while fetching a cover-rich result set in
     # parallel so cover quality does not add a second origin wait.
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=3) as pool:
         raw_future = pool.submit(fetch_search, q, DISCOVERY_SEARCH_LIMIT)
         covered_future = pool.submit(
             fetch_search,
             covered_query,
             DISCOVERY_COVER_PAGE_SIZE,
         )
+        inventaire_future = (
+            pool.submit(fetch_inventaire_identity_books, q, lang)
+            if page == 1 else None
+        )
         raw_data = raw_future.result()
         covered_data = covered_future.result()
+        if inventaire_future is not None:
+            try:
+                inventaire_books, inventaire_available = inventaire_future.result()
+            except Exception:
+                inventaire_books, inventaire_available = [], False
+        else:
+            inventaire_books, inventaire_available = [], False
 
-    if raw_data is None and covered_data is None:
+    if raw_data is None and covered_data is None and not inventaire_available:
         return [], None, 1
 
     raw_data = raw_data or {}
@@ -3188,14 +3363,38 @@ def fetch_discovery_books(q, page=1, lang=None):
         )
     covered_added = append_records(covered_records, allow_missing_cover=False)
 
+    # Enrich canonical Open Library matches first. If the covered search was
+    # empty, retain every sparse exact match before adding supplemental works.
+    for fallback in inventaire_books:
+        existing = next(
+            (
+                candidate for candidate in books
+                if candidate.get("ol_key") == fallback.get("ol_key")
+            ),
+            None,
+        )
+        if existing:
+            if not existing.get("cover_url") and fallback.get("cover_url"):
+                existing["cover_url"] = fallback["cover_url"]
+            if not existing.get("description") and fallback.get("description"):
+                existing["description"] = fallback["description"]
+
     # If Open Library has no covered matches, retain the sparse-result
     # fallback rather than making an exact but coverless book undiscoverable.
     if covered_added == 0 and len(books) < DISCOVERY_PAGE_SIZE:
         append_records(raw_records, allow_missing_cover=True)
 
+    for fallback in inventaire_books:
+        if len(books) >= DISCOVERY_PAGE_SIZE or book_seen(fallback, seen_keys):
+            continue
+        books.append(fallback)
+        remember_book(fallback, seen_keys)
+
     result_data = covered_data if covered_added else raw_data
     result_limit = DISCOVERY_COVER_PAGE_SIZE if covered_added else DISCOVERY_SEARCH_LIMIT
-    total = result_data.get("numFound", 0)
+    total = result_data.get("numFound", 0) if result_data else 0
+    if page == 1:
+        total = max(total, len(books))
     total_pages = min(
         25,
         max(1, (total + result_limit - 1) // result_limit),
@@ -3795,6 +3994,8 @@ def book_metadata_from_work(work_id, lang=None):
         or work_cover_id(work)
     )
     archive_id = edition_archive_identifier(edition or {})
+    if not archive_id:
+        archive_id = record_archive_identifier(search_record)
     editions_checked = False
     if not cover_id and not archive_id:
         editions_data = ol_get(f"{ol_key}/editions.json", {"limit": 100})
@@ -3831,7 +4032,7 @@ def book_metadata_from_work(work_id, lang=None):
         "localized_title": localized_title,
         "download_title": download_title,
         "author": primary_author,
-        "cover_url": open_library_cover_url(cover_id) or archive_cover_url(archive_id),
+        "cover_url": book_cover_url(cover_id, archive_id),
         "description": extract_desc(search_record),
         "ol_key": ol_key,
         "_complete": bool(work) and (bool(search_record) or editions_checked),
@@ -3952,6 +4153,10 @@ def fallback_book_detail(work_id, lang=None):
         ], limit=10)
     else:
         download_queries = english_download_queries({**metadata, **identity})
+    subjects = bounded_identity_values([
+        canonical.get("subjects"),
+        metadata.get("subjects"),
+    ], limit=20)
     return {
         "success": True,
         "title": metadata.get("title", ""),
@@ -3964,8 +4169,11 @@ def fallback_book_detail(work_id, lang=None):
         "download_queries": download_queries,
         **identity,
         "description": metadata.get("description") or canonical.get("description", ""),
-        "subjects": canonical.get("subjects", []),
-        "similar_subjects": canonical.get("similar_subjects", []),
+        "subjects": subjects,
+        "similar_subjects": (
+            canonical.get("similar_subjects")
+            or similar_subject_candidates(subjects)
+        ),
         "complete": False,
     }
 
@@ -3981,7 +4189,8 @@ def build_book_detail(work_id, lang=None):
             key: value for key, value in metadata.items()
             if key in {
                 "title", "localized_title", "download_title", "author", "cover_url",
-                "title_aliases", "authors", "isbns", "description", "_complete",
+                "title_aliases", "authors", "isbns", "description", "subjects",
+                "similar_subjects", "_complete",
             }
         }
     if not work and not metadata:
@@ -3991,7 +4200,10 @@ def build_book_detail(work_id, lang=None):
         work,
         metadata.get("description", ""),
     )
-    subjects = work.get("subjects", [])[:20]
+    subjects = bounded_identity_values([
+        work.get("subjects", [])[:20],
+        metadata.get("subjects"),
+    ], limit=20)
     identity = collect_book_identity_metadata(metadata, work=work)
     enriched_metadata = {**metadata, **identity}
     detail = {
@@ -4057,6 +4269,10 @@ def get_book_detail(work_id, lang=None):
         detail = merge_canonical_book_detail(
             detail,
             alternate_canonical_book_detail(work_id, lang),
+        )
+        detail = merge_canonical_book_detail(
+            detail,
+            hinted_book_metadata(work_id, lang) or {},
         )
         detail = normalize_book_detail_recommendations(detail)
         detail["cover_url"] = localize_cover_url(detail.get("cover_url", ""))
@@ -4446,16 +4662,26 @@ def inject_book_context():
 def size_url(url, size="M"):
     if not url:
         return url
+    url = str(url)
     zoom = {"S": "1", "M": "3", "L": "5"}.get(size, "3")
-    local_cover = re.fullmatch(r"/olcover/(\d+)(?:/[SML](?:\.webp)?)?", url)
+    parsed = urlsplit(url)
+    local_path = parsed.path if not parsed.scheme and not parsed.netloc else url
+    local_cover = re.fullmatch(r"/olcover/(\d+)(?:/[SML](?:\.webp)?)?", local_path)
     if local_cover:
-        return open_library_cover_url(local_cover.group(1), size)
+        archive_id = (parse_qs(parsed.query).get("ia") or [""])[0]
+        return open_library_cover_url(local_cover.group(1), size, archive_id)
     archive_cover = re.fullmatch(
         r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML](?:\.webp)?)?",
-        url,
+        local_path,
     )
     if archive_cover:
         return archive_cover_url(archive_cover.group(1), size)
+    inventaire_cover = re.fullmatch(
+        r"/invcover/([a-f0-9]{40})(?:/[SML](?:\.webp)?)?",
+        local_path,
+    )
+    if inventaire_cover:
+        return inventaire_cover_url(inventaire_cover.group(1), size)
     remote_cover = re.search(r"covers\.openlibrary\.org/b/id/(\d+)-[SML]\.jpg", url)
     if remote_cover:
         return open_library_cover_url(remote_cover.group(1), size)
@@ -5009,7 +5235,123 @@ def similar_cache_key(ol_key, subjects, lang, current_title="", current_authors=
         normalize_match_text(value)
         for value in bounded_identity_values([current_title, current_authors], limit=7)
     )
-    return f"similar:v5:{lang}:{ol_key}:{normalized}:{identity}"
+    return f"similar:v6:{lang}:{ol_key}:{normalized}:{identity}"
+
+
+def fetch_inventaire_similar_books(
+    ol_key,
+    subjects,
+    lang,
+    current_title="",
+    current_authors=None,
+):
+    """Build canonical recommendations when Open Library is unavailable."""
+    subjects = bounded_identity_values(subjects, limit=2)
+    current_authors = bounded_identity_values(current_authors, limit=6)
+    selected = []
+    seen_keys = set()
+    seen_titles = {normalize_title(current_title)} if current_title else set()
+    complete = True
+
+    def append_book(book):
+        title_key = normalize_title(book.get("title", ""))
+        if (
+            not book.get("ol_key")
+            or book["ol_key"] == ol_key
+            or not title_key
+            or title_key in seen_titles
+            or book_seen(book, seen_keys)
+        ):
+            return
+        seen_titles.add(title_key)
+        remember_book(book, seen_keys)
+        remember_book_hint(book, lang)
+        selected.append(book)
+
+    for subject in subjects:
+        plan = plan_topic_query(subject, "topic")
+        ranks = [0]
+        if plan.inventaire_claims:
+            ranks.append(len(plan.queries) - 1)
+        pages = []
+        for rank in dict.fromkeys(ranks):
+            try:
+                pages.extend(_topic_inventaire_pages(plan, rank, lang, {}))
+            except Exception:
+                complete = False
+        if not pages or any(not page.available for page in pages):
+            complete = False
+        merged = merge_topic_candidates(
+            pages,
+            plan,
+            limit=24,
+            author_cap=4,
+            require_openlibrary=True,
+        )
+        filtered = filter_topic_results(
+            merged,
+            language="current",
+            current_language=lang,
+            author_cap=2,
+        )
+        for book in _topic_books_from_results(filtered, lang, "current"):
+            append_book(book)
+            if len(selected) >= 12:
+                return selected, complete
+
+    if current_authors and len(selected) < 12:
+        author = current_authors[0]
+        plan = plan_topic_query(author, "topic")
+        try:
+            pages = _topic_inventaire_pages(plan, 0, lang, {})
+        except Exception:
+            pages = []
+            complete = False
+        if not pages or any(not page.available for page in pages):
+            complete = False
+        for page in pages:
+            if not page.available:
+                continue
+            for candidate in page.candidates:
+                author_score = max((
+                    identity_match(
+                        author_match_score,
+                        candidate_author,
+                        author,
+                        current_authors,
+                    )[0]
+                    for candidate_author in candidate.authors
+                ), default=0)
+                if author_score < 180:
+                    continue
+                record = {
+                    "key": candidate.work_key,
+                    "title": candidate.title,
+                    "author_name": list(candidate.authors),
+                    "language": list(candidate.languages),
+                }
+                if not discovery_fallback_matches_language(record, lang):
+                    continue
+                append_book({
+                    "title": candidate.title,
+                    "author": candidate.authors[0] if candidate.authors else "",
+                    "cover_url": (
+                        inventaire_cover_url(candidate.cover_hash)
+                        or book_cover_url(candidate.cover_id, candidate.archive_id)
+                    ),
+                    "ol_key": candidate.work_key,
+                    "description": candidate.description,
+                    "published_year": candidate.published_year,
+                    "languages": list(candidate.languages),
+                    "subjects": list(candidate.semantic_terms),
+                    "sources": ["inventaire"],
+                    "reasons": ["Same author"],
+                    "reason": "Same author",
+                })
+                if len(selected) >= 12:
+                    return selected, complete
+
+    return canonicalize_book_covers(selected), complete
 
 def build_similar_books(
     ol_key,
@@ -5176,6 +5518,27 @@ def build_similar_books(
                 continue
             append_candidate(entry)
             if len(books) >= 6:
+                break
+
+    if not complete and len(books) < 12:
+        fallback_books, _fallback_complete = fetch_inventaire_similar_books(
+            ol_key,
+            subjects,
+            lang,
+            current_title,
+            current_authors,
+        )
+        for book in fallback_books:
+            title_key = normalize_title(book.get("title", ""))
+            if (
+                not title_key
+                or title_key in seen_titles
+                or book.get("ol_key") == ol_key
+            ):
+                continue
+            seen_titles.add(title_key)
+            books.append(book)
+            if len(books) >= 12:
                 break
     return (books, complete) if with_status else books
 
@@ -6177,20 +6540,64 @@ def ensure_cover_cached(namespace, identity, size, source_url, referer=""):
     clear_cover_failure(cache_path)
     return cache_path, False
 
-def cached_cover_response(namespace, identity, size, source_url, referer=""):
+
+def cached_cover_mimetype(cache_path):
+    if Image is not None:
+        return "image/webp"
+    try:
+        with open(cache_path, "rb") as source:
+            signature = source.read(16)
+    except OSError:
+        return "application/octet-stream"
+    if signature.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if signature.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if signature.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if signature.startswith(b"RIFF") and signature[8:12] == b"WEBP":
+        return "image/webp"
+    return "application/octet-stream"
+
+
+def cached_cover_response(
+    namespace,
+    identity,
+    size,
+    source_url,
+    referer="",
+    *,
+    fallback=None,
+):
     started = time.perf_counter()
     cache_path, hit = ensure_cover_cached(namespace, identity, size, source_url, referer)
+    served_namespace = namespace
+    if not cache_path and fallback:
+        fallback_namespace, fallback_identity, fallback_url, fallback_referer = fallback
+        cache_path, hit = ensure_cover_cached(
+            fallback_namespace,
+            fallback_identity,
+            size,
+            fallback_url,
+            fallback_referer,
+        )
+        served_namespace = fallback_namespace
     if not cache_path:
         return "", 404
     response = send_file(
         cache_path,
-        mimetype="image/webp" if Image is not None else "image/jpeg",
+        mimetype=cached_cover_mimetype(cache_path),
         conditional=True,
         max_age=2592000,
     )
     response.headers["Cache-Control"] = "public, max-age=2592000, stale-while-revalidate=604800, immutable"
     response.headers["X-LibFlix-Cover-Cache"] = "HIT" if hit else "MISS"
-    add_server_timing("cover", started, description="hit" if hit else "miss")
+    response.headers["X-LibFlix-Cover-Source"] = served_namespace
+    add_server_timing(
+        "cover",
+        started,
+        description=f"{served_namespace}-{'hit' if hit else 'miss'}",
+    )
     return response
 
 @app.route("/cover/<md5>")
@@ -6216,7 +6623,20 @@ def olcover(cover_id, size="M"):
         return "", 404
     s = size.upper() if size.upper() in ("S", "M", "L") else "M"
     url = f"https://covers.openlibrary.org/b/id/{cover_id}-{s}.jpg"
-    return cached_cover_response("openlibrary", str(cover_id), s, url)
+    archive_id = edition_archive_identifier({"ocaid": request.args.get("ia", "")})
+    fallback = (
+        "internetarchive",
+        archive_id,
+        f"https://archive.org/services/img/{archive_id}",
+        "",
+    ) if archive_id else None
+    return cached_cover_response(
+        "openlibrary",
+        str(cover_id),
+        s,
+        url,
+        fallback=fallback,
+    )
 
 @app.route("/iacover/<identifier>")
 @app.route("/iacover/<identifier>/<size>")
@@ -6227,6 +6647,18 @@ def iacover(identifier, size="M"):
     s = size.upper() if size.upper() in ("S", "M", "L") else "M"
     url = f"https://archive.org/services/img/{identifier}"
     return cached_cover_response("internetarchive", identifier, s, url)
+
+
+@app.route("/invcover/<cover_hash>")
+@app.route("/invcover/<cover_hash>/<size>")
+@app.route("/invcover/<cover_hash>/<size>.webp")
+def invcover(cover_hash, size="M"):
+    cover_hash = str(cover_hash or "").lower()
+    if not re.fullmatch(r"[a-f0-9]{40}", cover_hash):
+        return "", 404
+    s = size.upper() if size.upper() in ("S", "M", "L") else "M"
+    url = f"https://inventaire.io/img/entities/{cover_hash}"
+    return cached_cover_response("inventaire", cover_hash, s, url)
 
 
 def _cover_file_as_jpeg(cache_path):
@@ -6264,6 +6696,7 @@ def _kindle_cover_bytes(cover_url):
     parsed = urlsplit(str(cover_url or "").strip())
     if parsed.scheme or parsed.netloc:
         return b""
+    query = parse_qs(parsed.query)
     open_library_match = re.fullmatch(r"/olcover/(\d+)(?:/[SML])?(?:\.webp)?", parsed.path)
     if open_library_match:
         cover_id = open_library_match.group(1)
@@ -6277,7 +6710,15 @@ def _kindle_cover_bytes(cover_url):
             "L",
             source_url,
         )
-        return _cover_file_as_jpeg(cache_path)
+        cover_bytes = _cover_file_as_jpeg(cache_path)
+        if cover_bytes:
+            return cover_bytes
+        archive_id = edition_archive_identifier({
+            "ocaid": (query.get("ia") or [""])[0],
+        })
+        if archive_id:
+            return _kindle_cover_bytes(archive_cover_url(archive_id, "L"))
+        return b""
 
     archive_match = re.fullmatch(
         r"/iacover/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})(?:/[SML])?(?:\.webp)?",
@@ -6296,8 +6737,25 @@ def _kindle_cover_bytes(cover_url):
         )
         return _cover_file_as_jpeg(cache_path)
 
+    inventaire_match = re.fullmatch(
+        r"/invcover/([a-f0-9]{40})(?:/[SML])?(?:\.webp)?",
+        parsed.path,
+    )
+    if inventaire_match:
+        cover_hash = inventaire_match.group(1)
+        cached = _cached_cover_variant("inventaire", cover_hash)
+        if cached:
+            return _cover_file_as_jpeg(cached)
+        cache_path, _ = ensure_cover_cached(
+            "inventaire",
+            cover_hash,
+            "L",
+            f"https://inventaire.io/img/entities/{cover_hash}",
+        )
+        return _cover_file_as_jpeg(cache_path)
+
     download_match = re.fullmatch(r"/cover/([a-fA-F0-9]{32})(?:/[SML])?(?:\.webp)?", parsed.path)
-    cover_dir = (parse_qs(parsed.query).get("dir") or [""])[0]
+    cover_dir = (query.get("dir") or [""])[0]
     if download_match and re.fullmatch(r"[A-Za-z0-9_.-]{1,48}", cover_dir):
         md5 = download_match.group(1).lower()
         identity = f"{cover_dir}:{md5}"

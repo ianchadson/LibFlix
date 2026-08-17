@@ -35,7 +35,8 @@
     return value ? '<span class="edition-meta-item">' + escapeHtml(value) + '</span>' : '';
   }
 
-  function renderEdition(book, index) {
+  function renderEdition(book, index, options) {
+    options = options || {};
     const title = shorten(book.title || 'Untitled', 150);
     const author = shorten(book.author || '', 90);
     const publisher = shorten(book.publisher || '', 90);
@@ -50,8 +51,13 @@
     const downloadHref = book.md5
       ? '/download/' + encodeURIComponent(book.md5) + '?filename=' + encodeURIComponent(filename)
       : '';
-    const cover = book.cover_url
-      ? '<span class="edition-cover-loading" aria-hidden="true"></span><img class="edition-cover" data-cover-src="' + escapeHtml(book.cover_url) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="edition-cover-placeholder" hidden aria-hidden="true">' + escapeHtml((title[0] || '?').toUpperCase()) + '</div>'
+    const fallbackCoverUrl = String(options.fallbackCoverUrl || '');
+    const coverUrl = String(book.cover_url || fallbackCoverUrl);
+    const failedCoverFallback = book.cover_url && fallbackCoverUrl && book.cover_url !== fallbackCoverUrl
+      ? fallbackCoverUrl
+      : '';
+    const cover = coverUrl
+      ? '<span class="edition-cover-loading" aria-hidden="true"></span><img class="edition-cover" data-cover-src="' + escapeHtml(coverUrl) + '" data-cover-fallback="' + escapeHtml(failedCoverFallback) + '" alt="" loading="lazy" decoding="async" onload="this.classList.add(\'loaded\')" onerror="if(this.dataset.coverFallback&&this.dataset.coverFallbackTried!==\'1\'){this.dataset.coverFallbackTried=\'1\';this.src=this.dataset.coverFallback}else{this.hidden=true;this.nextElementSibling.hidden=false}"><div class="edition-cover-placeholder" hidden aria-hidden="true">' + escapeHtml((title[0] || '?').toUpperCase()) + '</div>'
       : '<div class="edition-cover-placeholder" aria-hidden="true">' + escapeHtml((title[0] || '?').toUpperCase()) + '</div>';
     const metadata = [
       '<span class="edition-format ' + escapeHtml(format) + '">' + escapeHtml(format) + '</span>',
@@ -64,7 +70,7 @@
       ? '<div class="edition-actions">' +
           '<a class="edition-action edition-download" href="' + downloadHref + '" data-format="' + escapeHtml(format) + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>' + escapeHtml(format.toUpperCase()) + '</span></a>' +
           (kindleCompatible
-            ? '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(book.cover_url || '') + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>'
+            ? '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(coverUrl) + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>'
             : '') +
         '</div>'
       : '<div class="edition-actions"><span class="edition-action edition-kindle" aria-disabled="true">Unavailable</span></div>';
@@ -82,8 +88,9 @@
     '</article>';
   }
 
-  function renderEditions(container, books) {
+  function renderEditions(container, books, options) {
     if (!container) return 0;
+    options = options || {};
     const visibleBooks = (books || []).filter(book => {
       const extension = String(book.ext || '').toLowerCase().replace(/[^a-z0-9]/g, '');
       return !hiddenKindleFormats.has(extension);
@@ -92,12 +99,12 @@
     const bestBook = visibleBooks[bestIndex];
     const otherBooks = visibleBooks.filter((book, index) => index !== bestIndex);
     const primary = bestBook
-      ? renderEdition(bestBook.best_match === true ? bestBook : { ...bestBook, best_match: true }, bestIndex)
+      ? renderEdition(bestBook.best_match === true ? bestBook : { ...bestBook, best_match: true }, bestIndex, options)
       : '';
     const others = otherBooks.length
       ? '<details class="edition-more">' +
           '<summary class="edition-more-summary"><span>Other options</span>' + icons.chevron + '</summary>' +
-          '<div class="edition-more-list">' + otherBooks.map(renderEdition).join('') + '</div>' +
+          '<div class="edition-more-list">' + otherBooks.map((book, index) => renderEdition(book, index, options)).join('') + '</div>' +
         '</details>'
       : '';
     container.innerHTML = primary + others;

@@ -117,6 +117,13 @@ class DiscoveryShellTests(unittest.TestCase):
         self.assertIn("responseNeedsRefresh(data)", refresh)
         self.assertIn("activePageRequest?.abort();", refresh)
         self.assertIn("partialRefreshCount = 4;", refresh)
+        self.assertIn("incomingSnapshotId === previousSnapshotId", refresh)
+        self.assertIn("if (canRefreshInPlace)", refresh)
+        self.assertIn("renderStartHere(starts, false);", refresh)
+        self.assertLess(
+            refresh.index("if (canRefreshInPlace)"),
+            refresh.index("bookGrid.replaceChildren();"),
+        )
         self.assertLess(
             refresh.index("bookGrid.replaceChildren();"),
             refresh.index("renderStartHere(starts, true);"),
@@ -170,6 +177,13 @@ class DiscoveryShellTests(unittest.TestCase):
         )
         self.assertNotIn(".home-topic-card::after", template)
         self.assertIn(".home-topic-rail { margin-right:-16px; }", template)
+
+    def test_failed_cover_images_cannot_override_hidden_fallback_state(self):
+        stylesheet = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+
+        self.assertIn(".book-card img[hidden]", stylesheet)
+        self.assertIn("display: none !important;", stylesheet)
+        self.assertIn(".book-card.no-cover .cover-skeleton", stylesheet)
 
 
 class SimilarRecommendationShellTests(unittest.TestCase):

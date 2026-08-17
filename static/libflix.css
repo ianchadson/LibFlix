@@ -698,6 +698,10 @@ body:has(.kindle-global-tray:not([hidden])) .app-toast {
   opacity: 1;
 }
 
+.book-card img[hidden] {
+  display: none !important;
+}
+
 .book-card .placeholder {
   position: relative;
   z-index: 2;
@@ -712,6 +716,10 @@ body:has(.kindle-global-tray:not([hidden])) .app-toast {
 .book-card .placeholder[hidden],
 .edition-cover-placeholder[hidden] {
   display: none !important;
+}
+
+.book-card.no-cover .cover-skeleton {
+  display: none;
 }
 
 .book-card .cover-skeleton {
@@ -2366,5 +2374,58 @@ footer {
 @media (display-mode: standalone) and (max-width: 768px) {
   html.pwa-mobile-nav-ready .mobile-app-nav {
     background: rgba(12, 13, 15, .985);
+  }
+}
+
+/* Missing artwork remains readable without presenting a broken-image state. */
+.book-card .placeholder,
+.hero-book .placeholder,
+.detail-cover-placeholder,
+.cover-placeholder {
+  position: relative;
+  overflow: hidden;
+  background: #24262b !important;
+  color: transparent !important;
+  font-size: 0 !important;
+  isolation: isolate;
+}
+
+.book-card .placeholder::before,
+.hero-book .placeholder::before,
+.detail-cover-placeholder::before,
+.cover-placeholder::before {
+  content: "";
+  position: absolute;
+  inset: 10%;
+  border: 1px solid rgba(255, 255, 255, .13);
+  border-left: 4px solid rgba(255, 255, 255, .2);
+  border-radius: 2px 5px 5px 2px;
+  background: rgba(255, 255, 255, .025);
+  box-shadow: inset 5px 0 rgba(0, 0, 0, .16);
+}
+
+.book-card .placeholder::after,
+.hero-book .placeholder::after,
+.detail-cover-placeholder::after,
+.cover-placeholder::after {
+  content: "";
+  position: absolute;
+  top: 31%;
+  right: 25%;
+  left: 27%;
+  height: 2px;
+  border-radius: 2px;
+  background: rgba(242, 13, 27, .66);
+  box-shadow: 0 13px rgba(255, 255, 255, .13);
+}
+
+@keyframes coverSkeletonPulse {
+  50% { opacity: .72; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .book-card .cover-skeleton,
+  .hero-book .cover-skeleton {
+    animation: coverSkeletonPulse 2.1s ease-in-out infinite !important;
   }
 }
