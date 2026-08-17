@@ -10,8 +10,9 @@ downloader layer, currently backed by libgen.li.
 
 The app supports fiction and non-fiction browsing, English and Chinese discovery
 filters, intent-aware topic and identity search, book previews, similar-book
-shelves, inline download search, direct downloads, and Send to Kindle via the
-user's SMTP settings.
+shelves, inline download search, direct downloads, and Send to Kindle through
+LibFlix's managed sender in production, with user SMTP retained as a local
+development fallback.
 
 ## About
 
@@ -380,11 +381,13 @@ current and previous year pages provide the optional NYT number-one signal.
 | `KINDLE_SOURCE_CACHE_TTL` | `86400` seconds | Idle lifetime for a verified EPUB/PDF source copy |
 | `KINDLE_SOURCE_CACHE_MAX_BYTES` | `5368709120` | Shared source-cache byte quota |
 | `KINDLE_PDF_METADATA_MAX_BYTES` | `20971520` | Largest PDF rewritten solely to improve metadata |
-| `KINDLE_RELAY_HOST` | empty | Optional managed SMTP relay hostname |
-| `KINDLE_RELAY_PORT` | `587` | Managed relay TLS submission port |
-| `KINDLE_RELAY_USER` | empty | Managed relay username |
+| `KINDLE_RELAY_HOST` | `smtp.resend.com` | Managed SMTP relay hostname |
+| `KINDLE_RELAY_PORT` | `465` | Managed relay TLS submission port |
+| `KINDLE_RELAY_USER` | `resend` | Managed relay username |
 | `KINDLE_RELAY_PASSWORD` | empty | Managed relay password |
-| `KINDLE_RELAY_SENDER` | relay username | Approved From address used by the managed relay |
+| `KINDLE_RELAY_PASSWORD_FILE` | `/opt/libflix/shared/resend-api-key` | File-backed relay secret stored outside releases |
+| `KINDLE_RELAY_SENDER` | `libflix@fomalhaut.app` | Verified From address used by the managed relay |
+| `KINDLE_RELAY_MAX_ATTACHMENT_MB` | `28` | Raw attachment ceiling below Resend's encoded message limit |
 | `LIBFLIX_TRUST_PROXY_HEADERS` | `0` | Accept Caddy's overwritten `X-LibFlix-Client-IP` only across the localhost Caddy-to-Gunicorn hop; enable only after applying the documented Caddy source allowlist/header rewrite |
 | `LIBFLIX_RATE_LIMITING_ENABLED` | `1` | Runtime protection switch; disable only in isolated regression-test environments |
 | `LIBFLIX_MEMORY_CACHE_MAX_ENTRIES` | `4096` | Maximum process-local metadata cache entries |
@@ -398,10 +401,19 @@ Without a managed relay, Send to Kindle settings are configured in the browser
 and stored in localStorage. The SMTP password is sent only when starting a
 delivery, remains in process memory for that job, and is never stored in SQLite.
 SMTP targets are restricted to public addresses on secure submission ports.
-When the required `KINDLE_RELAY_*` values are present, the server uses that
-relay and browser SMTP credentials are unnecessary. Managed delivery accepts
-only `@kindle.com` recipients; public deployments still need account-level
-authorization and quotas before enabling a shared relay.
+Production uses the verified `libflix@fomalhaut.app` sender through Resend. The
+domain has DKIM, SPF, MX, and DMARC records, while the domain-limited sending key
+is provisioned once at `/opt/libflix/shared/resend-api-key` with owner
+`libflix`, mode `0600`. Normal releases leave this file untouched; a recovery
+copy is held in the protected GitHub `production` environment secret
+`RESEND_API_KEY`. Neither the key nor relay credentials are returned to the
+browser or written to SQLite.
+
+When the password file or explicit `KINDLE_RELAY_PASSWORD` is available, the
+server ignores browser SMTP credentials and stores only the user's Kindle
+address in localStorage. Managed delivery accepts only `@kindle.com`
+recipients, rejects prepared attachments above 28 MB, and remains covered by
+the application's per-client and global delivery limits.
 
 The app remains proxy-agnostic with proxy identity trust disabled. The current
 Cloudflare production deployment enables per-client limiting only after Caddy

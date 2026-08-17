@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-08-17 - Managed Kindle sender
+
+- Verified `fomalhaut.app` for Resend with DKIM, SPF, MX, and DMARC records.
+- Added file-backed production relay credentials outside release directories
+  and configured `libflix@fomalhaut.app` as the approved sender.
+- Removed legacy SMTP credentials from managed-browser storage; only the
+  user's `@kindle.com` destination remains local.
+- Added a provider-safe 28 MB prepared-attachment ceiling and exact approved
+  sender guidance in Kindle settings.
+- Documented secret ownership, recovery storage, deployment persistence, and
+  managed-delivery safeguards.
+
 ## 2026-08-07 - Stable book hydration and restored descriptions
 
 - Preserved bounded provider descriptions in topic results, repaired minor

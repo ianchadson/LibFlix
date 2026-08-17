@@ -329,24 +329,34 @@ mixed old-page/new-shell sessions.
 The older `/api/sendtokindle` endpoint remains available for compatibility, but
 the current UI uses background jobs.
 
-### Optional managed relay
+### Production managed relay
 
-A geographically closer submission relay can be enabled without changing the
-browser UI:
+Production sends through Resend from the verified
+`libflix@fomalhaut.app` identity. Configuration is file-backed so the key stays
+outside release archives and browser storage:
 
 ```text
 KINDLE_RELAY_HOST
 KINDLE_RELAY_PORT
 KINDLE_RELAY_USER
 KINDLE_RELAY_PASSWORD
+KINDLE_RELAY_PASSWORD_FILE
 KINDLE_RELAY_SENDER
+KINDLE_RELAY_MAX_ATTACHMENT_MB
 ```
 
-When the required relay variables are present, the server ignores browser SMTP
-credentials and uses the managed relay. It rejects recipients outside
-`@kindle.com`. Provisioning the external relay account, adding its sender to the
-user's Amazon approved-sender list, authentication, and per-user quotas remain
-external operations.
+The default password file is `/opt/libflix/shared/resend-api-key`. It is owned
+by `libflix`, has mode `0600`, and persists across releases. A recovery copy is
+stored as the protected GitHub `production` environment secret
+`RESEND_API_KEY`; no credential is committed, returned to the browser, or
+written into job storage.
+
+When the password file or explicit password variable is available, the server
+ignores browser SMTP credentials and stores only the user's Kindle address in
+localStorage. It rejects recipients outside `@kindle.com` and prepared
+attachments above 28 MB. DKIM, SPF, MX, and DMARC authenticate the domain. The
+user must add `libflix@fomalhaut.app` to Amazon's approved personal document
+sender list before delivery.
 
 ## Observability
 

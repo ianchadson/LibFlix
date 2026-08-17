@@ -119,11 +119,22 @@ KINDLE_SOURCE_CACHE_MAX_BYTES = max(
     0,
     int(os.environ.get("KINDLE_SOURCE_CACHE_MAX_BYTES", str(5 * 1024**3))),
 )
-KINDLE_RELAY_HOST = os.environ.get("KINDLE_RELAY_HOST", "").strip()
-KINDLE_RELAY_PORT = os.environ.get("KINDLE_RELAY_PORT", "587").strip()
-KINDLE_RELAY_USER = os.environ.get("KINDLE_RELAY_USER", "").strip()
+KINDLE_RELAY_HOST = os.environ.get("KINDLE_RELAY_HOST", "smtp.resend.com").strip()
+KINDLE_RELAY_PORT = os.environ.get("KINDLE_RELAY_PORT", "465").strip()
+KINDLE_RELAY_USER = os.environ.get("KINDLE_RELAY_USER", "resend").strip()
 KINDLE_RELAY_PASSWORD = os.environ.get("KINDLE_RELAY_PASSWORD", "")
-KINDLE_RELAY_SENDER = os.environ.get("KINDLE_RELAY_SENDER", "").strip()
+KINDLE_RELAY_PASSWORD_FILE = os.environ.get(
+    "KINDLE_RELAY_PASSWORD_FILE",
+    "/opt/libflix/shared/resend-api-key",
+)
+KINDLE_RELAY_SENDER = os.environ.get(
+    "KINDLE_RELAY_SENDER",
+    "libflix@fomalhaut.app",
+).strip()
+KINDLE_RELAY_MAX_ATTACHMENT_BYTES = max(
+    1024 * 1024,
+    int(os.environ.get("KINDLE_RELAY_MAX_ATTACHMENT_MB", "28")) * 1024 * 1024,
+)
 SHELF_REFRESH_TTL = 21600
 OL_LIST_FIELDS = "key,title,author_name,cover_i,cover_id,language"
 OL_COVER_FIELDS = f"{OL_LIST_FIELDS},editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id"
@@ -4415,6 +4426,7 @@ def inject_book_context():
         (int(os.path.getmtime(path)) for path in static_paths if os.path.exists(path)),
         default=1,
     )
+    managed_relay = _configured_kindle_relay()
     return {
         "book_lang": get_book_lang(),
         "book_lang_label": BOOK_LANG_CONFIG[get_book_lang()]["label"],
@@ -4426,9 +4438,8 @@ def inject_book_context():
         "discover_url": clean_discover_url,
         "book_url": book_url,
         "asset_version": asset_version,
-        "kindle_managed_relay": bool(
-            KINDLE_RELAY_HOST and KINDLE_RELAY_USER and KINDLE_RELAY_PASSWORD
-        ),
+        "kindle_managed_relay": bool(managed_relay),
+        "kindle_managed_sender": managed_relay["sender"] if managed_relay else "",
     }
 
 @app.template_filter("size_url")
@@ -6627,7 +6638,14 @@ def _send_attachment_progress(
 
 
 def _configured_kindle_relay():
-    if not (KINDLE_RELAY_HOST and KINDLE_RELAY_USER and KINDLE_RELAY_PASSWORD):
+    password = KINDLE_RELAY_PASSWORD
+    if not password:
+        try:
+            with open(KINDLE_RELAY_PASSWORD_FILE, "r", encoding="utf-8") as secret_file:
+                password = secret_file.read().strip()
+        except OSError:
+            password = ""
+    if not (KINDLE_RELAY_HOST and KINDLE_RELAY_USER and password):
         return None
     try:
         port = int(KINDLE_RELAY_PORT)
@@ -6639,7 +6657,7 @@ def _configured_kindle_relay():
         "host": KINDLE_RELAY_HOST,
         "port": port,
         "user": KINDLE_RELAY_USER,
-        "password": KINDLE_RELAY_PASSWORD,
+        "password": password,
         "sender": KINDLE_RELAY_SENDER or KINDLE_RELAY_USER,
         "managed": True,
     }
@@ -6805,6 +6823,11 @@ def _send_to_kindle_events(data):
         title = prepared.title
         attachment_path = prepared.path
         attachment_size = os.path.getsize(attachment_path)
+        if smtp_configuration.get("managed") and attachment_size > KINDLE_RELAY_MAX_ATTACHMENT_BYTES:
+            maximum = KINDLE_RELAY_MAX_ATTACHMENT_BYTES // (1024 * 1024)
+            raise RuntimeError(
+                f"This edition is too large for Kindle delivery. Choose one under {maximum} MB."
+            )
         updates = [field for field in prepared.updated_fields if field != "cover"]
         detail_parts = []
         if updates:

@@ -54,6 +54,7 @@
   .kindle-close:hover { background:rgba(255,255,255,.14); }
   .kindle-form { padding:18px 20px 20px; }
   .kindle-grid { display:grid; grid-template-columns:1fr 104px; gap:12px; }
+  .kindle-grid[hidden], .kindle-field[hidden] { display:none; }
   .kindle-field { margin-bottom:12px; }
   .kindle-field label { display:block; font-size:.68rem; color:rgba(255,255,255,.48); text-transform:uppercase; letter-spacing:.055em; margin:0 0 6px; }
   .kindle-field input { width:100%; height:38px; border-radius:10px; border:1px solid rgba(255,255,255,.11); background:rgba(255,255,255,.065); color:#fff; padding:0 11px; font-size:.84rem; outline:none; }
@@ -320,7 +321,7 @@
       </div>
       <div class="kindle-hint">
         {% if kindle_managed_relay %}
-        Delivery is handled by LibFlix. Add the LibFlix sender address to Amazon's approved personal document list.
+        Delivery is handled by LibFlix. Add <strong>{{ kindle_managed_sender }}</strong> to Amazon's approved personal document list.
         {% else %}
         Gmail works best with an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a>. Add the sender email to Amazon's approved personal document list.
         {% endif %}
@@ -942,7 +943,13 @@
     const getKindleSettings = () => {
       try {
         const raw = localStorage.getItem('libflix_kindle');
-        return raw ? JSON.parse(raw) : null;
+        const settings = raw ? JSON.parse(raw) : null;
+        if (KINDLE_MANAGED_RELAY && settings && (settings.host || settings.sender || settings.pass)) {
+          const managedSettings = { kindle: settings.kindle || '' };
+          localStorage.setItem('libflix_kindle', JSON.stringify(managedSettings));
+          return managedSettings;
+        }
+        return settings;
       } catch {
         return null;
       }
@@ -1012,8 +1019,9 @@
     };
     window.saveKindleSettings = () => {
       const savedSettings = getKindleSettings();
-      const settings = {
-        kindle: document.getElementById('ke_kindle')?.value.trim() || '',
+      const kindle = document.getElementById('ke_kindle')?.value.trim() || '';
+      const settings = KINDLE_MANAGED_RELAY ? { kindle } : {
+        kindle,
         host: document.getElementById('ke_host')?.value.trim() || '',
         port: document.getElementById('ke_port')?.value.trim() || '587',
         sender: document.getElementById('ke_sender')?.value.trim() || '',
@@ -1021,6 +1029,10 @@
       };
       if (!settings.kindle || (!KINDLE_MANAGED_RELAY && (!settings.host || !settings.sender || !settings.pass))) {
         setKindleStatus('All fields are required.', '#ff6b72');
+        return;
+      }
+      if (KINDLE_MANAGED_RELAY && !/^[^\s@]+@kindle\.com$/i.test(settings.kindle)) {
+        setKindleStatus('Use your @kindle.com address.', '#ff6b72');
         return;
       }
       localStorage.setItem('libflix_kindle', JSON.stringify(settings));

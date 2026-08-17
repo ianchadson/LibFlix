@@ -211,6 +211,30 @@ class KindleJobTests(unittest.TestCase):
         getaddrinfo.assert_not_called()
         submit.assert_not_called()
 
+    def test_managed_relay_reads_file_backed_secret_without_exposing_it(self):
+        secret_path = os.path.join(self.tempdir.name, "resend-api-key")
+        with open(secret_path, "w", encoding="utf-8") as secret_file:
+            secret_file.write("server-only-secret")
+        os.chmod(secret_path, 0o600)
+
+        with (
+            patch.object(app, "KINDLE_RELAY_PASSWORD", ""),
+            patch.object(app, "KINDLE_RELAY_PASSWORD_FILE", secret_path),
+            patch.object(app, "KINDLE_RELAY_HOST", "smtp.resend.com"),
+            patch.object(app, "KINDLE_RELAY_PORT", "465"),
+            patch.object(app, "KINDLE_RELAY_USER", "resend"),
+            patch.object(app, "KINDLE_RELAY_SENDER", "libflix@fomalhaut.app"),
+        ):
+            relay = app._configured_kindle_relay()
+            with app.app.test_request_context("/"):
+                context = app.inject_book_context()
+
+        self.assertEqual(relay["password"], "server-only-secret")
+        self.assertEqual(relay["sender"], "libflix@fomalhaut.app")
+        self.assertTrue(context["kindle_managed_relay"])
+        self.assertEqual(context["kindle_managed_sender"], "libflix@fomalhaut.app")
+        self.assertNotIn("server-only-secret", repr(context))
+
 
 if __name__ == "__main__":
     unittest.main()
