@@ -269,6 +269,37 @@ class DiscoveryFallbackTests(TemporaryCacheTest):
             queries,
         )
 
+    def test_known_identity_survives_a_complete_catalog_outage(self):
+        with patch.object(app, "ol_get", return_value=None):
+            books, total, total_pages = app.fetch_discovery_books(
+                "The Energy Game Amantha Imber",
+                page=1,
+                lang="en",
+            )
+
+        self.assertEqual(len(books), 1)
+        self.assertEqual(books[0]["title"], "The Energy Game")
+        self.assertEqual(books[0]["author"], "Amantha Imber")
+        self.assertEqual(books[0]["ol_key"], "/works/OL45347056W")
+        self.assertEqual((total, total_pages), (1, 1))
+
+    def test_empty_cached_identity_uses_curated_recovery(self):
+        key = "discover:v9:en:The Energy Game Amantha Imber:1"
+        app.cache_set(key, ([], 0, 1))
+
+        books, total, total_pages = app.cached_discovery_books(
+            "The Energy Game Amantha Imber",
+            page=1,
+            lang="en",
+        )
+
+        self.assertEqual([book["ol_key"] for book in books], ["/works/OL45347056W"])
+        self.assertEqual((total, total_pages), (1, 1))
+
+    def test_curated_identity_recovery_remains_strict(self):
+        self.assertEqual(app.known_identity_books("energy", "en"), [])
+        self.assertEqual(app.known_identity_books("unrelated meditation", "en"), [])
+
     def test_art_of_simple_living_sparse_work_stays_in_discovery_results(self):
         records = [
             self.energy_game_record(

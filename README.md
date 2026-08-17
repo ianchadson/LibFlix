@@ -112,6 +112,10 @@ current and previous year pages provide the optional NYT number-one signal.
   catalogued Open Library works remain searchable before language or cover
   metadata has been assigned, without mixing explicitly foreign-language
   records into EN or CN results.
+- **Reviewed identity recovery** - a small strict set of previously reported
+  canonical title/author identities remains searchable during a complete
+  catalog outage. It restores the real book route without inventing cover art
+  or download availability.
 - **Consistent CN title presentation** - CN shelves and hero items use stable
   English edition titles when Open Library provides them. Book pages pair that
   title with a verified Chinese title, while download rows preserve the exact
@@ -314,10 +318,11 @@ current and previous year pages provide the optional NYT number-one signal.
   durable stale fallback. Topic search has a bounded overall provider wait and
   can identify a partial response without letting one source failure poison a
   complete cached result. Literal title/author search can accept a strict,
-  directly mapped Inventaire work while Open Library is down. An unavailable upstream no longer turns a cached
-  category, topic, or book into a blank page. The Wikipedia editorial refresh
-  runs outside the provider deadline and its absence or failure never makes
-  Topics partial.
+  directly mapped Inventaire work or a reviewed canonical identity while Open
+  Library is down. An unavailable upstream no longer turns a cached category,
+  topic, or book into a blank page. The Wikipedia editorial refresh runs
+  outside the provider deadline and its absence or failure never makes Topics
+  partial.
 - **Stable partial recovery** - repeated topic recovery polls patch unchanged
   cards in place, preserving decoded covers and scroll position instead of
   rebuilding the shelf. Semantic topic evidence is retained as an internal

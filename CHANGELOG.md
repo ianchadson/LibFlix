@@ -13,6 +13,9 @@
   reused canonical book covers for download editions missing their own image.
 - Ensured failed lazy cover requests cannot be repainted as broken-image glyphs
   by card sizing rules while the intentional fallback is active.
+- Preserved reviewed exact-title identities, including The Energy Game and The
+  Art of Simple Living, through complete catalog outages without inventing a
+  cover or downloadable edition.
 - Preserved decoded covers and card nodes across unchanged partial-source polls,
   and moved the mobile recovery message below the intent/filter controls.
 - Added mapped Inventaire subject and same-author recovery for More Like This,

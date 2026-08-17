@@ -231,6 +231,16 @@ KNOWN_WORK_METADATA = {
         "author": "Walter Isaacson",
         "cover_url": "/olcover/12374726/M.webp",
     },
+    "OL45347056W": {
+        "title": "The Energy Game",
+        "author": "Amantha Imber",
+        "cover_url": "",
+    },
+    "OL20153193W": {
+        "title": "The Art of Simple Living",
+        "author": "Shunmyo Masuno",
+        "cover_url": "",
+    },
 }
 GENERIC_SIMILAR_SUBJECTS = {
     "action/adventure", "biography", "business", "competition", "contests",
@@ -3198,6 +3208,52 @@ def paginate_topic_discovery_payload(payload, page):
     })
     return paged
 
+def known_identity_books(q, lang=None):
+    """Return strict curated identities when every live catalog is unavailable."""
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    identifier_type, _ = discovery_identifier(q)
+    if not identifier_type and len(relevance_tokens(q)) < 2:
+        return []
+    books = []
+    seen_keys = set()
+    for work_id in KNOWN_WORK_METADATA:
+        metadata = known_book_metadata(work_id, lang)
+        if not metadata or (lang == "cn" and not metadata.get("localized_title")):
+            continue
+        record = {
+            "key": metadata.get("ol_key"),
+            "title": metadata.get("title"),
+            "alternative_title": bounded_identity_values([
+                metadata.get("localized_title"),
+                metadata.get("title_aliases"),
+            ]),
+            "author_name": bounded_identity_values([
+                metadata.get("author"),
+                metadata.get("authors"),
+            ], limit=8),
+            "isbn": metadata.get("isbns") or [],
+        }
+        if discovery_record_relevance(record, q) < 900:
+            continue
+        title = (
+            metadata.get("localized_title")
+            if lang == "cn" else metadata.get("title")
+        ) or metadata.get("title") or "Book"
+        book = {
+            "title": title,
+            "author": metadata.get("author", ""),
+            "cover_url": localize_cover_url(metadata.get("cover_url", "")),
+            "ol_key": metadata.get("ol_key", ""),
+            "description": metadata.get("description", ""),
+        }
+        if not book["ol_key"] or book_seen(book, seen_keys):
+            continue
+        remember_book(book, seen_keys)
+        remember_book_hint(book, lang)
+        books.append(book)
+    return books
+
+
 def cached_discovery_books(q, page=1, lang=None):
     """Return discovery data without ever waiting on Open Library."""
     lang = lang or DEFAULT_BOOK_LANG
@@ -3209,6 +3265,13 @@ def cached_discovery_books(q, page=1, lang=None):
             cache_set(ckey, cached)
     if cached is not None:
         books, total, total_pages = cached
+        if page == 1 and not books:
+            known_books = known_identity_books(q, lang)
+            if known_books:
+                cached = (known_books, len(known_books), 1)
+                cache_set(ckey, cached)
+                disk_cache_set(ckey, cached)
+                books, total, total_pages = cached
         return canonicalize_book_covers(books), total, total_pages
     return cached
 
@@ -3305,7 +3368,13 @@ def fetch_discovery_books(q, page=1, lang=None):
         else:
             inventaire_books, inventaire_available = [], False
 
-    if raw_data is None and covered_data is None and not inventaire_available:
+    known_books = known_identity_books(q, lang) if page == 1 else []
+    if (
+        raw_data is None
+        and covered_data is None
+        and not inventaire_available
+        and not known_books
+    ):
         return [], None, 1
 
     raw_data = raw_data or {}
@@ -3313,6 +3382,12 @@ def fetch_discovery_books(q, page=1, lang=None):
 
     books = []
     seen_keys = set()
+
+    for book in known_books:
+        if book_seen(book, seen_keys):
+            continue
+        books.append(book)
+        remember_book(book, seen_keys)
 
     def append_records(records, *, allow_missing_cover, maximum=None):
         added = 0

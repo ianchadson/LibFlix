@@ -425,6 +425,7 @@ dependency.
 | Open Library timeout | Cached page/detail remains visible; refresh retries later |
 | Open Library repeated outage | Circuit opens briefly; stale data returns without repeated waits |
 | Open Library identity outage | Directly mapped, locally relevance-checked Inventaire works remain searchable |
+| Complete identity-catalog outage | Reviewed exact title/author identities restore their canonical book routes without claiming a cover or download |
 | Open Library recommendation outage | Mapped Inventaire subject and same-author works form a partial More Like This shelf |
 | Open Library cover outage | Validated Internet Archive fallback is served when present; otherwise the intentional book placeholder remains |
 | Inventaire outage | Open Library and durable caches continue independently |
