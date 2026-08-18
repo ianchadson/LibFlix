@@ -6,6 +6,7 @@
     send: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"></path><path d="M22 2 11 13"></path></svg>',
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>',
     chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>',
+    info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><path d="M12 8h.01"></path></svg>',
   };
   const hiddenKindleFormats = new Set(['azw', 'azw3', 'mobi']);
 
@@ -47,6 +48,18 @@
     const reasons = Array.isArray(book.recommendation_reasons)
       ? book.recommendation_reasons.filter(Boolean).slice(0, 4)
       : [];
+    const recommendationId = 'edition-reasons-' + index;
+    const recommendation = recommended
+      ? reasons.length
+        ? '<span class="edition-recommendation">' +
+            '<button class="edition-recommended" type="button" aria-describedby="' + recommendationId + '">Best for Kindle' + icons.info + '</button>' +
+            '<span class="edition-reasons-tooltip" id="' + recommendationId + '" role="tooltip">' +
+              '<span class="edition-tooltip-title">Why this edition</span>' +
+              '<span class="edition-tooltip-list">' + reasons.map(reason => '<span class="edition-tooltip-reason">' + icons.check + '<span>' + escapeHtml(reason) + '</span></span>').join('') + '</span>' +
+            '</span>' +
+          '</span>'
+        : '<span class="edition-recommended">Best for Kindle</span>'
+      : '';
     const filename = cleanFilename(book.title, format);
     const downloadHref = book.md5
       ? '/download/' + encodeURIComponent(book.md5) + '?filename=' + encodeURIComponent(filename)
@@ -78,11 +91,10 @@
     return '<article class="edition-row' + (recommended ? ' recommended' : '') + '">' +
       '<div class="edition-cover-frame">' + cover + '</div>' +
       '<div class="edition-copy">' +
-        '<div class="edition-title-line"><h3 class="edition-title" title="' + escapeHtml(book.title || '') + '">' + escapeHtml(title) + '</h3>' + (recommended ? '<span class="edition-recommended">Best for Kindle</span>' : '') + '</div>' +
+        '<div class="edition-title-line"><h3 class="edition-title" title="' + escapeHtml(book.title || '') + '">' + escapeHtml(title) + '</h3>' + recommendation + '</div>' +
         (author ? '<div class="edition-byline">' + escapeHtml(author) + '</div>' : '') +
         (publisher ? '<div class="edition-publisher">' + escapeHtml(publisher) + '</div>' : '') +
         '<div class="edition-meta">' + metadata + '</div>' +
-        (recommended && reasons.length ? '<div class="edition-reasons" aria-label="Why this edition is recommended">' + reasons.map(reason => '<span>' + escapeHtml(reason) + '</span>').join('') + '</div>' : '') +
       '</div>' +
       actions +
     '</article>';
@@ -99,12 +111,13 @@
     const bestBook = visibleBooks[bestIndex];
     const otherBooks = visibleBooks.filter((book, index) => index !== bestIndex);
     const primary = bestBook
-      ? renderEdition(bestBook.best_match === true ? bestBook : { ...bestBook, best_match: true }, bestIndex, options)
+      ? renderEdition(bestBook.best_match === true ? bestBook : { ...bestBook, best_match: true }, 0, options)
       : '';
-    const others = otherBooks.length
-      ? '<details class="edition-more">' +
+    const hasMoreOptions = otherBooks.length || options.hasMorePages;
+    const others = hasMoreOptions
+      ? '<details class="edition-more"' + (options.expanded ? ' open' : '') + '>' +
           '<summary class="edition-more-summary"><span>Other options</span>' + icons.chevron + '</summary>' +
-          '<div class="edition-more-list">' + otherBooks.map((book, index) => renderEdition(book, index, options)).join('') + '</div>' +
+          '<div class="edition-more-list">' + otherBooks.map((book, index) => renderEdition(book, index + 1, options)).join('') + '</div>' +
         '</details>'
       : '';
     container.innerHTML = primary + others;

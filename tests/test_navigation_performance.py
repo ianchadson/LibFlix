@@ -6,6 +6,16 @@ import app
 
 
 class PartialNavigationTests(unittest.TestCase):
+    def test_all_footer_pages_link_to_the_public_repository(self):
+        footer = (Path(app.APP_DIR) / "templates" / "_footer.html").read_text()
+
+        self.assertIn('href="https://github.com/ianchadson/LibFlix"', footer)
+        self.assertIn('rel="noopener noreferrer"', footer)
+        self.assertIn('aria-label="LibFlix on GitHub"', footer)
+        for template_name in ("index.html", "category.html", "book.html", "topics.html"):
+            template = (Path(app.APP_DIR) / "templates" / template_name).read_text()
+            self.assertIn('{% include "_footer.html" %}', template)
+
     def test_partial_navigation_omits_persistent_shell_code(self):
         client = app.app.test_client()
         path = "/preview?title=Performance%20Test&author=LibFlix"
@@ -226,6 +236,13 @@ class SimilarRecommendationShellTests(unittest.TestCase):
         self.assertIn("loadBookDetails();", template)
         self.assertIn("Finding similar books…", template)
 
+    def test_recommendation_loader_stays_close_to_its_heading(self):
+        stylesheet = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+        loading_rule = stylesheet.split(".similar-loading {", 1)[1].split("}", 1)[0]
+
+        self.assertIn("min-height: 32px !important;", loading_rule)
+        self.assertIn("padding: 2px 0 4px;", loading_rule)
+
 
 class BookPageStabilityTests(unittest.TestCase):
     def test_complete_server_render_skips_duplicate_detail_hydration(self):
@@ -282,6 +299,39 @@ class DownloadShellTests(unittest.TestCase):
 
                 self.assertEqual(loader.count('class="edition-skeleton"'), 1)
                 self.assertIn("Finding the best available edition", loader)
+
+    def test_download_pages_follow_the_other_options_disclosure(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+        downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()
+        stylesheet = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+        results = template.split("function showDownloadResults(data)", 1)[1].split(
+            "function doSearch", 1
+        )[0]
+        empty_branch = results.split("if (!renderedCount)", 1)[1].split("return;", 1)[0]
+
+        self.assertIn("options.hasMorePages", downloads)
+        self.assertIn("options.expanded ? ' open' : ''", downloads)
+        self.assertIn("downloadOptionsExpanded = Boolean(disclosure?.open);", results)
+        self.assertIn(
+            "downloadPagination.hidden = totalPages <= 1 || !downloadOptionsExpanded;",
+            results,
+        )
+        self.assertIn("downloadPagination.replaceChildren();", empty_branch)
+        self.assertNotIn("renderPagination", empty_branch)
+        self.assertIn(".download-pagination[hidden]", stylesheet)
+
+    def test_best_match_reasons_are_hidden_in_an_accessible_tooltip(self):
+        downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()
+        stylesheet = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+
+        self.assertNotIn('class="edition-reasons"', downloads)
+        self.assertIn('class="edition-recommendation"', downloads)
+        self.assertIn('class="edition-reasons-tooltip"', downloads)
+        self.assertIn('role="tooltip"', downloads)
+        self.assertIn('aria-describedby="', downloads)
+        self.assertIn(".edition-recommendation:hover .edition-reasons-tooltip", stylesheet)
+        self.assertIn(".edition-recommendation:focus-within .edition-reasons-tooltip", stylesheet)
+        self.assertIn("visibility: hidden;", stylesheet)
 
 
 if __name__ == "__main__":

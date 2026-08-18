@@ -297,9 +297,50 @@ body.is-navigating .lib-nav::after {
 
 .app-footer {
   padding: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
   color: var(--app-faint);
   text-align: center;
   font-size: .78rem;
+}
+
+.app-footer-separator {
+  color: #34363b;
+}
+
+.app-footer-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: inherit;
+  font-weight: 500;
+  opacity: .78;
+  text-decoration: none;
+  transition: color 140ms ease, opacity 140ms ease;
+}
+
+.app-footer-link:hover {
+  color: #7b7e85;
+  opacity: 1;
+}
+
+.app-footer-link:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid rgba(255, 255, 255, .5);
+  outline-offset: 4px;
+}
+
+.app-footer-link svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .kindle-modal {
@@ -1431,13 +1472,46 @@ footer {
   -webkit-line-clamp: 2;
 }
 
-.edition-recommended {
+.edition-recommendation {
+  position: relative;
   flex: 0 0 auto;
+  display: inline-flex;
+}
+
+.edition-recommended {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
   color: #ff777f;
+  font-family: inherit;
   font-size: .68rem;
   font-weight: 760;
+  line-height: 1.2;
   text-transform: uppercase;
   letter-spacing: 0;
+}
+
+button.edition-recommended {
+  cursor: help;
+}
+
+.edition-recommended svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.edition-recommended:focus-visible {
+  outline: 2px solid rgba(255, 119, 127, .72);
+  outline-offset: 3px;
 }
 
 .edition-byline {
@@ -1473,20 +1547,67 @@ footer {
   gap: 5px;
 }
 
-.edition-reasons {
-  margin-top: 7px;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+.edition-reasons-tooltip {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  width: max-content;
+  min-width: 205px;
+  max-width: 260px;
+  padding: 10px 11px;
+  border: 1px solid rgba(255, 255, 255, .13);
+  border-radius: 6px;
+  background: rgba(22, 23, 26, .98);
+  box-shadow: 0 14px 32px rgba(0, 0, 0, .42);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  visibility: hidden;
+  transition: opacity 140ms ease, transform 140ms ease, visibility 140ms ease;
 }
 
-.edition-reasons span {
-  padding: 3px 6px;
-  border-radius: 4px;
-  background: rgba(242, 13, 27, .08);
+.edition-recommendation:hover .edition-reasons-tooltip,
+.edition-recommendation:focus-within .edition-reasons-tooltip {
+  opacity: 1;
+  transform: translateY(0);
+  visibility: visible;
+}
+
+.edition-tooltip-title {
+  display: block;
+  margin-bottom: 7px;
+  color: #f4f4f5;
+  font-size: .72rem;
+  font-weight: 720;
+  line-height: 1.25;
+}
+
+.edition-tooltip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.edition-tooltip-reason {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   color: #c4c6cb;
-  font-size: .66rem;
-  line-height: 1.2;
+  font-size: .7rem;
+  line-height: 1.3;
+}
+
+.edition-tooltip-reason > svg {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  margin-top: 1px;
+  fill: none;
+  stroke: #ff777f;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2;
 }
 
 .edition-format {
@@ -1768,6 +1889,10 @@ footer {
   gap: 5px;
 }
 
+.download-pagination[hidden] {
+  display: none !important;
+}
+
 .download-page-button,
 .download-page-current {
   min-width: 36px;
@@ -1821,10 +1946,11 @@ footer {
 }
 
 .similar-loading {
-  min-height: 198px !important;
+  min-height: 32px !important;
   display: flex;
   align-items: center;
   gap: 10px;
+  padding: 2px 0 4px;
   color: var(--app-muted);
   font-size: .84rem;
 }
@@ -2086,6 +2212,11 @@ footer {
     align-items: flex-start;
     flex-direction: column;
     gap: 3px;
+  }
+
+  .edition-reasons-tooltip {
+    right: auto;
+    left: 0;
   }
 
   .edition-title {

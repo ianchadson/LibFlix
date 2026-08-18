@@ -87,7 +87,7 @@
     </section>
   </main>
 
-  <footer class="app-footer">Powered by Open Library &amp; libgen.li</footer>
+  {% include "_footer.html" %}
 
   <script data-page-script>
     let bookTitle = {{ title | tojson }};
@@ -131,6 +131,7 @@
     let pageDisposed = false;
     let downloadRequested = false;
     let downloadState = 'idle';
+    let downloadOptionsExpanded = false;
     let activeDownloadQueryIndex = 0;
     let detailRetryCount = 0;
     let detailRetryDeadline = Date.now() + 30000;
@@ -707,22 +708,31 @@
     }
 
     function showDownloadResults(data) {
+      const totalPages = Math.max(1, Number(data.total_pages) || 1);
+      downloadPagination.hidden = true;
       const renderedCount = window.LibFlixDownloads.renderEditions(resultsBody, data.books, {
         fallbackCoverUrl: bookCoverUrl,
+        hasMorePages: totalPages > 1,
+        expanded: downloadOptionsExpanded,
       });
       if (!renderedCount) {
+        downloadOptionsExpanded = false;
+        downloadPagination.replaceChildren();
         showDownloadState('empty');
-        window.LibFlixDownloads.renderPagination(downloadPagination, data.page, data.total_pages, page => {
-          doSearch(page, activeDownloadQueryIndex);
-          document.getElementById('downloadHeading').scrollIntoView({ behavior: 'smooth', block: 'start' });
-        });
         return;
       }
       showDownloadState('results');
-      window.LibFlixDownloads.renderPagination(downloadPagination, data.page, data.total_pages, page => {
+      window.LibFlixDownloads.renderPagination(downloadPagination, data.page, totalPages, page => {
         doSearch(page, activeDownloadQueryIndex);
         document.getElementById('downloadHeading').scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
+      const disclosure = resultsBody.querySelector('.edition-more');
+      const syncPaginationVisibility = () => {
+        downloadOptionsExpanded = Boolean(disclosure?.open);
+        downloadPagination.hidden = totalPages <= 1 || !downloadOptionsExpanded;
+      };
+      disclosure?.addEventListener('toggle', syncPaginationVisibility);
+      syncPaginationVisibility();
     }
 
     function doSearch(page, queryIndex) {
@@ -761,6 +771,7 @@
     document.getElementById('filterForm').addEventListener('submit', event => {
       event.preventDefault();
       setFiltersOpen(false);
+      downloadOptionsExpanded = false;
       doSearch(1, 0);
     });
     document.getElementById('downloadRetry').addEventListener('click', () => doSearch(currentPage, activeDownloadQueryIndex));
