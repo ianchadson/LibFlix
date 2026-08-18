@@ -97,14 +97,62 @@ class TopicBrowsePageTests(unittest.TestCase):
         self.assertEqual(cards[-1]["href"], "/topics#topicGroup6")
         self.assertTrue(all(card.select_one("svg") for card in cards))
         self.assertFalse(any("/discover" in card["href"] for card in cards))
-        self.assertIn(b'id="homeTopicsTitle">Topics</h2>', nonfiction.data)
-        self.assertIn(b">All topics <", nonfiction.data)
+        self.assertIn(b'id="homeTopicsTitle">Browse by topic</h2>', nonfiction.data)
+        self.assertIn(b">See all <", nonfiction.data)
         self.assertNotIn(b"The reading map", nonfiction.data)
         self.assertNotIn(b"Choose a direction", nonfiction.data)
         self.assertNotIn(b"Move from a broad interest", nonfiction.data)
         self.assertIn(b'href="/topics"', nonfiction.data)
-        self.assertNotIn(b'id="homeTopicsTitle">Topics</h2>', fiction.data)
+        self.assertNotIn(b'id="homeTopicsTitle">Browse by topic</h2>', fiction.data)
         self.assertNotIn(b'href="/topics"', fiction.data)
+
+    def test_topic_artwork_uses_cached_shelves_without_changing_catalog(self):
+        shelves = [
+            {
+                "topic": "self_help",
+                "books": [
+                    {"cover_url": f"/olcover/{cover_id}/M"}
+                    for cover_id in range(1, 9)
+                ],
+            }
+        ]
+
+        groups = app.topic_groups_with_artwork(shelves)
+
+        self.assertEqual(len(groups), 6)
+        self.assertEqual(len(groups[0]["artwork"]), 3)
+        self.assertEqual(groups[0]["topics"][0]["cover_url"], "/olcover/4/M")
+        self.assertEqual(
+            groups[0]["topics"][0]["artwork"],
+            ("/olcover/4/M", "/olcover/5/M"),
+        )
+        self.assertEqual(
+            [topic["query"] for group in groups for topic in group["topics"]],
+            list(app.TOPIC_BROWSE_INDEX),
+        )
+
+    def test_featured_topics_use_distinct_cached_artwork_when_available(self):
+        shelves = [
+            {
+                "topic": "self_help",
+                "books": [
+                    {"cover_url": f"/olcover/{cover_id}/M"}
+                    for cover_id in range(1, 24)
+                ],
+            }
+        ]
+
+        groups = app.topic_groups_with_artwork(shelves)
+        featured = app.featured_topics_with_artwork(groups)
+        focus_topic = groups[0]["topics"][0]
+
+        self.assertEqual(focus_topic["artwork"], ("/olcover/4/M", "/olcover/5/M"))
+        self.assertEqual(
+            focus_topic["featured_artwork"],
+            ("/olcover/14/M", "/olcover/15/M"),
+        )
+        self.assertEqual(featured[0]["artwork"], focus_topic["featured_artwork"])
+        self.assertNotEqual(featured[0]["artwork"], focus_topic["artwork"])
 
     def test_deploy_smoke_check_covers_the_topic_catalog(self):
         workflow = (

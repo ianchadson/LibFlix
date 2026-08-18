@@ -85,26 +85,30 @@
 
     .shelf { margin-bottom: 2rem; content-visibility:auto; contain-intrinsic-size: 270px; }
     .home-shelves { padding-top: 30px; }
-    .home-topics { width:100%; max-width:1560px; margin:0 auto; padding:28px 24px 2px; }
+    .home-topics { width:100%; max-width:1560px; margin:0 auto; padding:32px 24px 6px; }
     .home-topic-map { overflow:visible; }
-    .home-topics-head { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:12px; padding:0; }
-    .home-topics-title { margin:0; color:#f4f4f5; font-size:1.2rem; font-weight:650; letter-spacing:-.02em; line-height:1.15; }
+    .home-topics-head { display:flex; align-items:center; justify-content:space-between; gap:20px; margin-bottom:11px; padding:0; }
+    .home-topics-title { margin:0; color:#f4f4f5; font-size:1.3rem; font-weight:650; line-height:1.15; }
     .home-topics-all { min-height:44px; display:inline-flex; align-items:center; justify-content:center; gap:7px; padding:0 4px; color:rgba(255,255,255,.58); font-size:.76rem; font-weight:650; text-decoration:none; white-space:nowrap; transition:color .16s ease; }
     .home-topics-all:hover { color:#fff; }
     .home-topic-rail { position:relative; }
-    .home-topic-row { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); gap:10px; }
-    .home-topic-card { --home-topic-accent:229, 9, 20; min-width:0; min-height:64px; display:grid; grid-template-columns:30px minmax(0, 1fr); align-items:center; gap:12px; padding:11px 14px; border:1px solid rgba(255,255,255,.08); border-radius:7px; background:#18191d; color:inherit; text-decoration:none; scroll-snap-align:start; transition:border-color .16s ease, background-color .16s ease; }
+    .home-topic-row { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); gap:9px; padding:4px; margin:-4px; }
+    .home-topic-card { --home-topic-accent:229, 9, 20; position:relative; isolation:isolate; min-width:0; aspect-ratio:2 / 1; display:flex; align-items:flex-end; overflow:hidden; padding:14px; border:1px solid rgba(255,255,255,.09); border-radius:8px; background:linear-gradient(120deg, rgba(var(--home-topic-accent), .25), transparent 67%), #1a1b1f; color:inherit; text-decoration:none; contain:layout paint; scroll-snap-align:start; transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
     .home-topic-card:nth-child(2) { --home-topic-accent:156, 125, 160; }
     .home-topic-card:nth-child(3) { --home-topic-accent:205, 123, 80; }
     .home-topic-card:nth-child(4) { --home-topic-accent:105, 151, 148; }
     .home-topic-card:nth-child(5) { --home-topic-accent:113, 160, 119; }
     .home-topic-card:nth-child(6) { --home-topic-accent:100, 126, 171; }
-    .home-topic-symbol { width:30px; height:30px; display:grid; place-items:center; border:1px solid rgba(var(--home-topic-accent), .25); border-radius:6px; background:rgba(var(--home-topic-accent), .075); color:rgb(var(--home-topic-accent)); }
-    .home-topic-symbol svg { width:16px; height:16px; }
-    .home-topic-name { min-width:0; justify-self:start; overflow:hidden; color:rgba(255,255,255,.92); font-size:.88rem; font-weight:700; letter-spacing:-.01em; line-height:1.15; text-align:left; text-overflow:ellipsis; white-space:nowrap; }
+    .home-topic-card::after { position:absolute; z-index:-1; inset:0; background:linear-gradient(90deg, rgba(7,8,10,.68) 0%, rgba(7,8,10,.32) 48%, rgba(7,8,10,.08) 100%), linear-gradient(0deg, rgba(7,8,10,.58) 0%, rgba(7,8,10,.06) 72%); content:""; }
+    .home-topic-art { position:absolute; z-index:-2; width:108%; height:116%; display:flex; gap:2px; inset:-8% -4% auto auto; opacity:.74; transform:rotate(2deg) scale(1.02); transition:opacity .2s ease, transform .28s ease; }
+    .home-topic-art img { min-width:0; width:34%; height:100%; flex:1 1 0; object-fit:cover; }
+    .home-topic-symbol { position:absolute; z-index:-2; width:46%; height:100%; display:grid; place-items:center; inset:0 0 0 auto; color:rgba(var(--home-topic-accent), .5); }
+    .home-topic-symbol svg { width:52px; height:52px; }
+    .home-topic-name { position:relative; z-index:1; max-width:72%; min-width:0; overflow:hidden; color:#fff; font-size:.9rem; font-weight:720; line-height:1.13; text-align:left; text-overflow:ellipsis; white-space:nowrap; }
     .home-topic-card:focus-visible, .home-topics-all:focus-visible { outline:2px solid #fff; outline-offset:3px; }
     @media (hover:hover) {
-      .home-topic-card:hover { border-color:rgba(255,255,255,.18); background-color:#1c1d21; }
+      .home-topic-card:hover { z-index:2; border-color:rgba(255,255,255,.22); box-shadow:0 16px 32px rgba(0,0,0,.34); transform:translateY(-3px) scale(1.015); }
+      .home-topic-card:hover .home-topic-art { opacity:.84; transform:rotate(1deg) scale(1.055); }
     }
     .shelf-head { display:flex; align-items:center; gap:12px; margin-bottom:.6rem; }
     .shelf-title { font-size: 1.3rem; font-weight: 600; padding-left: 4px; }
@@ -190,7 +194,7 @@
       .home-topic-rail::after { position:absolute; width:24px; inset:0 0 5px auto; pointer-events:none; background:linear-gradient(90deg, transparent, #141414); content:''; }
       .home-topic-row { display:flex; gap:8px; overflow-x:auto; padding:4px 32px 5px 0; scroll-padding-right:32px; scroll-snap-type:x mandatory; scrollbar-width:none; }
       .home-topic-row::-webkit-scrollbar { display:none; }
-      .home-topic-card { min-width:152px; min-height:64px; flex:0 0 auto; }
+      .home-topic-card { min-width:min(68vw, 238px); flex:0 0 auto; padding:14px; }
       .book-card, .book-card img { width: 120px; }
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
@@ -277,14 +281,22 @@
   <section class="home-topics" aria-labelledby="homeTopicsTitle">
     <div class="home-topic-map">
       <div class="home-topics-head">
-        <h2 class="home-topics-title" id="homeTopicsTitle">Topics</h2>
-        <a class="home-topics-all" href="{{ topics_url('nonfiction', book_lang) }}" aria-label="View all 30 topics">All topics <span aria-hidden="true">→</span></a>
+        <h2 class="home-topics-title" id="homeTopicsTitle">Browse by topic</h2>
+        <a class="home-topics-all" href="{{ topics_url('nonfiction', book_lang) }}" aria-label="View all 30 topics">See all <span aria-hidden="true">→</span></a>
       </div>
       <div class="home-topic-rail">
         <div class="home-topic-row">
           {% for group in topic_groups %}
           <a class="home-topic-card" href="{{ topics_url('nonfiction', book_lang) }}#topicGroup{{ loop.index }}" aria-label="View {{ group.name }} topics">
-            <span class="home-topic-symbol">{{ topic_icon(group.icon) }}</span>
+            {% if group.artwork %}
+            <span class="home-topic-art" aria-hidden="true">
+              {% for cover_url in group.artwork %}
+              <img src="{{ cover_url }}" alt="" loading="lazy" decoding="async" onerror="this.hidden=true">
+              {% endfor %}
+            </span>
+            {% else %}
+            <span class="home-topic-symbol" aria-hidden="true">{{ topic_icon(group.icon) }}</span>
+            {% endif %}
             <span class="home-topic-name">{{ group.short_name }}</span>
           </a>
           {% endfor %}

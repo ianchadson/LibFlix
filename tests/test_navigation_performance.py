@@ -174,18 +174,17 @@ class DiscoveryShellTests(unittest.TestCase):
         self.assertIn('class="topic-card-description"', template)
         self.assertIn("descriptionNode.textContent = description", template)
 
-    def test_home_topics_share_shelf_gutters(self):
+    def test_home_topics_use_image_led_shelf_tiles(self):
         template = (Path(app.APP_DIR) / "templates" / "index.html").read_text()
 
         self.assertIn(
-            ".home-topics { width:100%; max-width:1560px; margin:0 auto; padding:28px 24px 2px; }",
+            ".home-topics { width:100%; max-width:1560px; margin:0 auto; padding:32px 24px 6px; }",
             template,
         )
-        self.assertIn(
-            "grid-template-columns:30px minmax(0, 1fr)",
-            template,
-        )
-        self.assertNotIn(".home-topic-card::after", template)
+        self.assertIn("aspect-ratio:2 / 1", template)
+        self.assertIn(".home-topic-art", template)
+        self.assertIn('class="home-topic-art"', template)
+        self.assertIn('loading="lazy" decoding="async"', template)
         self.assertIn(".home-topic-rail { margin-right:-16px; }", template)
 
     def test_failed_cover_images_cannot_override_hidden_fallback_state(self):

@@ -1243,10 +1243,85 @@ TOPIC_BROWSE_INDEX = {
     for group in TOPIC_BROWSE_GROUPS
     for topic in group["topics"]
 }
-TOPIC_FEATURED = tuple(
-    TOPIC_BROWSE_INDEX[query]
-    for query in FEATURED_TOPIC_QUERIES
+TOPIC_GROUP_SHELF_SOURCES = (
+    ("self_help", "psychology", "health"),
+    ("psychology", "health", "biography"),
+    ("business", "biography", "technology"),
+    ("business", "history", "education"),
+    ("health", "self_help", "biography"),
+    ("technology", "education", "classics"),
 )
+
+
+def topic_groups_with_artwork(shelves):
+    """Decorate the static topic catalog with already-cached shelf covers."""
+    shelves_by_topic = {
+        shelf.get("topic"): shelf.get("books", [])
+        for shelf in shelves or []
+    }
+    all_books = [
+        book
+        for shelf in shelves or []
+        for book in shelf.get("books", [])
+    ]
+    decorated = []
+    claimed_covers = set()
+    for group_index, group in enumerate(TOPIC_BROWSE_GROUPS):
+        pool = []
+        source_topics = TOPIC_GROUP_SHELF_SOURCES[group_index]
+        source_books = [
+            book
+            for source_topic in source_topics
+            for book in shelves_by_topic.get(source_topic, [])
+        ]
+        for book in source_books + all_books:
+            cover_url = book.get("cover_url") or book.get("cover")
+            if not cover_url or cover_url in claimed_covers:
+                continue
+            claimed_covers.add(cover_url)
+            pool.append(cover_url)
+            if len(pool) >= 23:
+                break
+
+        group_copy = dict(group)
+        group_copy["artwork"] = tuple(pool[:3])
+        decorated_topics = []
+        for topic_index, topic in enumerate(group["topics"]):
+            artwork_start = 3 + (topic_index * 2)
+            artwork = tuple(pool[artwork_start:artwork_start + 2])
+            featured_artwork_start = 13 + (topic_index * 2)
+            featured_artwork = tuple(
+                pool[featured_artwork_start:featured_artwork_start + 2]
+            )
+            decorated_topics.append(
+                dict(
+                    topic,
+                    artwork=artwork,
+                    cover_url=artwork[0] if artwork else "",
+                    featured_artwork=featured_artwork,
+                )
+            )
+        group_copy["topics"] = tuple(decorated_topics)
+        decorated.append(group_copy)
+    return tuple(decorated)
+
+
+def featured_topics_with_artwork(topic_groups):
+    topics_by_query = {
+        topic["query"]: topic
+        for group in topic_groups
+        for topic in group["topics"]
+    }
+    featured = []
+    for query in FEATURED_TOPIC_QUERIES:
+        topic = topics_by_query.get(query, TOPIC_BROWSE_INDEX[query])
+        featured.append(
+            dict(
+                topic,
+                artwork=topic.get("featured_artwork") or topic.get("artwork", ()),
+            )
+        )
+    return tuple(featured)
 
 def get_shelves_def(mode="nonfiction"):
     return FICTION_SHELVES_DEF if mode == "fiction" else SHELVES_DEF
@@ -4945,14 +5020,14 @@ def render_home(mode="nonfiction", lang=None, error=None):
                     detail, _ = cached_book_detail(work_id, lang) if work_id else (None, "miss")
                     hero_items.append(dict(book, description=(detail or {}).get("description", "")))
                 hero = hero_items[0]
+    visual_topic_groups = topic_groups_with_artwork(shelves)
     return render_template(
         "index.html",
         shelves=shelves,
         hero=hero,
         hero_books=hero_books,
         hero_items=hero_items,
-        featured_topics=TOPIC_FEATURED,
-        topic_groups=TOPIC_BROWSE_GROUPS,
+        topic_groups=visual_topic_groups,
         mode=mode,
         error=error,
     )
@@ -4979,10 +5054,15 @@ def topics_page(clean_mode, clean_lang):
     g.book_lang_override = lang
     if clean_mode is None and ("mode" in request.args or "book_lang" in request.args):
         return preserve_query_redirect(clean_topics_url(mode, lang))
+    shelf_artwork = cache_get(f"shelves_{lang}_nonfiction", CACHE_TTL_OL)
+    if not shelf_artwork:
+        shelf_artwork = disk_load_shelves("nonfiction", lang) or []
+    shelf_artwork = normalize_shelf_labels(shelf_artwork, "nonfiction")
+    visual_topic_groups = topic_groups_with_artwork(shelf_artwork)
     return render_template(
         "topics.html",
-        topic_groups=TOPIC_BROWSE_GROUPS,
-        featured_topics=TOPIC_FEATURED,
+        topic_groups=visual_topic_groups,
+        featured_topics=featured_topics_with_artwork(visual_topic_groups),
         mode=mode,
     )
 

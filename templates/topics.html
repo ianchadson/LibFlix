@@ -9,314 +9,367 @@
     * { box-sizing: border-box; }
     body.page-topics {
       margin: 0;
-      background:
-        radial-gradient(circle at 9% 3%, rgba(229, 9, 20, .075), transparent 27rem),
-        linear-gradient(rgba(255,255,255,.013) 1px, transparent 1px),
-        #0d0e10;
-      background-size: auto, 100% 88px, auto;
+      background: #0d0e10;
       color: #f7f7f8;
       font-family: 'Helvetica Neue', Arial, sans-serif;
     }
     .page-topics .navbar {
       min-height: 48px;
       z-index: 20;
-      background: linear-gradient(180deg, rgba(13,14,16,.98) 0, rgba(13,14,16,.84) 78%, transparent);
+      background: rgba(13, 14, 16, .96);
     }
-    .page-topics .navbar-brand { color: #e50914 !important; font-size: 1.3rem; font-weight: 700; letter-spacing: -1px; }
-    .topics-shell { width: min(1220px, calc(100% - 48px)); margin: 0 auto; padding: 34px 0 80px; }
-
-    .topics-hero {
-      position: relative;
-      isolation: isolate;
-      overflow: hidden;
-      padding: clamp(34px, 4.6vw, 58px);
-      border: 1px solid rgba(255,255,255,.105);
-      border-radius: 12px;
-      background:
-        radial-gradient(circle at 86% 18%, rgba(229,9,20,.11), transparent 23rem),
-        linear-gradient(130deg, rgba(255,255,255,.035), transparent 44%),
-        #121316;
-      box-shadow: 0 32px 80px rgba(0,0,0,.25);
+    .page-topics .navbar-brand {
+      color: #e50914 !important;
+      font-size: 1.3rem;
+      font-weight: 700;
+      letter-spacing: -1px;
     }
-    .topics-hero::before {
-      position: absolute;
-      z-index: -1;
-      width: 430px;
-      height: 430px;
-      right: -205px;
-      top: -220px;
-      border: 1px solid rgba(255,255,255,.075);
-      border-radius: 50%;
-      box-shadow:
-        0 0 0 56px rgba(255,255,255,.018),
-        0 0 0 112px rgba(229,9,20,.018);
-      content: '';
+    .topics-shell {
+      width: min(1560px, 100%);
+      margin: 0 auto;
+      padding: 36px 24px 88px;
     }
-    .topics-hero-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(340px, .72fr); gap: clamp(44px, 6vw, 82px); align-items: end; }
-    .topics-kicker, .section-kicker {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      margin: 0 0 14px;
-      color: #a6a8ad;
-      font-size: .69rem;
+    .topics-intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(330px, 430px);
+      align-items: end;
+      gap: 48px;
+      padding: 8px 0 30px;
+    }
+    .topics-title {
+      margin: 0;
+      color: #fff;
+      font-size: clamp(2.25rem, 3.5vw, 3.35rem);
       font-weight: 760;
-      letter-spacing: .115em;
-      text-transform: uppercase;
+      line-height: .98;
     }
-    .topics-kicker-mark, .section-kicker-mark { color: #e50914; font-size: 1.05rem; font-weight: 450; line-height: .7; }
-    .topics-title { max-width: 680px; margin: 0; font-size: clamp(3.2rem, 6vw, 5rem); font-weight: 770; letter-spacing: -.067em; line-height: .91; }
-    .topics-title-accent { position: relative; display: inline-block; }
-    .topics-title-accent::after { position: absolute; height: 3px; inset: auto 5% -10px 6%; background: #e50914; content: ''; transform: rotate(-1.5deg); }
-    .topics-lede { max-width: 590px; margin: 24px 0 0; color: rgba(255,255,255,.66); font-size: 1rem; line-height: 1.58; }
-    .topic-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 25px; color: rgba(255,255,255,.48); font-size: .71rem; font-weight: 620; }
-    .topic-meta span { display: inline-flex; align-items: center; gap: 7px; }
-    .topic-meta svg { width: 14px; height: 14px; color: rgba(255,255,255,.6); }
-
-    .topic-search-wrap { position: relative; }
-    .topic-search-label { display: block; margin: 0 0 9px 2px; color: rgba(255,255,255,.53); font-size: .72rem; font-weight: 650; }
+    .topics-lede {
+      max-width: 590px;
+      margin: 15px 0 0;
+      color: rgba(255, 255, 255, .58);
+      font-size: .94rem;
+      line-height: 1.5;
+    }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      clip-path: inset(50%);
+      white-space: nowrap;
+    }
     .topic-search {
       display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-columns: auto minmax(0, 1fr) 44px;
       align-items: center;
       gap: 9px;
-      min-height: 60px;
-      padding: 7px;
-      border: 1px solid rgba(255,255,255,.15);
+      min-height: 54px;
+      padding: 4px 5px 4px 14px;
+      border: 1px solid rgba(255, 255, 255, .16);
       border-radius: 8px;
-      background: rgba(5,6,8,.72);
-      box-shadow: 0 18px 50px rgba(0,0,0,.22);
+      background: #18191d;
+      transition: border-color .16s ease, box-shadow .16s ease;
     }
-    .topic-search:focus-within { border-color: rgba(229,9,20,.8); box-shadow: 0 0 0 3px rgba(229,9,20,.12), 0 18px 50px rgba(0,0,0,.27); }
-    .topic-search-icon { width: 20px; height: 20px; margin-left: 9px; color: rgba(255,255,255,.48); }
-    .topic-search input[type="search"] { min-width: 0; height: 44px; border: 0; outline: 0; background: transparent; color: #fff; padding: 0 4px; font: inherit; font-size: .94rem; }
-    .topic-search input[type="search"]::placeholder { color: rgba(255,255,255,.52); }
+    .topic-search:focus-within {
+      border-color: rgba(229, 9, 20, .76);
+      box-shadow: 0 0 0 3px rgba(229, 9, 20, .1);
+    }
+    .topic-search-icon {
+      width: 19px;
+      height: 19px;
+      color: rgba(255, 255, 255, .47);
+    }
+    .topic-search input[type="search"] {
+      min-width: 0;
+      height: 44px;
+      padding: 0;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: #fff;
+      font: inherit;
+      font-size: .88rem;
+    }
+    .topic-search input[type="search"]::placeholder { color: rgba(255, 255, 255, .48); }
     .topic-search button {
-      min-width: 126px;
-      min-height: 44px;
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 9px;
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      padding: 0;
       border: 0;
       border-radius: 6px;
       background: #e50914;
       color: #fff;
-      padding: 0 15px;
-      font-size: .8rem;
-      font-weight: 760;
       cursor: pointer;
+      transition: background-color .16s ease, transform .16s ease;
     }
-    .topic-search button svg { width: 15px; height: 15px; }
+    .topic-search button svg { width: 18px; height: 18px; }
     .topic-search button:hover { background: #f40612; }
 
-    .topic-jumps {
+    .topics-section { padding-top: 26px; }
+    .topics-section + .topics-section { padding-top: 40px; }
+    .section-heading,
+    .topic-shelf-head {
       display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 14px;
+    }
+    .section-title,
+    .topic-group-title {
+      margin: 0;
+      color: #f5f5f6;
+      font-size: clamp(1.2rem, 1.8vw, 1.48rem);
+      font-weight: 690;
+      line-height: 1.15;
+    }
+    .section-link {
+      min-height: 44px;
+      display: inline-flex;
       align-items: center;
       gap: 7px;
-      overflow-x: auto;
-      margin-top: 36px;
-      padding: 20px 5px 6px;
-      border-top: 1px solid rgba(255,255,255,.085);
-      scrollbar-width: none;
-    }
-    .topic-jumps::-webkit-scrollbar { display: none; }
-    .topic-jump {
-      min-height: 42px;
-      display: inline-flex;
-      flex: 0 0 auto;
-      align-items: center;
-      gap: 8px;
-      padding: 0 13px;
-      border: 1px solid rgba(255,255,255,.09);
-      border-radius: 6px;
-      background: rgba(255,255,255,.025);
-      color: rgba(255,255,255,.66);
-      font-size: .72rem;
-      font-weight: 690;
+      color: rgba(255, 255, 255, .53);
+      font-size: .75rem;
+      font-weight: 650;
       text-decoration: none;
-      transition: border-color .16s ease, background .16s ease, color .16s ease;
+      white-space: nowrap;
     }
-    .topic-jump svg { width: 15px; height: 15px; color: rgba(255,255,255,.46); }
-    .topic-jump:hover { border-color: rgba(255,255,255,.19); background: rgba(255,255,255,.055); color: #fff; }
+    .section-link:hover { color: #fff; }
 
-    .topics-section { padding-top: 54px; }
-    .section-heading { display: grid; grid-template-columns: minmax(0, .7fr) minmax(300px, .45fr); gap: 42px; align-items: end; margin-bottom: 21px; }
-    .section-kicker { margin-bottom: 8px; }
-    .section-title { margin: 0; font-size: clamp(1.55rem, 2.6vw, 2.2rem); font-weight: 740; letter-spacing: -.042em; line-height: 1.05; }
-    .section-copy { max-width: 470px; justify-self: end; margin: 0; color: rgba(255,255,255,.58); font-size: .82rem; line-height: 1.55; }
-
-    .featured-rail { position: relative; }
-    .featured-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 5px; margin: -5px; }
-    .featured-topic {
-      --featured-glow: rgba(229,9,20,.13);
+    .featured-grid,
+    .topic-list {
+      display: grid;
+      gap: 9px;
+      margin: 0;
+      padding: 4px;
+      list-style: none;
+    }
+    .featured-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .topic-list { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .featured-topic,
+    .topic-card {
       position: relative;
+      isolation: isolate;
       min-width: 0;
-      min-height: 188px;
+      aspect-ratio: 1.78 / 1;
       display: flex;
-      flex-direction: column;
-      justify-content: space-between;
+      align-items: flex-end;
       overflow: hidden;
-      padding: 21px;
-      border: 1px solid rgba(255,255,255,.105);
-      border-radius: 9px;
-      background: radial-gradient(circle at 0 100%, var(--featured-glow), transparent 65%), #18191d;
+      padding: 18px;
+      border: 1px solid rgba(255, 255, 255, .09);
+      border-radius: 8px;
+      background:
+        linear-gradient(125deg, rgba(var(--group-accent), .22), transparent 58%),
+        #1a1b1f;
       color: inherit;
       text-decoration: none;
-      transition: border-color .16s ease, background-color .16s ease, transform .16s ease;
+      contain: layout paint;
+      scroll-snap-align: start;
+      transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
     }
-    .featured-topic:nth-child(2) { --featured-glow: rgba(255,255,255,.075); }
-    .featured-topic:nth-child(3) { --featured-glow: rgba(229,9,20,.085); }
-    .featured-topic:nth-child(4) { --featured-glow: rgba(117,126,155,.12); }
-    .featured-topic::after { position: absolute; width: 56px; height: 2px; left: 21px; bottom: 0; background: #e50914; content: ''; transform: scaleX(.36); transform-origin: left; transition: transform .18s ease; }
-    .featured-topic-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-    .featured-symbol {
-      width: 47px;
-      height: 47px;
+    .featured-topic { --group-accent: 229, 9, 20; }
+    .featured-topic::after,
+    .topic-card::after {
+      position: absolute;
+      z-index: -1;
+      inset: 0;
+      background:
+        linear-gradient(90deg, rgba(7, 8, 10, .7) 0%, rgba(7, 8, 10, .36) 48%, rgba(7, 8, 10, .1) 100%),
+        linear-gradient(0deg, rgba(7, 8, 10, .6) 0%, rgba(7, 8, 10, .08) 72%);
+      content: '';
+    }
+    .featured-topic:nth-child(2) { --group-accent: 156, 125, 160; }
+    .featured-topic:nth-child(3) { --group-accent: 205, 123, 80; }
+    .featured-topic:nth-child(4) { --group-accent: 105, 151, 148; }
+    .topic-tile-art {
+      position: absolute;
+      z-index: -2;
+      width: 108%;
+      height: 122%;
+      display: flex;
+      gap: 2px;
+      inset: -11% -4% auto auto;
+      opacity: .76;
+      transform: rotate(1.5deg) scale(1.01);
+      transition: opacity .2s ease, transform .28s ease;
+    }
+    .topic-tile-art img {
+      min-width: 0;
+      width: 50%;
+      height: 100%;
+      flex: 1 1 0;
+      object-fit: cover;
+      object-position: center;
+      filter: saturate(.78) contrast(.96);
+    }
+    .topic-tile-art img:first-child { transform: translateY(3%); }
+    .topic-tile-art img:last-child { transform: translateY(-2%); }
+    .topic-tile-symbol {
+      position: absolute;
+      z-index: -2;
+      width: 45%;
+      height: 100%;
       display: grid;
       place-items: center;
-      border: 1px solid rgba(255,255,255,.105);
-      border-radius: 50%;
-      background: rgba(255,255,255,.035);
-      color: rgba(255,255,255,.73);
+      inset: 0 0 0 auto;
+      color: rgba(var(--group-accent), .48);
     }
-    .featured-symbol svg { width: 24px; height: 24px; }
-    .featured-arrow, .topic-row-arrow {
+    .topic-tile-symbol svg { width: 62px; height: 62px; }
+    .topic-tile-copy {
+      position: relative;
+      z-index: 1;
+      min-width: 0;
       display: grid;
-      place-items: center;
-      border: 1px solid rgba(255,255,255,.1);
-      border-radius: 50%;
-      color: rgba(255,255,255,.48);
-      transition: border-color .16s ease, background .16s ease, color .16s ease, transform .16s ease;
+      gap: 5px;
     }
-    .featured-arrow { width: 32px; height: 32px; }
-    .featured-arrow svg, .topic-row-arrow svg { width: 14px; height: 14px; }
-    .featured-copy { display: grid; gap: 7px; margin-top: 30px; }
-    .featured-name { font-size: 1.2rem; font-weight: 740; letter-spacing: -.025em; line-height: 1.15; }
-    .featured-description { min-height: 2.7em; color: rgba(255,255,255,.57); font-size: .76rem; line-height: 1.42; }
-    .featured-scroll-hint { display: none; }
-
-    .topic-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+    .featured-name,
+    .topic-card-name {
+      max-width: 82%;
+      color: #fff;
+      font-size: clamp(.93rem, 1.15vw, 1.12rem);
+      font-weight: 720;
+      line-height: 1.13;
+    }
+    .topic-card-description {
+      max-width: 82%;
+      max-height: 0;
+      overflow: hidden;
+      color: rgba(255, 255, 255, .66);
+      font-size: .68rem;
+      line-height: 1.35;
+      opacity: 0;
+      transform: translateY(5px);
+      transition: max-height .2s ease, opacity .18s ease, transform .2s ease;
+    }
+    .topic-groups { display: grid; gap: 37px; }
     .topic-group {
       --group-accent: 229, 9, 20;
-      scroll-margin-top: 74px;
-      overflow: hidden;
-      border: 1px solid rgba(255,255,255,.095);
-      border-radius: 10px;
-      background: linear-gradient(150deg, rgba(var(--group-accent), .055), transparent 35%), #141518;
+      min-width: 0;
+      scroll-margin-top: 76px;
     }
     .topic-group:nth-child(2) { --group-accent: 156, 125, 160; }
     .topic-group:nth-child(3) { --group-accent: 205, 123, 80; }
     .topic-group:nth-child(4) { --group-accent: 105, 151, 148; }
     .topic-group:nth-child(5) { --group-accent: 113, 160, 119; }
     .topic-group:nth-child(6) { --group-accent: 100, 126, 171; }
-    .topic-group-head { min-height: 142px; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 17px; align-items: start; padding: 24px 24px 21px; }
+    .topic-group-title {
+      scroll-margin-top: 76px;
+      transition: color .16s ease;
+    }
+    .topic-group-title:target { color: rgb(var(--group-accent)); }
+    .topic-group-title:focus { outline: 0; }
+    .topic-group-title:focus-visible {
+      color: rgb(var(--group-accent));
+      text-decoration: underline;
+      text-decoration-color: rgba(var(--group-accent), .72);
+      text-decoration-thickness: 2px;
+      text-underline-offset: 6px;
+    }
     .topic-group-symbol {
-      width: 47px;
-      height: 47px;
+      width: 27px;
+      height: 27px;
       display: grid;
       place-items: center;
-      border: 1px solid rgba(var(--group-accent), .28);
-      border-radius: 8px;
-      background: rgba(var(--group-accent), .09);
       color: rgb(var(--group-accent));
     }
-    .topic-group-symbol svg { width: 24px; height: 24px; }
-    .topic-group-meta { display: flex; align-items: center; gap: 9px; margin: 1px 0 8px; color: rgba(255,255,255,.48); font-size: .62rem; font-weight: 720; letter-spacing: .09em; text-transform: uppercase; }
-    .topic-group-meta span + span::before { margin-right: 9px; color: rgba(255,255,255,.2); content: '/'; }
-    .topic-group-title { margin: 0; font-size: 1.22rem; font-weight: 740; letter-spacing: -.025em; line-height: 1.2; }
-    .topic-group-copy { max-width: 420px; margin: 9px 0 0; color: rgba(255,255,255,.58); font-size: .78rem; line-height: 1.48; }
-    .topic-list { margin: 0; padding: 0; border-top: 1px solid rgba(255,255,255,.08); list-style: none; }
-    .topic-list li + li { border-top: 1px solid rgba(255,255,255,.065); }
-    .topic-card {
-      position: relative;
-      min-height: 64px;
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto;
-      align-items: center;
-      gap: 13px;
-      padding: 10px 17px 10px 20px;
-      color: inherit;
-      text-decoration: none;
-      transition: background .16s ease;
-    }
-    .topic-card::before { position: absolute; width: 2px; inset: 13px auto 13px 0; background: rgb(var(--group-accent)); content: ''; transform: scaleY(0); transition: transform .16s ease; }
-    .topic-row-mark { color: rgba(var(--group-accent), .88); font-size: .83rem; font-weight: 620; }
-    .topic-row-copy { min-width: 0; display: grid; grid-template-columns: minmax(118px, .62fr) minmax(0, 1fr); gap: 15px; align-items: center; }
-    .topic-card-name { min-width: 0; color: rgba(255,255,255,.91); font-size: .86rem; font-weight: 690; line-height: 1.25; }
-    .topic-card-description { min-width: 0; overflow: hidden; color: rgba(255,255,255,.6); font-size: .75rem; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-    .topic-row-arrow { width: 29px; height: 29px; }
-    .topics-empty { padding: 28px 0; color: rgba(255,255,255,.58); font-size: .85rem; }
-    .topic-card:focus-visible { outline-offset: -3px !important; }
+    .topic-group-symbol svg { width: 19px; height: 19px; }
+    .topic-shelf-label { display: flex; align-items: center; gap: 9px; min-width: 0; }
+    .topics-empty { padding: 28px 0; color: rgba(255, 255, 255, .58); font-size: .85rem; }
 
     .topic-search button:focus-visible,
-    .topic-jump:focus-visible,
+    .section-link:focus-visible,
     .topic-link:focus-visible {
       outline: 2px solid #fff;
       outline-offset: 3px;
     }
+    .topic-link:focus-visible .topic-tile-art {
+      opacity: .86;
+      transform: rotate(.5deg) scale(1.05);
+    }
+    .topic-link:focus-visible .topic-card-description {
+      max-height: 3em;
+      opacity: 1;
+      transform: translateY(0);
+    }
     @media (hover: hover) {
-      .featured-topic:hover { border-color: rgba(255,255,255,.21); transform: translateY(-2px); }
-      .featured-topic:hover::after { transform: scaleX(1); }
-      .featured-topic:hover .featured-arrow,
-      .topic-card:hover .topic-row-arrow { border-color: rgba(255,255,255,.22); background: rgba(255,255,255,.07); color: #fff; transform: translateX(2px); }
-      .topic-card:hover { background: rgba(255,255,255,.034); }
-      .topic-card:hover::before { transform: scaleY(1); }
+      .featured-topic:hover,
+      .topic-card:hover {
+        z-index: 2;
+        border-color: rgba(255, 255, 255, .22);
+        box-shadow: 0 18px 34px rgba(0, 0, 0, .34);
+        transform: translateY(-3px) scale(1.015);
+      }
+      .featured-topic:hover .topic-tile-art,
+      .topic-card:hover .topic-tile-art {
+        opacity: .86;
+        transform: rotate(.5deg) scale(1.05);
+      }
+      .featured-topic:hover .topic-card-description,
+      .topic-card:hover .topic-card-description {
+        max-height: 3em;
+        opacity: 1;
+        transform: translateY(0);
+      }
     }
-    @media (max-width: 980px) {
-      .topics-shell { width: min(100% - 36px, 800px); padding-top: 25px; }
-      .topics-hero-grid { grid-template-columns: 1fr; gap: 30px; }
-      .section-heading { grid-template-columns: 1fr; gap: 10px; }
-      .section-copy { justify-self: start; }
-      .featured-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .topic-groups { grid-template-columns: 1fr; }
+    @media (max-width: 1099px) {
+      .topics-shell { max-width: 100%; }
+      .featured-grid,
+      .topic-list {
+        display: flex;
+        overflow-x: auto;
+        padding: 4px 32px 8px 4px;
+        scroll-padding: 4px;
+        scroll-snap-type: x proximity;
+        scrollbar-width: none;
+      }
+      .featured-grid::-webkit-scrollbar,
+      .topic-list::-webkit-scrollbar { display: none; }
+      .featured-topic,
+      .topic-list li { flex: 0 0 clamp(220px, 30vw, 280px); }
+      .topic-list .topic-card { width: 100%; }
     }
-    @media (max-width: 600px) {
-      .topics-shell { width: calc(100% - 28px); padding: 12px 0 54px; }
-      .topics-hero { padding: 25px 18px 18px; border-radius: 9px; }
-      .topics-hero::before { width: 260px; height: 260px; right: -155px; top: -155px; }
-      .topics-hero-grid { gap: 23px; }
-      .topics-kicker { margin-bottom: 11px; }
-      .topics-title { font-size: clamp(2.55rem, 14.2vw, 3.55rem); line-height: .93; }
-      .topics-title-accent::after { bottom: -6px; height: 2px; }
-      .topics-lede { margin-top: 17px; font-size: .89rem; line-height: 1.5; }
-      .topic-meta { gap: 7px 14px; margin-top: 17px; font-size: .66rem; }
-      .topic-search-label { font-size: .69rem; }
-      .topic-search { min-height: 56px; padding: 5px; gap: 5px; }
-      .topic-search-icon { width: 18px; height: 18px; margin-left: 8px; }
-      .topic-search input[type="search"] { height: 44px; font-size: .84rem; }
-      .topic-search button { min-width: 50px; width: 50px; padding: 0; }
-      .topic-search button span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
-      .topic-search button svg { width: 18px; height: 18px; }
-      .topic-jumps { gap: 6px; margin-top: 19px; padding: 15px 5px 6px; }
-      .topic-jump { min-height: 44px; padding: 0 12px; }
-      .topics-section { padding-top: 38px; }
-      .section-heading { margin-bottom: 16px; }
-      .section-title { font-size: 1.65rem; }
-      .section-copy { font-size: .77rem; }
-      .featured-rail { margin-right: -14px; }
-      .featured-rail::after { position: absolute; width: 26px; inset: 0 0 25px auto; pointer-events: none; background: linear-gradient(90deg, transparent, #0d0e10); content: ''; }
-      .featured-grid { display: flex; gap: 9px; overflow-x: auto; margin: -5px 0 -5px -5px; padding: 5px 34px 5px 5px; scroll-snap-type: x mandatory; scrollbar-width: none; }
-      .featured-grid::-webkit-scrollbar { display: none; }
-      .featured-topic { min-width: min(272px, 80vw); min-height: 172px; flex: 0 0 auto; padding: 19px; scroll-snap-align: start; }
-      .featured-scroll-hint { display: block; margin: 12px 14px 0 0; color: rgba(255,255,255,.48); font-size: .66rem; font-weight: 650; text-align: right; }
-      .topic-groups { gap: 11px; }
-      .topic-group { border-radius: 9px; scroll-margin-top: 62px; }
-      .topic-group-head { min-height: 0; gap: 14px; padding: 19px 17px 17px; }
-      .topic-group-symbol { width: 43px; height: 43px; }
-      .topic-group-symbol svg { width: 22px; height: 22px; }
-      .topic-group-meta { margin-bottom: 6px; }
-      .topic-group-title { font-size: 1.1rem; }
-      .topic-group-copy { margin-top: 7px; font-size: .75rem; }
-      .topic-card { min-height: 72px; gap: 11px; padding: 10px 13px 10px 15px; }
-      .topic-row-copy { grid-template-columns: 1fr; gap: 3px; }
-      .topic-card-name { white-space: normal; }
-      .topic-card-description { font-size: .72rem; white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-      .topic-row-arrow { width: 30px; height: 30px; }
+    @media (max-width: 760px) {
+      .topics-shell { padding: 24px 16px 62px; }
+      .topics-intro { grid-template-columns: 1fr; gap: 24px; padding: 8px 0 25px; }
+      .topics-title { font-size: clamp(2.25rem, 12vw, 3.25rem); }
+      .topics-lede { max-width: 480px; margin-top: 11px; font-size: .85rem; }
+      .topic-search { min-height: 52px; }
+      .topics-section { padding-top: 24px; }
+      .topics-section + .topics-section { padding-top: 36px; }
+      .section-heading,
+      .topic-shelf-head { margin-bottom: 10px; }
+      .section-title,
+      .topic-group-title { font-size: 1.14rem; }
+      .featured-grid,
+      .topic-list {
+        gap: 8px;
+        margin-right: -16px;
+        padding-right: 38px;
+      }
+      .featured-topic,
+      .topic-list li { flex-basis: min(66vw, 250px); }
+      .featured-topic,
+      .topic-card { padding: 15px; }
+      .topic-groups { gap: 34px; }
+      .topic-group-title { scroll-margin-top: 65px; }
+      .topic-group-symbol { width: 24px; height: 24px; }
+      .topic-group-symbol svg { width: 17px; height: 17px; }
+      .featured-name,
+      .topic-card-name { font-size: 1rem; }
     }
     @media (prefers-reduced-motion: reduce) {
-      .featured-topic, .featured-topic::after, .featured-arrow, .topic-card, .topic-card::before, .topic-row-arrow, .topic-jump { transition: none; }
-      .featured-grid, .topic-jumps { scroll-behavior: auto; }
+      .topic-search,
+      .topic-search button,
+      .featured-topic,
+      .topic-card,
+      .topic-tile-art,
+      .topic-card-description,
+      .topic-group-title { transition: none; }
+      .featured-topic:hover,
+      .topic-card:hover { transform: none; }
     }
   </style>
   <link href="{{ url_for('static', filename='libflix.css', v=asset_version) }}" rel="stylesheet">
@@ -327,93 +380,78 @@
 
   <main id="mainContent">
     <div class="topics-shell">
-      <header class="topics-hero">
-        <div class="topics-hero-grid">
-          <div>
-            <p class="topics-kicker"><span class="topics-kicker-mark" aria-hidden="true">/</span> Browse LibFlix</p>
-            <h1 class="topics-title"><span>Explore</span> <span class="topics-title-accent">topics</span></h1>
-            <p class="topics-lede">Start with an idea, interest, or problem. We’ll surface the books most worth opening first.</p>
-            <div class="topic-meta" aria-label="Topic catalog details">
-              <span>{{ topic_icon('catalog') }} 30 topics</span>
-              <span>{{ topic_icon('focus') }} Ranked starting points</span>
-            </div>
-          </div>
-          <div class="topic-search-wrap">
-            <label class="topic-search-label" for="topicSearch">What do you want to understand?</label>
-            <form class="topic-search" action="{{ discover_url(mode, book_lang) }}" method="get" role="search">
-              <input type="hidden" name="intent" value="topic">
-              <input type="hidden" name="type" value="nonfiction">
-              {{ topic_icon('search', 'topic-search-icon') }}
-              <input id="topicSearch" type="search" name="q" placeholder="Focus, meditation, startups…" autocomplete="off" required>
-              <button type="submit"><span>Find books</span>{{ topic_icon('arrow') }}</button>
-            </form>
-          </div>
+      <header class="topics-intro">
+        <div>
+          <h1 class="topics-title">Explore topics</h1>
+          <p class="topics-lede">Start with an idea and find books worth opening.</p>
         </div>
-        <nav class="topic-jumps" aria-label="Jump to a topic collection">
-          {% for group in topic_groups %}
-          <a class="topic-jump" href="#topicGroup{{ loop.index }}">{{ topic_icon(group.icon) }}<span>{{ group.short_name }}</span></a>
-          {% endfor %}
-        </nav>
+        <form class="topic-search" action="{{ discover_url(mode, book_lang) }}" method="get" role="search">
+          <input type="hidden" name="intent" value="topic">
+          <input type="hidden" name="type" value="nonfiction">
+          <label class="sr-only" for="topicSearch">Search for a topic</label>
+          {{ topic_icon('search', 'topic-search-icon') }}
+          <input id="topicSearch" type="search" name="q" placeholder="Meditation, startups, AI…" autocomplete="off" required>
+          <button type="submit" aria-label="Find books about this topic">{{ topic_icon('arrow') }}</button>
+        </form>
       </header>
 
       {% if featured_topics %}
       <section class="topics-section" aria-labelledby="featuredTopicsTitle">
         <div class="section-heading">
-          <div>
-            <p class="section-kicker"><span class="section-kicker-mark" aria-hidden="true">01 /</span> Starting points</p>
-            <h2 class="section-title" id="featuredTopicsTitle">Good places to start</h2>
-          </div>
-          <p class="section-copy">Four useful places to begin when you want a strong recommendation without knowing the exact title.</p>
+          <h2 class="section-title" id="featuredTopicsTitle">Popular topics</h2>
         </div>
-        <div class="featured-rail">
-          <div class="featured-grid">
-            {% for topic in featured_topics[:4] %}
-            <a class="featured-topic topic-link" href="{{ topic_url(topic.query, mode, book_lang) }}">
-              <span class="featured-topic-top">
-                <span class="featured-symbol">{{ topic_icon(topic.query) }}</span>
-                <span class="featured-arrow" aria-hidden="true">{{ topic_icon('arrow') }}</span>
-              </span>
-              <span class="featured-copy">
-                <span class="featured-name">{{ topic.name }}</span>
-                <span class="featured-description">{{ topic.description }}</span>
-              </span>
-            </a>
-            {% endfor %}
-          </div>
-          <span class="featured-scroll-hint" aria-hidden="true">Swipe to explore →</span>
+        <div class="featured-grid">
+          {% for topic in featured_topics[:4] %}
+          <a class="featured-topic topic-link" href="{{ topic_url(topic.query, mode, book_lang) }}">
+            {% if topic.artwork %}
+            <span class="topic-tile-art" aria-hidden="true">
+              {% for cover_url in topic.artwork %}
+              <img src="{{ cover_url }}" alt="" loading="lazy" decoding="async" fetchpriority="low" onerror="this.hidden=true">
+              {% endfor %}
+            </span>
+            {% else %}
+            <span class="topic-tile-symbol" aria-hidden="true">{{ topic_icon(topic.query) }}</span>
+            {% endif %}
+            <span class="topic-tile-copy">
+              <span class="featured-name">{{ topic.name }}</span>
+              {% if topic.description %}<span class="topic-card-description">{{ topic.description }}</span>{% endif %}
+            </span>
+          </a>
+          {% endfor %}
         </div>
       </section>
       {% endif %}
 
       <section class="topics-section" aria-labelledby="allTopicsTitle">
         <div class="section-heading">
-          <div>
-            <p class="section-kicker"><span class="section-kicker-mark" aria-hidden="true">02 /</span> The reading map</p>
-            <h2 class="section-title" id="allTopicsTitle">Choose a direction</h2>
-          </div>
-          <p class="section-copy">Six collections for moving from a broad interest to books worth your time.</p>
+          <h2 class="section-title" id="allTopicsTitle">Browse all</h2>
         </div>
         <div class="topic-groups">
           {% for group in topic_groups %}
-          <section class="topic-group" id="topicGroup{{ loop.index }}" aria-labelledby="topicGroupTitle{{ loop.index }}">
-            <header class="topic-group-head">
-              <span class="topic-group-symbol">{{ topic_icon(group.icon) }}</span>
-              <div>
-                <p class="topic-group-meta"><span>Collection {{ '%02d' | format(loop.index) }}</span><span>{{ group.topics | length }} topics</span></p>
-                <h3 class="topic-group-title" id="topicGroupTitle{{ loop.index }}">{{ group.name }}</h3>
-                {% if group.description %}<p class="topic-group-copy">{{ group.description }}</p>{% endif %}
-              </div>
+          <section class="topic-group" aria-labelledby="topicGroup{{ loop.index }}">
+            <header class="topic-shelf-head">
+              <span class="topic-shelf-label">
+                <span class="topic-group-symbol" aria-hidden="true">{{ topic_icon(group.icon) }}</span>
+                <h3 class="topic-group-title" id="topicGroup{{ loop.index }}">{{ group.name }}</h3>
+              </span>
             </header>
             <ul class="topic-list">
               {% for topic in group.topics %}
               <li>
                 <a class="topic-card topic-link" href="{{ topic_url(topic.query, mode, book_lang) }}">
-                  <span class="topic-row-mark" aria-hidden="true">/</span>
-                  <span class="topic-row-copy">
+                  {% if topic.artwork %}
+                  <span class="topic-tile-art" aria-hidden="true">
+                    {% for cover_url in topic.artwork %}
+                    <img src="{{ cover_url }}" alt="" loading="lazy" decoding="async" fetchpriority="low" onerror="this.hidden=true">
+                    {% endfor %}
+                  </span>
+                  {% else %}
+                  <span class="topic-tile-symbol" aria-hidden="true">{{ topic_icon(group.icon) }}</span>
+                  {% endif %}
+                  <span class="topic-tile-copy">
                     <span class="topic-card-name">{{ topic.name }}</span>
                     {% if topic.description %}<span class="topic-card-description">{{ topic.description }}</span>{% endif %}
                   </span>
-                  <span class="topic-row-arrow" aria-hidden="true">{{ topic_icon('arrow') }}</span>
                 </a>
               </li>
               {% endfor %}
