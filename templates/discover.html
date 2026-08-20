@@ -15,9 +15,8 @@
   {% if not reason_payload and book.reason | default('', true) %}
     {% set reason_payload = [book.reason] %}
   {% endif %}
-  {% set description_payload = book.description | default('', true) %}
   <a href="{{ book_url(book, mode | default('nonfiction'), book_lang) }}" class="book-card-link topic-book-item" data-topic-book="true" aria-label="{{ book.title | default('Untitled') }}{% if book.author %} by {{ book.author }}{% endif %}. Find an edition.">
-    <div class="book-card{% if not book.cover_url %} no-cover{% endif %}" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}" data-description="{{ book.description | default('', true) | e }}" data-quick-peek-action="Find an edition">
+    <div class="book-card{% if not book.cover_url %} no-cover{% endif %}" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}" data-quick-peek-action="Find an edition">
       {% if book.cover_url %}
       <div class="cover-skeleton"></div>
       <img data-cover-src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';this.parentNode.classList.add('no-cover');">
@@ -32,7 +31,6 @@
     </div>
     <span class="topic-card-copy">
       <span class="topic-reasons" data-reasons='{{ reason_payload | tojson | forceescape }}'></span>
-      <span class="topic-card-description">{{ description_payload }}</span>
       <span class="topic-card-action">Find an edition <span aria-hidden="true">→</span></span>
     </span>
   </a>
@@ -63,10 +61,6 @@
     .discover-title { font-size: 1.55rem; font-weight: 700; line-height: 1.15; margin: 0; }
     .discover-meta { color: #777; font-size: .83rem; margin-top: 6px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .discover-controls { display: flex; align-items: center; gap: 12px; margin-top: 12px; }
-    .intent-switch { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 2px; margin: 0; padding: 3px; border: 1px solid rgba(255,255,255,.1); border-radius: 999px; background: rgba(255,255,255,.035); }
-    .intent-switch a { min-height:44px; display:inline-flex; align-items:center; padding: 5px 12px; border-radius: 999px; color: #989ba2; font-size: .74rem; font-weight: 650; line-height: 1; text-decoration: none; transition: color .15s ease, background .15s ease; }
-    .intent-switch a:hover { color: #fff; }
-    .intent-switch a.active { background: #34363b; color: #fff; }
     .topic-tools { display: flex; flex: 1 1 auto; min-width: 0; align-items: center; gap: 14px; margin: 0; }
     .topic-status-copy { display: grid; flex: 1 1 auto; gap: 2px; min-width: 0; }
     .topic-source-note { min-height: 20px; padding-top: 5px; color: #777b83; font-size: .75rem; }
@@ -94,15 +88,13 @@
     .topic-section[hidden], .topic-tools[hidden] { display: none !important; }
     .topic-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 12px; }
     .topic-section-title { margin: 0; color: #f2f2f3; font-size: 1.02rem; font-weight: 730; letter-spacing: 0; }
-    .topic-start { margin-bottom: 22px; }
+    .topic-start { margin-top: 24px; margin-bottom: 22px; }
     .topic-start-row { display: flex; gap: 10px; overflow-x: auto; overflow-y: hidden; padding: 4px 0 12px; scroll-snap-type: x proximity; scrollbar-width: none; }
     .topic-start-row::-webkit-scrollbar { display: none; }
     .topic-book-item { width: 150px; min-width: 0; flex: 0 0 150px; color: inherit; text-decoration: none; scroll-snap-align: start; }
-    .topic-card-copy { display: grid; min-width: 0; grid-template-rows: 18px 34px 18px; gap: 4px; padding: 7px 0 0; }
+    .topic-card-copy { display: grid; min-width: 0; grid-template-rows: 18px 18px; gap: 6px; padding: 7px 0 0; }
     .topic-reasons { display: flex; min-width: 0; height: 18px; min-height: 18px; flex-wrap: nowrap; gap: 4px; overflow: hidden; }
     .topic-reason-chip { display: inline-block; max-width: 100%; overflow: hidden; padding: 3px 6px; border: 1px solid rgba(255,255,255,.09); border-radius: 999px; color: #a9abb1; background: rgba(255,255,255,.035); font-size: .62rem; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
-    .topic-card-description { display: -webkit-box; min-width: 0; min-height: 34px; overflow: hidden; color: #a9abb1; font-size: .66rem; line-height: 1.3; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-    .topic-card-description:empty { visibility: hidden; }
     .topic-card-action { display: block; overflow: hidden; color: #e1e2e5; font-size: .69rem; font-weight: 650; line-height: 18px; opacity: .8; text-overflow: ellipsis; white-space: nowrap; }
     .topic-book-item:hover .topic-card-action, .topic-book-item:focus-visible .topic-card-action { color: #fff; opacity: 1; }
     .topic-book-item .book-card.no-cover .info { opacity: 1; transform: translateY(0); }
@@ -161,10 +153,6 @@
     <section class="discover-head">
       <h1 class="discover-title" id="discoverTitle">{% if topic_active %}Books about {{ topic_label }}{% else %}Results for “{{ query }}”{% endif %}</h1>
       <div class="discover-controls">
-        <nav class="intent-switch" aria-label="Search intent">
-          <a id="topicIntentLink" href="#"{% if topic_active %} class="active" aria-current="page"{% endif %}>About</a>
-          <a id="identityIntentLink" href="#"{% if not topic_active %} class="active" aria-current="page"{% endif %}>Title or author</a>
-        </nav>
         <div class="topic-tools" id="topicTools"{% if not topic_active %} hidden{% endif %}>
           <div class="topic-status-copy">
             <div class="topic-source-note" id="topicSourceNote" aria-live="polite">{% if partial | default(false) %}Some book sources are temporarily unavailable.{% endif %}</div>
@@ -390,7 +378,6 @@
       const author = String(book?.author || (Array.isArray(book?.authors) ? book.authors.join(', ') : book?.authors || ''));
       const olKey = normalizeKey(book?.ol_key || book?.key || book?.open_library_key);
       const coverUrl = String(book?.cover_url || book?.cover || '');
-      const description = String(book?.description || '').trim();
       const reasonValues = getReasonValues(book);
       const card = document.createElement('a');
       card.href = bookUrl(book);
@@ -406,7 +393,6 @@
       bookCard.dataset.olKey = canonicalWorkKey(olKey);
       bookCard.dataset.title = title;
       bookCard.dataset.author = author;
-      bookCard.dataset.description = description;
       if (withTopicCopy) bookCard.dataset.quickPeekAction = 'Find an edition';
       if (coverUrl) {
         const skeleton = document.createElement('div');
@@ -455,9 +441,6 @@
         const reasons = document.createElement('span');
         reasons.className = 'topic-reasons';
         populateReasonChips(reasons, reasonValues);
-        const descriptionNode = document.createElement('span');
-        descriptionNode.className = 'topic-card-description';
-        descriptionNode.textContent = description;
         const action = document.createElement('span');
         action.className = 'topic-card-action';
         action.append('Find an edition ');
@@ -465,7 +448,7 @@
         arrow.setAttribute('aria-hidden', 'true');
         arrow.textContent = '→';
         action.appendChild(arrow);
-        copy.append(reasons, descriptionNode, action);
+        copy.append(reasons, action);
         card.appendChild(copy);
       }
       return card;
@@ -492,13 +475,6 @@
         existing.replaceWith(replacement);
         existing = replacement;
         window.LibFlixCoverLoader?.register(container);
-      }
-      const incomingDescription = String(book?.description || '').trim();
-      const existingCard = existing.querySelector('.book-card');
-      if (incomingDescription && existingCard?.dataset.description !== incomingDescription) {
-        existingCard.dataset.description = incomingDescription;
-        const descriptionNode = existing.querySelector('.topic-card-description');
-        if (descriptionNode) descriptionNode.textContent = incomingDescription;
       }
       return true;
     }
@@ -583,17 +559,7 @@
       return url.pathname + '?' + url.searchParams.toString();
     }
 
-    function updateIntentLinks() {
-      const topicLink = document.getElementById('topicIntentLink');
-      const identityLink = document.getElementById('identityIntentLink');
-      topicLink.href = makePageUrl('topic');
-      identityLink.href = makePageUrl('identity', true);
-      topicLink.classList.toggle('active', topicMode);
-      identityLink.classList.toggle('active', !topicMode);
-      if (topicMode) topicLink.setAttribute('aria-current', 'page');
-      else topicLink.removeAttribute('aria-current');
-      if (!topicMode) identityLink.setAttribute('aria-current', 'page');
-      else identityLink.removeAttribute('aria-current');
+    function updateTopicFilterReset() {
       document.getElementById('topicFilterReset').href = makePageUrl('topic', true);
     }
 
@@ -621,7 +587,7 @@
       const attribution = document.getElementById('nytAttribution');
       if (!topicMode) attribution.hidden = true;
       else if (rankingSources) attribution.hidden = !rankingSources.includes('nyt_wikipedia');
-      updateIntentLinks();
+      updateTopicFilterReset();
     }
 
     function updateFilterCount() {

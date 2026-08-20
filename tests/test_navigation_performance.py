@@ -169,10 +169,13 @@ class DiscoveryShellTests(unittest.TestCase):
             ".page-discover.topic-mode .book-grid { justify-content: start !important; }",
             template,
         )
-        self.assertIn("grid-template-rows: 18px 34px 18px", template)
+        self.assertIn("grid-template-rows: 18px 18px", template)
         self.assertIn("}).filter(Boolean))].slice(0, 1);", template)
-        self.assertIn('class="topic-card-description"', template)
-        self.assertIn("descriptionNode.textContent = description", template)
+        self.assertNotIn('class="topic-card-description"', template)
+        self.assertNotIn("descriptionNode.textContent = description", template)
+        self.assertNotIn('>About</a>', template)
+        self.assertNotIn('>Title or author</a>', template)
+        self.assertIn("function updateTopicFilterReset()", template)
 
     def test_home_topics_use_image_led_shelf_tiles(self):
         template = (Path(app.APP_DIR) / "templates" / "index.html").read_text()

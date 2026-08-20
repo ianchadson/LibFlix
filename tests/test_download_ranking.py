@@ -1,4 +1,5 @@
 import unittest
+import tempfile
 from unittest.mock import patch
 
 import app
@@ -379,6 +380,50 @@ class DirectDownloadTests(unittest.TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertFalse(response.get_json()["success"])
         self.assertEqual(downloader.invalidations, 2)
+
+    def test_verified_source_cache_serves_direct_download_without_upstream(self):
+        with tempfile.NamedTemporaryFile(suffix=".epub") as source:
+            source.write(b"cached EPUB bytes")
+            source.flush()
+
+            class Cache:
+                @staticmethod
+                def get(_md5, extension):
+                    return source.name if extension == "epub" else ""
+
+            downloader = self.Downloader()
+            with (
+                patch.object(app, "_kindle_source_cache", return_value=Cache()),
+                patch.object(app, "DOWNLOADER", downloader),
+            ):
+                response = app.app.test_client().get(
+                    "/download/" + "a" * 32 + "?filename=Cached.epub"
+                )
+
+        body = response.data
+        response.close()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(body, b"cached EPUB bytes")
+        self.assertEqual(downloader.invalidations, 0)
+
+    def test_prepare_endpoint_reports_a_cached_source_as_complete(self):
+        with tempfile.NamedTemporaryFile(suffix=".epub") as source:
+            source.write(b"cached EPUB bytes")
+            source.flush()
+
+            class Cache:
+                @staticmethod
+                def get(_md5, extension):
+                    return source.name if extension == "epub" else ""
+
+            with patch.object(app, "_kindle_source_cache", return_value=Cache()):
+                response = app.app.test_client().get(
+                    "/api/download/prepare/" + "a" * 32 + "?ext=epub"
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'"type":"complete"', response.data)
+        self.assertIn(b'"source_cache_hit":true', response.data)
 
 
 if __name__ == "__main__":

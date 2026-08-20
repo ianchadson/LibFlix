@@ -912,8 +912,8 @@ footer {
 
 .page-home .hero .hero-desc {
   color: #b0b1b6 !important;
-  line-height: 1.55 !important;
-  -webkit-line-clamp: 3 !important;
+  line-height: 1.48 !important;
+  -webkit-line-clamp: var(--hero-desc-lines, 5) !important;
 }
 
 .page-home .hero .btn-hero {
@@ -1995,6 +1995,10 @@ button.edition-recommended {
     font-size: calc(3.25rem * var(--hero-title-scale, 1)) !important;
   }
 
+  .page-home .hero .hero-desc {
+    -webkit-line-clamp: 4 !important;
+  }
+
   .download-filter-grid {
     grid-template-columns: repeat(3, minmax(130px, 1fr));
   }
@@ -2099,7 +2103,7 @@ button.edition-recommended {
   }
 
   .page-home .hero .hero-desc {
-    -webkit-line-clamp: 2 !important;
+    -webkit-line-clamp: 3 !important;
   }
 
   .book-detail-shell {

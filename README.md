@@ -358,7 +358,7 @@ current and previous year pages provide the optional NYT number-one signal.
 | `/book/OL...W` | Book detail, similar books, download search |
 | `/fiction/cn/book/OL...W` | Book detail with clean mode/language context |
 | `/search?q=...` | Direct libgen download search page |
-| `/download/<md5>` | Proxied file download |
+| `/download/<md5>` | Verified local file download, with a streamed-source fallback |
 | `/api/shelf/<topic>` | JSON endpoint for homepage shelf pagination |
 | `/api/category/<topic>` | JSON endpoint for category infinite scroll |
 | `/api/discover` | JSON endpoint for discovery search pagination |
@@ -367,6 +367,7 @@ current and previous year pages provide the optional NYT number-one signal.
 | `/api/cn-display-titles` | Batched English display-title lookup for visible CN cards |
 | `/api/similar` | JSON endpoint for canonical similar books with mapped Inventaire outage fallback |
 | `/api/search` | JSON endpoint for libgen download search |
+| `/api/download/prepare/<md5>` | Streams source preparation progress before an EPUB/PDF download |
 | `/api/kindle/jobs` | Start a background Send to Kindle delivery |
 | `/api/kindle/jobs/<job_id>` | Poll incremental delivery status |
 | `/api/sendtokindle` | Compatibility endpoint for synchronous/streaming delivery |

@@ -200,6 +200,12 @@ prevent the book page, description, or More Like This shelf from rendering.
 - A stale successful result can be returned when the source is unavailable.
 - Search timing is included in `Server-Timing`.
 - Failure states are scoped to Download options and offer a retry.
+- EPUB and PDF clicks use `/api/download/prepare/<md5>` first. The endpoint
+  streams the existing transfer progress events while resolving and validating
+  the source, then the final `/download/<md5>` request serves the shared
+  verified source cache locally. This keeps slow source redirects from sitting
+  silently behind the reverse proxy and makes repeat downloads effectively
+  local.
 - Work identity keeps bounded canonical, work, edition, author, and ISBN aliases.
   The server owns that identity and searches non-overlapping two-query batches,
   up to six source calls total. It stops early only after a high-confidence EPUB

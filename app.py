@@ -3263,7 +3263,20 @@ def paginate_topic_discovery_payload(payload, page):
         start_count = TOPIC_DISCOVERY_START_COUNT
     else:
         start_count = min(4, len(books))
-    start_here = books[:start_count] if page == 1 else []
+    # Topic cards are intentionally lightweight. Descriptions remain in the
+    # server-side corpus for relevance ranking, but load only through the
+    # existing quick-look detail request when a reader hovers a card.
+    def card_book(book):
+        return {
+            key: value
+            for key, value in book.items()
+            if key != "description"
+        }
+
+    start_here = (
+        [card_book(book) for book in books[:start_count]]
+        if page == 1 else []
+    )
     explore = books[start_count:]
     total_pages = max(
         1,
@@ -3275,7 +3288,10 @@ def paginate_topic_discovery_payload(payload, page):
     paged.pop("all_books", None)
     paged.update({
         "start_here": start_here,
-        "books": explore[start:start + TOPIC_DISCOVERY_PAGE_SIZE],
+        "books": [
+            card_book(book)
+            for book in explore[start:start + TOPIC_DISCOVERY_PAGE_SIZE]
+        ],
         "page": page,
         "total_pages": total_pages,
         "total": len(explore),
@@ -4459,6 +4475,7 @@ RUNTIME_RATE_LIMIT_RULES = {
     "api_book": ("book-detail", RateLimitRule(24, 60)),
     "api_search": ("search", RateLimitRule(24, 60)),
     "download": ("download", RateLimitRule(12, 300)),
+    "api_prepare_download": ("download-prepare", RateLimitRule(12, 300)),
     "api_create_kindle_job": ("kindle", RateLimitRule(4, 600)),
     "api_sendtokindle": ("kindle", RateLimitRule(4, 600)),
     "api_kindle_job": ("kindle-status", RateLimitRule(60, 60)),
@@ -4470,6 +4487,7 @@ RUNTIME_GLOBAL_RATE_LIMIT_RULES = {
     "api_book": ("book-detail-global", RateLimitRule(120, 60)),
     "api_search": ("search-global", RateLimitRule(120, 60)),
     "download": ("download-global", RateLimitRule(60, 300)),
+    "api_prepare_download": ("download-prepare-global", RateLimitRule(60, 300)),
     "api_create_kindle_job": ("kindle-global", RateLimitRule(10, 600)),
     "api_sendtokindle": ("kindle-global", RateLimitRule(10, 600)),
     "api_kindle_job": ("kindle-status-global", RateLimitRule(600, 60)),
@@ -6346,6 +6364,24 @@ def download(md5):
     filename = re.sub(r'\s+', ' ', filename).strip()[:140] or f"{md5}.epub"
     ascii_filename = filename.encode("ascii", "ignore").decode().strip()
     ascii_filename = re.sub(r'[^A-Za-z0-9._ -]+', '', ascii_filename) or f"{md5}.epub"
+    extension = re.sub(r"[^a-z0-9]", "", filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+    if extension in {"epub", "pdf"}:
+        cached_path = _kindle_source_cache().get(md5, extension)
+        if cached_path:
+            mime = {
+                "epub": "application/epub+zip",
+                "pdf": "application/pdf",
+            }[extension]
+            response = send_file(
+                cached_path,
+                as_attachment=True,
+                download_name=filename,
+                mimetype=mime,
+                conditional=True,
+                etag=True,
+            )
+            add_server_timing("download", duration=0, description="source-cache")
+            return response
     upstream = None
     chunks = None
     first_chunk = b""
@@ -6410,6 +6446,115 @@ def download(md5):
         if value:
             resp.headers[header] = value
     return resp
+
+
+def _download_prepare_line(event):
+    return (
+        json.dumps(event, ensure_ascii=False, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+
+
+@app.route("/api/download/prepare/<md5>")
+def api_prepare_download(md5):
+    """Validate and cache an EPUB/PDF before navigating to its download URL.
+
+    The browser cannot show progress while a normal attachment request is
+    waiting for LibGen to resolve its redirect. This NDJSON endpoint keeps the
+    connection active with the existing Kindle transfer progress events and
+    leaves the final attachment request as a local, range-capable file send.
+    """
+    if not re.fullmatch(r"[a-fA-F0-9]{32}", md5 or ""):
+        return jsonify({"success": False, "error": "Invalid download identifier."}), 404
+    extension = re.sub(
+        r"[^a-z0-9]",
+        "",
+        request.args.get("ext", "epub").lower(),
+    )
+    if extension not in {"epub", "pdf"}:
+        return jsonify({
+            "success": False,
+            "error": "Only EPUB and PDF downloads can be prepared.",
+        }), 400
+
+    md5 = md5.lower()
+
+    def events():
+        def relay(progress_generator):
+            while True:
+                try:
+                    event = next(progress_generator)
+                except StopIteration as stopped:
+                    return stopped.value
+                yield _download_prepare_line(event)
+
+        source_cache = _kindle_source_cache()
+        cached_path = source_cache.get(md5, extension)
+        if cached_path:
+            yield _download_prepare_line({
+                "type": "complete",
+                "success": True,
+                "stage": "Download ready",
+                "progress": 100,
+                "source_cache_hit": True,
+            })
+            return
+
+        temporary_path = None
+        try:
+            yield _download_prepare_line(
+                _kindle_progress("Finding book file", None, "Checking the download source")
+            )
+            download_url = yield from relay(_resolve_download_progress(
+                md5,
+                emit=_kindle_progress,
+            ))
+            if not download_url:
+                raise RuntimeError("The download source did not return a file link.")
+
+            yield _download_prepare_line(
+                _kindle_progress("Downloading book", 10, "Preparing a verified copy")
+            )
+            temporary_path = source_cache.temporary_path(md5, extension)
+            _, _, validation = yield from relay(_download_book_progress(
+                download_url,
+                temporary_path,
+                md5=md5,
+                extension=extension,
+                emit=_kindle_progress,
+            ))
+            cached_path = source_cache.commit(
+                temporary_path,
+                md5,
+                extension,
+                validation,
+            )
+            if cached_path == temporary_path:
+                raise RuntimeError("The download cache is unavailable.")
+            temporary_path = None
+            yield _download_prepare_line({
+                "type": "complete",
+                "success": True,
+                "stage": "Download ready",
+                "progress": 100,
+                "source_cache_hit": False,
+            })
+        except Exception as error:
+            if temporary_path:
+                source_cache.discard(temporary_path)
+            yield _download_prepare_line({
+                "type": "error",
+                "success": False,
+                "stage": "Download unavailable",
+                "error": str(error) or "The download source did not return a working file.",
+            })
+
+    response = Response(
+        stream_with_context(events()),
+        mimetype="application/x-ndjson",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Accel-Buffering"] = "no"
+    return response
 
 def cover_dimensions(size):
     return {

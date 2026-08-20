@@ -53,6 +53,7 @@ class TopicIntegrationCacheTest(unittest.TestCase):
             "author": f"Author {index}",
             "ol_key": f"/works/OL{index}W",
             "cover_url": f"/olcover/{1000 + index}/M.webp",
+            "description": f"Description for focus book {index}",
             "reasons": ["Subject: Attention"],
             "sources": ["openlibrary"],
         } for index in range(1, count + 1)]
@@ -88,6 +89,8 @@ class TopicIntegrationCacheTest(unittest.TestCase):
             {book["ol_key"] for book in data["start_here"]}
             & {book["ol_key"] for book in data["books"]}
         )
+        self.assertNotIn("description", data["start_here"][0])
+        self.assertNotIn("description", data["books"][0])
 
     def test_explicit_identity_override_preserves_literal_search_path(self):
         expected = ([{

@@ -81,7 +81,7 @@
     ].join('');
     const actions = book.md5
       ? '<div class="edition-actions">' +
-          '<a class="edition-action edition-download" href="' + downloadHref + '" data-format="' + escapeHtml(format) + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>' + escapeHtml(format.toUpperCase()) + '</span></a>' +
+          '<a class="edition-action edition-download" href="' + downloadHref + '" data-md5="' + escapeHtml(book.md5) + '" data-format="' + escapeHtml(format) + '" data-preparable="' + (['epub', 'pdf'].includes(format) ? 'true' : 'false') + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>' + escapeHtml(format.toUpperCase()) + '</span></a>' +
           (kindleCompatible
             ? '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(coverUrl) + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>'
             : '') +
@@ -129,12 +129,85 @@
   }
 
   const wiredContainers = new WeakSet();
+  function setDownloadBusy(download, label) {
+    download.classList.add('busy');
+    download.setAttribute('aria-busy', 'true');
+    download.replaceChildren();
+    const spinner = document.createElement('span');
+    spinner.className = 'download-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    const text = document.createElement('span');
+    text.textContent = label;
+    download.append(spinner, text);
+  }
+
+  function resetDownload(download) {
+    download.classList.remove('busy');
+    download.removeAttribute('aria-busy');
+    if (download.dataset.originalHtml) download.innerHTML = download.dataset.originalHtml;
+  }
+
+  async function prepareDownload(download) {
+    if (!download || download.classList.contains('busy')) return;
+    if (!download.dataset.originalHtml) download.dataset.originalHtml = download.innerHTML;
+    setDownloadBusy(download, 'Preparing');
+    window.LibFlixNotify?.('Preparing download');
+    try {
+      const response = await fetch(
+        '/api/download/prepare/' + encodeURIComponent(download.dataset.md5) +
+        '?ext=' + encodeURIComponent(download.dataset.format || 'epub'),
+        { headers: { Accept: 'application/x-ndjson' } },
+      );
+      if (!response.ok || !response.body) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || 'The download source is temporarily unavailable.');
+      }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      let completed = false;
+      const consume = line => {
+        if (!line.trim()) return;
+        const event = JSON.parse(line);
+        if (event.type === 'error' || event.success === false) {
+          throw new Error(event.error || 'The download source is temporarily unavailable.');
+        }
+        if (event.type === 'complete') completed = true;
+        if (event.stage && !completed) setDownloadBusy(download, event.stage);
+      };
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        let newline = buffer.indexOf('\n');
+        while (newline !== -1) {
+          consume(buffer.slice(0, newline));
+          buffer = buffer.slice(newline + 1);
+          newline = buffer.indexOf('\n');
+        }
+        if (done) break;
+      }
+      if (buffer.trim()) consume(buffer);
+      if (!completed) throw new Error('The download source did not finish preparing the file.');
+      setDownloadBusy(download, 'Download ready');
+      window.location.assign(download.href);
+      window.setTimeout(() => resetDownload(download), 1200);
+    } catch (error) {
+      resetDownload(download);
+      window.LibFlixNotify?.(error.message || 'The download source is temporarily unavailable.', 'error');
+    }
+  }
+
   function wireActions(container) {
     if (!container || wiredContainers.has(container)) return;
     wiredContainers.add(container);
     container.addEventListener('click', event => {
       const download = event.target.closest('.edition-download');
       if (download) {
+        if (download.dataset.preparable === 'true') {
+          event.preventDefault();
+          prepareDownload(download);
+          return;
+        }
         if (!download.dataset.originalHtml) download.dataset.originalHtml = download.innerHTML;
         download.classList.add('busy');
         download.setAttribute('aria-busy', 'true');
