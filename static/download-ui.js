@@ -626,6 +626,17 @@
         title: cleanedTitle,
         detail: 'Completed in ' + formatElapsedTime(elapsedSeconds),
       });
+      document.dispatchEvent(new CustomEvent('libflix:kindle-complete', {
+        detail: {
+          ol_key: payload.ol_key || '',
+          title: cleanedTitle,
+          author: payload.author || '',
+          cover_url: payload.cover_url || '',
+          url: payload.ol_key ? window.location.pathname : '',
+          detail: 'Sent in ' + formatElapsedTime(elapsedSeconds),
+          timestamp: Date.now(),
+        },
+      }));
       return { ...completed, title: cleanedTitle, elapsed_seconds: elapsedSeconds };
     } catch (error) {
       const failure = error.kindleEvent || {};

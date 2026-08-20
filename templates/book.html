@@ -26,6 +26,10 @@
           <h1 class="detail-title" id="detailTitle">{{ title }}</h1>
           <div class="detail-localized-title" id="detailLocalizedTitle" lang="zh" {% if not localized_title %}hidden{% endif %}>{{ localized_title }}</div>
           <div class="detail-author" id="detailAuthor" {% if not author %}hidden{% endif %}>{{ author }}</div>
+          <button class="book-save" id="bookSave" type="button" aria-pressed="false">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18l-6-4-6 4Z"></path></svg>
+            <span>Save</span>
+          </button>
 
           <div class="detail-description-wrap" id="descContainer">
             <div class="desc-skeleton" id="descSkeleton" aria-label="Loading book description" {% if description %}style="display:none"{% endif %}>
@@ -130,6 +134,8 @@
     let bookDetailRefreshing = !INITIAL_DETAIL_COMPLETE && !INITIAL_PRIMARY_CONTENT_READY;
     let pageDisposed = false;
     let downloadRequested = false;
+    let downloadFullRequested = false;
+    let downloadRefineTimer = null;
     let downloadState = 'idle';
     let downloadOptionsExpanded = false;
     let activeDownloadQueryIndex = 0;
@@ -138,8 +144,38 @@
     let detailRetryTimer = null;
     let similarRetryTimer = null;
     let similarWarmTimer = null;
+    const bookSaveButton = document.getElementById('bookSave');
+
+    function localLibraryRecord() {
+      return {
+        ol_key: olKey,
+        title: bookTitle,
+        author: bookAuthor,
+        cover_url: bookCoverUrl,
+        url: window.location.pathname,
+        timestamp: Date.now(),
+      };
+    }
+
+    function syncBookSaveButton() {
+      const saved = Boolean(window.LibFlixLibrary?.isSaved(olKey));
+      bookSaveButton?.classList.toggle('saved', saved);
+      bookSaveButton?.setAttribute('aria-pressed', String(saved));
+      const label = bookSaveButton?.querySelector('span');
+      if (label) label.textContent = saved ? 'Saved' : 'Save';
+    }
+
+    bookSaveButton?.addEventListener('click', () => {
+      const saved = window.LibFlixLibrary?.toggleSaved(localLibraryRecord());
+      syncBookSaveButton();
+      window.LibFlixNotify?.(saved ? 'Saved to My Library' : 'Removed from My Library');
+    });
+    window.LibFlixLibrary?.rememberRecent(localLibraryRecord());
+    syncBookSaveButton();
     let similarObserver = null;
     let similarResultsRendered = false;
+    let similarResultsPartial = false;
+    let similarRenderSignature = '';
 
     function escapeHtml(value) {
       return window.LibFlixDownloads.escapeHtml(value);
@@ -319,6 +355,8 @@
           loadDetailCover(data.cover_url, data.title || bookTitle);
         }
       }
+      window.LibFlixLibrary?.rememberRecent(localLibraryRecord());
+      syncBookSaveButton();
       if (!downloadRequested && buildSearchQuery(0)) {
         doSearch(1, 0);
       }
@@ -562,7 +600,7 @@
     }
 
     function fetchSimilar(subjects) {
-      if (pageDisposed || similarResultsRendered) return;
+      if (pageDisposed || (similarResultsRendered && !similarResultsPartial)) return;
       if (!hasStableSimilarSeed()) {
         if (bookDetailRefreshing) renderSimilarLoading();
         else hideSimilarSection();
@@ -624,11 +662,13 @@
             hideSimilarSection();
             return;
           }
-          if (similarResultsRendered) return;
-          similarRetryDeadline = 0;
-          similarRetryCount = 0;
-          if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
-          similarRetryTimer = null;
+          const nextRenderSignature = data.books.map(book => book.ol_key || (book.title + '|' + book.author)).join('|');
+          const isPartial = Boolean(data.partial || data.refreshing);
+          if (nextRenderSignature === similarRenderSignature && isPartial) {
+            similarResultsRendered = true;
+            similarResultsPartial = true;
+            if (scheduleSimilarRetry()) return;
+          }
           const html = data.books.map(book => {
             const href = bookUrl(book);
             const title = escapeHtml(book.title || 'Untitled');
@@ -636,14 +676,25 @@
             const cover = book.cover_url
               ? '<div class="cover-skeleton"></div><img data-cover-src="' + escapeHtml(book.cover_url) + '" alt="' + title + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="placeholder" hidden aria-label="No cover available"></div>'
               : '<div class="placeholder" aria-label="No cover available"></div>';
-            return '<a href="' + href + '" class="book-card-link"><div class="book-card" data-ol-key="' + escapeHtml(book.ol_key || '') + '" data-title="' + title + '" data-author="' + author + '">' + cover + '<div class="info"><div class="t">' + title + '</div>' + (author ? '<div class="a">' + author + '</div>' : '') + '</div></div></a>';
+            return '<a href="' + href + '" class="book-card-link"><div class="book-card' + (book.cover_url ? '' : ' no-cover') + '" data-ol-key="' + escapeHtml(book.ol_key || '') + '" data-title="' + title + '" data-author="' + author + '">' + cover + '<div class="info"><div class="t">' + title + '</div>' + (author ? '<div class="a">' + author + '</div>' : '') + '</div></div></a>';
           }).join('');
           const row = document.getElementById('similarRow');
           showSimilarSection();
           row.setAttribute('aria-busy', 'false');
           row.innerHTML = html;
           similarResultsRendered = true;
+          similarResultsPartial = isPartial;
+          similarRenderSignature = nextRenderSignature;
           window.LibFlixCoverLoader?.register(row);
+          window.LibFlixCoverRecovery?.register(row);
+          if (isPartial) {
+            scheduleSimilarRetry();
+          } else {
+            similarRetryDeadline = 0;
+            similarRetryCount = 0;
+            if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
+            similarRetryTimer = null;
+          }
         })
         .catch(error => {
           if (
@@ -665,7 +716,7 @@
     function requestSimilarIfReady(force = false) {
       if (
         !pageDisposed
-        && !similarResultsRendered
+        && (!similarResultsRendered || similarResultsPartial)
         && !similarRetryTimer
         && !similarRequested
         && (force || similarVisible)
@@ -675,7 +726,7 @@
       }
     }
 
-    function getSearchParams(page, queryIndex) {
+    function getSearchParams(page, queryIndex, scope = 'all') {
       return {
         q: buildSearchQuery(queryIndex).slice(0, 180),
         sort: document.getElementById('sortSel').value,
@@ -694,6 +745,7 @@
         mode: MODE,
         book_lang: BOOK_LANG,
         page: String(page || 1),
+        scope,
       };
     }
 
@@ -735,7 +787,21 @@
       syncPaginationVisibility();
     }
 
-    function doSearch(page, queryIndex) {
+    function scheduleFullDownloadSearch(queryIndex) {
+      if (pageDisposed || downloadFullRequested) return;
+      downloadFullRequested = true;
+      const run = () => {
+        downloadRefineTimer = null;
+        if (!pageDisposed) doSearch(1, queryIndex, { scope: 'all', preserve: true });
+      };
+      if ('requestIdleCallback' in window) {
+        downloadRefineTimer = window.requestIdleCallback(run, { timeout: 650 });
+      } else {
+        downloadRefineTimer = window.setTimeout(run, 140);
+      }
+    }
+
+    function doSearch(page, queryIndex, options = {}) {
       queryIndex = Number(queryIndex) || 0;
       if (!hasResolvedBookIdentity() || !buildSearchQuery(queryIndex)) {
         showDownloadState('empty');
@@ -743,24 +809,45 @@
       }
       downloadRequested = true;
       currentPage = page || 1;
+      const scope = options.scope || (currentPage === 1 && !downloadFullRequested ? 'best' : 'all');
+      const preserve = Boolean(options.preserve && downloadState === 'results');
+      if (scope === 'all') downloadFullRequested = true;
       if (activeSearch) activeSearch.abort();
       const controller = new AbortController();
       activeSearch = controller;
-      showDownloadState('loading');
-      fetch('/api/search?' + new URLSearchParams(getSearchParams(currentPage, queryIndex)), { signal: controller.signal })
+      if (!preserve) showDownloadState('loading');
+      fetch('/api/search?' + new URLSearchParams(getSearchParams(currentPage, queryIndex, scope)), { signal: controller.signal })
         .then(response => response.json())
         .then(data => {
           if (activeSearch !== controller) return;
           if (data.success) {
             activeDownloadQueryIndex = queryIndex;
-            showDownloadResults(data);
+            if (data.books?.length) {
+              showDownloadResults(data);
+              if (scope === 'best' && data.has_more_options) scheduleFullDownloadSearch(queryIndex);
+            } else if (scope === 'best') {
+              downloadFullRequested = true;
+              doSearch(1, queryIndex, { scope: 'all' });
+            } else if (!preserve) {
+              showDownloadState('empty');
+            }
           } else {
-            showDownloadState('error', window.LibFlixDownloads.friendlyError(data.error));
+            if (scope === 'best') {
+              downloadFullRequested = true;
+              doSearch(1, queryIndex, { scope: 'all' });
+            } else if (!preserve) {
+              showDownloadState('error', window.LibFlixDownloads.friendlyError(data.error));
+            }
           }
         })
         .catch(error => {
           if (activeSearch === controller && error.name !== 'AbortError') {
-            showDownloadState('error', window.LibFlixDownloads.friendlyError(error.message));
+            if (scope === 'best') {
+              downloadFullRequested = true;
+              doSearch(1, queryIndex, { scope: 'all' });
+            } else if (!preserve) {
+              showDownloadState('error', window.LibFlixDownloads.friendlyError(error.message));
+            }
           }
         })
         .finally(() => {
@@ -772,9 +859,13 @@
       event.preventDefault();
       setFiltersOpen(false);
       downloadOptionsExpanded = false;
-      doSearch(1, 0);
+      downloadFullRequested = true;
+      doSearch(1, 0, { scope: 'all' });
     });
-    document.getElementById('downloadRetry').addEventListener('click', () => doSearch(currentPage, activeDownloadQueryIndex));
+    document.getElementById('downloadRetry').addEventListener('click', () => {
+      downloadFullRequested = false;
+      doSearch(currentPage, activeDownloadQueryIndex, { scope: currentPage === 1 ? 'best' : 'all' });
+    });
 
     let sendingMd5 = null;
     window.sendToKindle = function (md5, title, extension, button, edition = {}) {
@@ -844,6 +935,10 @@
       if (detailRetryTimer) window.clearTimeout(detailRetryTimer);
       if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
       if (similarWarmTimer) window.clearTimeout(similarWarmTimer);
+      if (downloadRefineTimer) {
+        if ('cancelIdleCallback' in window) window.cancelIdleCallback(downloadRefineTimer);
+        else window.clearTimeout(downloadRefineTimer);
+      }
       similarObserver?.disconnect();
     };
   </script>

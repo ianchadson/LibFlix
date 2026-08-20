@@ -17,6 +17,8 @@ works in Flask and the browser without edge-specific configuration.
 5. Let Send to Kindle continue across navigation and report real progress.
 6. Keep animation bounded and responsive on mobile and lower-power devices.
 7. Expose enough timing and health data to diagnose regressions.
+8. Keep search suggestions, saved-book continuity, and first recommendations
+   local so common interactions do not inherit provider latency.
 
 ## Request Model
 
@@ -43,6 +45,21 @@ works in Flask and the browser without edge-specific configuration.
 - The browser may retry a refreshing detail or similar-books response, but the
   download search begins independently.
 - A stale description is preferred to an empty loading surface.
+- More Like This renders a locally ranked partial shelf before bounded remote
+  refinement, preserving any visible cards throughout the refresh.
+- Download lookup requests a narrow `scope=best` result first. Full alias
+  expansion runs during idle time and remains collapsed unless requested.
+
+### Search and browser-local continuity
+
+- The fixed search palette calls `/api/suggestions` after a short debounce.
+  Suggestions come only from the bounded in-process catalog corpus and never
+  wait for Open Library or the download source.
+- Saved books, recent opens, and completed Kindle sends live in versioned
+  browser `localStorage`. They have no server write path and are never used as
+  recommendation inputs.
+- Search and Settings open as fixed overlays, so the navbar and current content
+  do not reflow while controls animate.
 
 ### Same-origin navigation
 
@@ -137,9 +154,9 @@ cheap while avoiding whole-cache rewrites.
 | Data | Key family | Fresh lifetime |
 |---|---|---|
 | Open Library JSON | `ol:*` | 6 hours on disk |
-| Assembled book detail | `book_detail:v5:*` | 7 days |
-| Similar books | `similar:v6:*` | 7 days; complete empty results use a 30-minute negative key |
-| Download source search | `download_search:v10:*` | 15 minutes for complete searches only |
+| Assembled book detail | `book_detail:v6:*` | 7 days |
+| Similar books | `similar:v8:*` | 7 days; complete empty results use a 30-minute negative key |
+| Download source search | `download_search:v11:*` | 15 minutes for complete searches only |
 | CN/English title helpers | language-specific keys | 30 days |
 
 Stale lifetimes are longer than fresh lifetimes. Routes only use stale data when
@@ -189,6 +206,10 @@ usable, and never blocks startup or a page response.
 
 Cover elements keep stable dimensions and a restrained shimmer until the image
 decodes. The animation stops after load and respects reduced-motion settings.
+Cards that enter the viewport without a cover are grouped into one bounded
+`/api/covers` request. The server resolves only from local hints, assembled
+details, alternate-language metadata, and its catalog corpus; it may queue a
+detail refresh but does not hold the response open for that work.
 
 ## Download Search
 
@@ -196,6 +217,8 @@ The download source is independent from discovery. A source timeout does not
 prevent the book page, description, or More Like This shelf from rendering.
 
 - Search and resolver calls use bounded connect/read timeouts.
+- Book pages render the best candidate from a narrow first pass before running
+  the complete alias search in the background.
 - A fresh result is cached for 15 minutes.
 - A stale successful result can be returned when the source is unavailable.
 - Search timing is included in `Server-Timing`.

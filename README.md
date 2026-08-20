@@ -23,9 +23,12 @@ category browsing, clean book previews, contextual download lookup, and a
 low-friction path from discovery to Send to Kindle.
 
 LibFlix is intentionally a find-and-send utility, not a reading platform. It
-has no user accounts, personal library, reading history, reading-progress
-tracking, or personalized profile. The server retains only bounded operational
-and Web Vital aggregates without raw URLs, payloads, or IP addresses.
+has no user accounts, server-side profile, reading-progress tracking, or
+personalized recommendation model. An optional `My Library` keeps saved books,
+recently opened books, and completed Kindle deliveries only in that browser's
+local storage; those lists never influence discovery or recommendations. The
+server retains only bounded operational and Web Vital aggregates without raw
+URLs, payloads, or IP addresses.
 
 ## Quick Start
 
@@ -62,8 +65,8 @@ current and previous year pages provide the optional NYT number-one signal.
 - **Intent-aware search** - `/discover` automatically treats known broad topics
   such as `focus`, `meditation`, or `startups` as topic searches. ISBNs, Open
   Library ids, quoted titles, and `Title by Author` queries stay on the strict
-  identity path. The visible `About` / `Title or author` switch always lets the
-  user override the automatic choice.
+  identity path. The app keeps this distinction automatic so the discovery
+  page does not need a persistent intent switch.
 - **Browseable topic catalog** - `/topics` groups 30 quality-monitored starting
   points and the nonfiction homepage exposes a compact featured-topic rail.
   Topic links open the same ranked discovery pipeline explicitly, without
@@ -95,8 +98,8 @@ current and previous year pages provide the optional NYT number-one signal.
   concise signals such as subject match, multiple-source agreement, widely
   read, frequently assigned, or highly rated, and lead to `Find an edition`.
 - **Compact topic filters** - one collapsed panel supports book type, language,
-  publication period, and Best match / Newest sorting without adding accounts,
-  saved searches, or a library.
+  publication period, and Best match / Newest sorting without adding accounts
+  or saved searches.
 - **Stable resilient pagination** - a complete ranked window is cached before
   it is divided into stable 30-book Explore pages. `Start here` is returned only
   on page one and is excluded from Explore. A short snapshot id prevents pages
@@ -128,9 +131,12 @@ current and previous year pages provide the optional NYT number-one signal.
   live in the top-right Settings menu instead of always occupying the toolbar.
   Each mode has its own shelf set and category tabs, while EN/CN maps to English
   (`eng`) and Chinese (`chi`) Open Library records.
-- **Expandable discovery search** - the global search opens from a compact icon
-  control, animates into a full search field, and routes to `/discover`. It does
-  not jump directly to download search.
+- **Instant search palette** - the global search opens as a fixed command
+  palette, so the navbar and page never reflow. It searches a bounded local
+  catalog index while the user types, supports keyboard selection and recent
+  terms, and provides direct shortcuts to Trending, New This Week, Short Reads,
+  and Topics. Submitting still routes to `/discover`; it never jumps directly
+  to download search.
 - **Download search is contextual** - download options are searched from the book
   preview page using the selected title and author.
 - **Locally reranked identity discovery** - identity-search results must retain
@@ -163,6 +169,13 @@ current and previous year pages provide the optional NYT number-one signal.
 - **Trending naming** - the first shelf and first top-nav category are labeled
   `Trending` across fiction and non-fiction. Cached shelf labels are normalized
   at render time so older `New & Popular` cache files do not leak into the UI.
+- **Editorial discovery rails** - both fiction and non-fiction place `New This
+  Week` and `Short Reads` directly after Trending. The former is a weekly
+  refreshed surface of recently published catalog records; the latter is
+  bounded to works with a median length of 220 pages or fewer. Neither rail is
+  personalized.
+- **Top 10 treatment** - the first ten Trending books receive large rank
+  numerals without changing the underlying canonical work order.
 - **Progressively hydrated shelves** - the homepage sends stable shelf skeletons
   in the initial document, then appends 12-card batches as each shelf approaches
   the viewport or row end. Distant shelves add no initial card or image cost.
@@ -210,16 +223,21 @@ current and previous year pages provide the optional NYT number-one signal.
   an already-visible result set.
 - **More Like This** - up to two specific subjects plus the current author feed
   a bounded, locally ranked single-row shelf. Multi-subject and same-author
-  books win over tangential popularity matches. If Open Library is unavailable,
-  directly mapped Inventaire works provide a partial shelf without creating
-  native or unresolved routes. Its API request waits until the section
-  approaches the viewport.
+  books win over tangential popularity matches, while broad taxonomy labels are
+  discarded before they can seed unrelated results. A local corpus supplies an
+  immediate partial shelf; bounded Open Library and directly mapped Inventaire
+  work then refine it in place without blanking visible cards. Its API request
+  waits until the section approaches the viewport.
 - **Hidden More Like This scrollbar** - the shelf scrolls horizontally without a
   visible scrollbar.
 - **Inline edition picker** - download candidates appear as responsive edition
   rows with cover, title, author, publisher, format, year, size, pages, and
   language instead of a dense table. The recommended edition stays visible;
   alternative editions remain collapsed under `Other options` until requested.
+- **Best-first download hydration** - a narrow first pass finds and renders the
+  recommended edition as soon as possible. Full alias expansion and alternative
+  editions continue quietly during idle time, preserving the visible best match
+  if a later source request fails.
 - **Collapsible download filters** - format, sort, language, page size, and
   dedupe controls share one compact `Filters` panel across preview and direct
   download search pages. `Best match` is the explicit default; selecting year,
@@ -301,6 +319,13 @@ current and previous year pages provide the optional NYT number-one signal.
 - **Progressive cover loading** - cover geometry stays stable while images load,
   with a subtle shimmer and no layout shift. Covers already loaded during the
   session retain their visible state across app-shell page swaps.
+- **Visible-cover repair** - cards that reach the viewport without a cover are
+  checked in one bounded local batch against cached hints, assembled details,
+  alternate-language metadata, and the local catalog corpus. Missing upstream
+  detail refreshes are scheduled in the background rather than blocking paint.
+- **Focused book transitions** - opening a visible cover uses a short native
+  View Transition into the book spotlight when supported. The rest of the page
+  remains stable and reduced-motion users receive an immediate swap.
 - **Persistent optimized covers** - Open Library, Inventaire, Internet Archive,
   and download-result covers pass through a validated local cache. Open Library
   cover URLs can carry a validated Archive fallback, and download rows reuse the
@@ -343,6 +368,9 @@ current and previous year pages provide the optional NYT number-one signal.
   install action, a safe offline screen, and Home/Search/Browse/Settings bottom
   navigation. The service worker never stores downloads, Kindle traffic,
   credentials, covers, or private/no-store responses.
+- **Browser-local My Library** - Saved, Recent, and Kindle tabs provide useful
+  continuity without an account. Entries remain on the current device, can be
+  removed at any time, and are not sent to the server or used to rank books.
 - **Accessible interaction** - pages provide a skip link, named icon controls,
   visible keyboard focus, modal focus return, scroll locking, reduced-motion
   fallbacks, and non-selectable app chrome while content remains selectable.
@@ -363,6 +391,8 @@ current and previous year pages provide the optional NYT number-one signal.
 | `/api/category/<topic>` | JSON endpoint for category infinite scroll |
 | `/api/discover` | JSON endpoint for discovery search pagination |
 | `/api/book` | JSON endpoint for Open Library work details |
+| `/api/suggestions` | Bounded local title/author/ISBN suggestions for the search palette |
+| `/api/covers` | Batched local cover recovery for currently visible work keys |
 | `/api/cn-display-title` | Cached English display-title lookup for CN browse cards |
 | `/api/cn-display-titles` | Batched English display-title lookup for visible CN cards |
 | `/api/similar` | JSON endpoint for canonical similar books with mapped Inventaire outage fallback |
@@ -497,7 +527,8 @@ python3 app.py
 
 For UI validation, use headless Playwright with an isolated Chromium context.
 Validate persistent navigation, browser history, delayed route loading,
-quick-peek positioning after scroll, mobile overflow, cover cache hits, and
+quick-peek positioning after scroll, fixed desktop/mobile search, My Library,
+editorial shelf hydration, progressive edition loading, cover cache hits, and
 background Kindle progress. Do not use the installed Chrome profile.
 
 ```text

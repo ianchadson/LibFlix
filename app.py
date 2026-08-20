@@ -136,7 +136,11 @@ KINDLE_RELAY_MAX_ATTACHMENT_BYTES = max(
     int(os.environ.get("KINDLE_RELAY_MAX_ATTACHMENT_MB", "28")) * 1024 * 1024,
 )
 SHELF_REFRESH_TTL = 21600
-OL_LIST_FIELDS = "key,title,author_name,cover_i,cover_id,language,ia"
+OL_LIST_FIELDS = (
+    "key,title,author_name,cover_i,cover_id,language,ia,"
+    "first_publish_year,number_of_pages_median,ratings_count,"
+    "ratings_average,readinglog_count,edition_count"
+)
 OL_COVER_FIELDS = f"{OL_LIST_FIELDS},editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id,editions.ocaid"
 OL_IDENTITY_FIELDS = f"{OL_COVER_FIELDS},description,alternative_title,isbn,editions.author_name,editions.isbn_10,editions.isbn_13"
 # Backwards-compatible name for list/cover consumers; identity fields are
@@ -146,6 +150,7 @@ OL_DISCOVERY_IDENTIFIER_FIELDS = f"{OL_LIST_FIELDS},isbn"
 OL_COVER_IDENTIFIER_FIELDS = f"{OL_COVER_FIELDS},isbn"
 OL_SIMILAR_FIELDS = f"{OL_LIST_FIELDS},subject"
 SHELF_BOOK_TARGET = 40
+SHELF_INITIAL_BATCH_SIZE = 12
 SHELF_SEARCH_LIMIT = 100
 SHELF_MAX_OPEN_LIBRARY_PAGES = 25
 SHELF_REFILL_OPEN_LIBRARY_PAGES = 4
@@ -1210,6 +1215,8 @@ def nyt_status():
 
 SHELVES_DEF = [
     ("Trending", "trending"),
+    ("New This Week", "new_this_week"),
+    ("Short Reads", "short_reads"),
     ("Personal Development", "self_help"),
     ("Business & Finance", "business"),
     ("Science & Technology", "technology"),
@@ -1225,6 +1232,8 @@ SHELVES_DEF = [
 
 FICTION_SHELVES_DEF = [
     ("Trending", "trending_fiction"),
+    ("New This Week", "new_this_week_fiction"),
+    ("Short Reads", "short_reads_fiction"),
     ("Science Fiction", "science_fiction"),
     ("Fantasy", "fantasy"),
     ("Mystery & Thriller", "mystery"),
@@ -1331,10 +1340,29 @@ FICTION_TOPICS = {topic for _, topic in FICTION_SHELVES_DEF}
 def shelf_query(topic, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     lang_filter = f" language:{BOOK_LANG_CONFIG[lang]['ol_lang']}"
+    current_year = time.localtime().tm_year
+    recent_years = f"[{current_year - 1} TO {current_year}]"
     if topic == "trending":
         return f"subject:Nonfiction -subject:Fiction{lang_filter}", "rating"
     if topic == "trending_fiction":
         return f"subject:Fiction{lang_filter}", "rating"
+    if topic == "new_this_week":
+        return (
+            f"subject:Nonfiction -subject:Fiction first_publish_year:{recent_years} cover_i:*{lang_filter}",
+            "new",
+        )
+    if topic == "new_this_week_fiction":
+        return f"subject:Fiction first_publish_year:{recent_years} cover_i:*{lang_filter}", "new"
+    if topic == "short_reads":
+        return (
+            f"subject:Nonfiction -subject:Fiction number_of_pages_median:[1 TO 220]{lang_filter}",
+            "rating",
+        )
+    if topic == "short_reads_fiction":
+        return (
+            f"subject:Fiction number_of_pages_median:[1 TO 220]{lang_filter}",
+            "rating",
+        )
     if topic in FICTION_TOPICS:
         return f"subject:{topic.replace('_', ' ')} subject:Fiction{lang_filter}", "rating"
     return f"subject:{topic.replace('_', ' ')} -subject:Fiction{lang_filter}", "rating"
@@ -1764,9 +1792,12 @@ def similar_subject_candidates(subjects):
     seen = set()
     for index, subject in enumerate(subjects):
         normalized = subject.casefold()
+        catalog_tail = normalized.rsplit("/", 1)[-1].strip() if "/" in normalized else ""
         if (
             not subject
             or normalized in GENERIC_SIMILAR_SUBJECTS
+            or catalog_tail in GENERIC_SIMILAR_SUBJECTS
+            or catalog_tail == "general"
             or ":" in subject
             or len(subject) < 5
             or normalized in seen
@@ -1937,7 +1968,14 @@ def extract_book(w, lang=None, allow_missing_cover=False):
         return None
     cover_url = book_cover_url(cover_id, archive_id)
     ol_key = w.get("key", "")
-    book = {"title": title, "author": author, "cover_url": cover_url, "ol_key": ol_key}
+    book = {
+        "title": title,
+        "author": author,
+        "cover_url": cover_url,
+        "ol_key": ol_key,
+        "published_year": w.get("first_publish_year"),
+        "pages": w.get("number_of_pages_median"),
+    }
     remember_book_hint(book, lang)
     return book
 
@@ -2112,7 +2150,7 @@ def fetch_one_shelf(name, topic, lang=None, mode="nonfiction"):
 def fetch_category_page_books(topic, page=1, mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     page = max(1, page)
-    ckey = f"category_page:{lang}:{mode}:{topic}:{page}"
+    ckey = f"category_page:v3:{lang}:{mode}:{topic}:{page}"
     cached = cache_get(ckey, 900)
     if cached and (cached[0] or page > 1):
         return cached
@@ -2148,16 +2186,17 @@ def fetch_category_books(topic, page=1, lang=None, mode="nonfiction"):
 def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     page = max(1, page)
-    ckey = f"shelf_page:{lang}:{mode}:{topic}:{page}"
+    ckey = f"shelf_page:v3:{lang}:{mode}:{topic}:{page}"
     cached = cache_get(ckey, 900)
     if cached:
         return cached
+    shelf = None
     if page == 1:
         shelf = next(
             (item for item in get_shelves(mode, lang) if item.get("topic") == topic),
             None,
         )
-        if shelf and shelf.get("books"):
+        if shelf and len(shelf.get("books") or []) >= SHELF_INITIAL_BATCH_SIZE:
             result = (shelf["books"][:SHELF_BOOK_TARGET], len(shelf["books"]), SHELF_MAX_OPEN_LIBRARY_PAGES)
             cache_set(ckey, result)
             return result
@@ -2167,6 +2206,8 @@ def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
     books, total, total_pages = collect_unique_topic_books(topic, lang, seen_keys, target, max_pages)
     start = SHELF_BOOK_TARGET * (page - 1)
     result = (books[start:target], total, total_pages)
+    if page == 1 and not result[0] and shelf and shelf.get("books"):
+        result = (shelf["books"][:SHELF_BOOK_TARGET], len(shelf["books"]), 1)
     cache_set(ckey, result)
     return result
 
@@ -4471,6 +4512,8 @@ RUNTIME_METRICS = SQLiteMetrics(METRICS_SQLITE)
 RUNTIME_SECURITY_HEADERS = SecurityHeadersConfig(trust_forwarded_proto=True)
 RUNTIME_RATE_LIMIT_RULES = {
     "api_discover": ("discovery", RateLimitRule(24, 60)),
+    "api_suggestions": ("suggestions", RateLimitRule(120, 60)),
+    "api_covers": ("covers", RateLimitRule(120, 60)),
     "api_similar": ("similar", RateLimitRule(36, 60)),
     "api_book": ("book-detail", RateLimitRule(24, 60)),
     "api_search": ("search", RateLimitRule(24, 60)),
@@ -4483,6 +4526,8 @@ RUNTIME_RATE_LIMIT_RULES = {
 }
 RUNTIME_GLOBAL_RATE_LIMIT_RULES = {
     "api_discover": ("discovery-global", RateLimitRule(120, 60)),
+    "api_suggestions": ("suggestions-global", RateLimitRule(1200, 60)),
+    "api_covers": ("covers-global", RateLimitRule(1200, 60)),
     "api_similar": ("similar-global", RateLimitRule(240, 60)),
     "api_book": ("book-detail-global", RateLimitRule(120, 60)),
     "api_search": ("search-global", RateLimitRule(120, 60)),
@@ -4545,6 +4590,8 @@ def request_rate_limit_cost():
         ])
         return min(SIMILAR_MAX_ORIGIN_QUERIES, max(1, subject_count + bool(request.args.get("author", "").strip())))
     if request.endpoint != "api_search" or request.args.get("page", "1") != "1":
+        return 1
+    if request.args.get("scope") == "best":
         return 1
     if re.fullmatch(r"/works/OL\d+W", request.args.get("ol_key", "")):
         return DOWNLOAD_ALIAS_SEARCH_LIMIT
@@ -4923,7 +4970,7 @@ def schedule_shelf_refresh(mode="nonfiction", lang=None, delay=3):
 
 def normalize_shelf_labels(shelves, mode="nonfiction"):
     names_by_topic = {topic: name for name, topic in get_shelves_def(mode)}
-    normalized = []
+    normalized_by_topic = {}
     for shelf in shelves or []:
         shelf_copy = dict(shelf)
         shelf_copy["books"] = []
@@ -4944,8 +4991,11 @@ def normalize_shelf_labels(shelves, mode="nonfiction"):
         topic = shelf_copy.get("topic", "")
         if topic in names_by_topic:
             shelf_copy["name"] = names_by_topic[topic]
-        normalized.append(shelf_copy)
-    return normalized
+            normalized_by_topic[topic] = shelf_copy
+    return [
+        normalized_by_topic.get(topic, {"name": name, "topic": topic, "books": []})
+        for name, topic in get_shelves_def(mode)
+    ]
 
 def get_shelves(mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
@@ -4967,6 +5017,156 @@ def get_shelves(mode="nonfiction", lang=None):
     disk_save_shelves(shelves, mode, lang)
     schedule_cover_warm(cover_warm_jobs_for_shelves(shelves), force=True)
     return shelves
+
+
+def local_book_suggestions(query, lang=None, limit=8):
+    """Return fast identity suggestions exclusively from local durable data."""
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    query = re.sub(r"\s+", " ", str(query or "")).strip()[:120]
+    query_key = normalize_match_text(query)
+    if len(query_key) < 2:
+        return []
+    query_tokens = set(relevance_tokens(query))
+    candidates = {}
+
+    def consider(book, quality=0.0):
+        if not book or not re.fullmatch(r"/works/OL\d+W", book.get("ol_key", "")):
+            return
+        title = str(book.get("title") or "").strip()
+        author = str(book.get("author") or "").strip()
+        if not title or not author:
+            return
+        combined = normalize_match_text(f"{title} {author}")
+        candidate_tokens = set(relevance_tokens(f"{title} {author}"))
+        overlap = len(query_tokens & candidate_tokens)
+        if query_key not in combined and not overlap:
+            return
+        title_score = title_match_score(title, query)
+        author_score = title_match_score(author, query)
+        combined_score = round(760 * SequenceMatcher(None, combined, query_key).ratio())
+        coverage = overlap / max(len(query_tokens), 1)
+        score = max(title_score, combined_score) + author_score * 0.22
+        score += coverage * 260 + min(float(quality or 0), 35)
+        if book.get("cover_url"):
+            score += 45
+        if score < 430:
+            return
+        key = book["ol_key"]
+        current = candidates.get(key)
+        if current is None or score > current[0]:
+            candidates[key] = (score, book)
+
+    with BOOK_HINTS_LOCK:
+        hints = [
+            dict(book)
+            for (hint_lang, _), book in BOOK_HINTS.items()
+            if hint_lang == lang
+        ]
+    for book in hints:
+        consider(book, 25)
+
+    for mode in ("nonfiction", "fiction"):
+        shelves = (
+            cache_get(f"shelves_{lang}_{mode}", BOOK_DETAIL_STALE_TTL)
+            or disk_load_shelves(mode, lang)
+            or []
+        )
+        for shelf in shelves:
+            for book in shelf.get("books", []):
+                consider(book, 18)
+
+    for record, _searchable_text, quality in _topic_local_openlibrary_corpus():
+        if not discovery_fallback_matches_language(record, lang):
+            continue
+        author_text = " ".join(bounded_identity_values(record.get("author_name"), limit=4))
+        combined = normalize_match_text(f"{record.get('title', '')} {author_text}")
+        if query_key not in combined and not (query_tokens & set(relevance_tokens(combined))):
+            continue
+        consider(extract_book(record, lang, allow_missing_cover=True), quality)
+
+    ranked = sorted(
+        candidates.values(),
+        key=lambda item: (-item[0], not bool(item[1].get("cover_url")), normalize_title(item[1]["title"])),
+    )
+    selected = []
+    seen_titles = set()
+    for _score, book in ranked:
+        title_key = normalize_title(book.get("title", ""))
+        if not title_key or title_key in seen_titles:
+            continue
+        seen_titles.add(title_key)
+        book_copy = dict(book)
+        if not book_copy.get("cover_url"):
+            work_id = work_id_from_ol_key(book_copy.get("ol_key", ""))
+            detail, _cache_state = cached_book_detail(work_id, lang, allow_stale=True)
+            cover_url = (detail or {}).get("cover_url", "")
+            if cover_url:
+                book_copy["cover_url"] = localize_cover_url(cover_url)
+        selected.append(book_copy)
+        if len(selected) >= max(1, min(int(limit or 8), 12)):
+            break
+    return canonicalize_book_covers(selected)
+
+
+@app.route("/api/suggestions")
+def api_suggestions():
+    query = request.args.get("q", "").strip()[:120]
+    if len(normalize_match_text(query)) < 2:
+        return jsonify({"success": True, "books": []})
+    lang = get_book_lang()
+    cache_key = f"suggestions:v1:{lang}:{normalize_match_text(query)}"
+    books = cache_get(cache_key, 60)
+    if books is None:
+        books = local_book_suggestions(query, lang, limit=8)
+        cache_set(cache_key, books)
+    g.cache_control_override = "private, max-age=30"
+    add_server_timing("suggestions", duration=0, description="local")
+    return jsonify({"success": True, "books": books})
+
+
+@app.route("/api/covers")
+def api_covers():
+    """Resolve visible missing covers from local metadata without blocking on origin."""
+    lang = get_book_lang()
+    requested_keys = list(dict.fromkeys(
+        key.strip()
+        for key in request.args.getlist("ol_key")[:24]
+        if re.fullmatch(r"/works/OL\d+W", key.strip())
+    ))
+    if not requested_keys:
+        return jsonify({"success": True, "covers": {}, "refreshing": []})
+    corpus_by_key = {
+        str(record.get("key") or ""): record
+        for record, _text, _quality in _topic_local_openlibrary_corpus()
+        if str(record.get("key") or "") in requested_keys
+    }
+    covers = {}
+    refreshing = []
+    for ol_key in requested_keys:
+        work_id = work_id_from_ol_key(ol_key)
+        hint = hinted_book_metadata(work_id, lang) or {}
+        detail, _cache_state = cached_book_detail(work_id, lang, allow_stale=True)
+        alternate = alternate_canonical_book_detail(work_id, lang)
+        cover_url = (
+            hint.get("cover_url", "")
+            or (detail or {}).get("cover_url", "")
+            or alternate.get("cover_url", "")
+        )
+        if not cover_url and ol_key in corpus_by_key:
+            local_book = extract_book(
+                corpus_by_key[ol_key],
+                lang,
+                allow_missing_cover=True,
+            ) or {}
+            cover_url = local_book.get("cover_url", "")
+        if cover_url:
+            covers[ol_key] = localize_cover_url(cover_url)
+            continue
+        if schedule_book_detail_refresh(work_id, lang):
+            refreshing.append(ol_key)
+    g.cache_control_override = "private, max-age=30"
+    add_server_timing("covers", duration=0, description="local")
+    return jsonify({"success": True, "covers": covers, "refreshing": refreshing})
 
 def dedupe_and_refill_shelves(shelves, mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
@@ -5408,7 +5608,7 @@ def similar_cache_key(ol_key, subjects, lang, current_title="", current_authors=
         normalize_match_text(value)
         for value in bounded_identity_values([current_title, current_authors], limit=7)
     )
-    return f"similar:v6:{lang}:{ol_key}:{normalized}:{identity}"
+    return f"similar:v8:{lang}:{ol_key}:{normalized}:{identity}"
 
 
 def fetch_inventaire_similar_books(
@@ -5636,6 +5836,12 @@ def build_similar_books(
             )[0]
             for candidate_author in record_authors
         ), default=0)
+        primary_author_score = identity_match(
+            author_match_score,
+            entry["book"].get("author", ""),
+            current_authors[0] if current_authors else "",
+            current_authors,
+        )[0]
         title_overlap = len(
             current_title_tokens & set(relevance_tokens(entry["book"].get("title", "")))
         )
@@ -5644,14 +5850,16 @@ def build_similar_books(
             current_title,
         )
         entry["author_score"] = author_score
+        entry["primary_author_score"] = primary_author_score
         entry["title_overlap"] = title_overlap
         entry["title_score"] = title_score
         return (
             entry["matches"] * 320
-            + max(0, author_score) * 2
+            + max(0, primary_author_score) * 2
+            + max(0, author_score) // 4
             + title_overlap * 110
             + max(0, title_score - 600) // 2
-            + (100 if entry["author_source"] and author_score >= 180 else 0)
+            + (100 if entry["author_source"] and primary_author_score >= 180 else 0)
         )
 
     ranked = sorted(
@@ -5671,12 +5879,12 @@ def build_similar_books(
     for entry in ranked:
         if required_subject_matches > 1 and not (
             entry["matches"] >= required_subject_matches
-            or entry.get("author_score", 0) >= 180
+            or entry.get("primary_author_score", 0) >= 180
             or entry.get("title_overlap", 0) >= 2
             or entry.get("title_score", 0) >= 850
         ):
             continue
-        if not entry["matches"] and entry.get("author_score", 0) < 180:
+        if not entry["matches"] and entry.get("primary_author_score", 0) < 180:
             continue
         append_candidate(entry)
         if len(books) >= 12:
@@ -5720,6 +5928,99 @@ def similar_empty_cache_key(cache_key):
 
 def similar_partial_cache_key(cache_key):
     return f"{cache_key}:partial"
+
+
+def local_similar_books(
+    ol_key,
+    subjects,
+    lang,
+    current_title="",
+    current_authors=None,
+    limit=12,
+):
+    """Build an immediate recommendation shelf from already-cached records."""
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    specific_subjects = similar_subject_candidates(subjects)[:2]
+    current_authors = bounded_identity_values(current_authors, limit=6)
+    normalized_subjects = {
+        normalize_topic_text(subject)
+        for subject in specific_subjects
+        if normalize_topic_text(subject)
+    }
+    normalized_authors = {
+        normalize_match_text(author)
+        for author in current_authors
+        if normalize_match_text(author)
+    }
+    ranked = []
+    for record, searchable_text, quality in _topic_local_openlibrary_corpus():
+        key = str(record.get("key") or "")
+        if key == ol_key:
+            continue
+        record_authors = bounded_identity_values(record.get("author_name"), limit=6)
+        author_text = normalize_match_text(" ".join(record_authors))
+        if not (
+            any(subject in searchable_text for subject in normalized_subjects)
+            or any(author and author in author_text for author in normalized_authors)
+        ):
+            continue
+        if not discovery_fallback_matches_language(record, lang):
+            continue
+        author_score = max((
+            identity_match(
+                author_match_score,
+                candidate_author,
+                current_authors[0] if current_authors else "",
+                current_authors,
+            )[0]
+            for candidate_author in record_authors
+        ), default=0)
+        primary_author_score = identity_match(
+            author_match_score,
+            str(record_authors[0] if record_authors else ""),
+            current_authors[0] if current_authors else "",
+            current_authors,
+        )[0]
+        record_subjects = set(_topic_cached_record_subjects(record))
+        subject_matches = sum(
+            1
+            for subject in normalized_subjects
+            if subject in record_subjects
+        )
+        if not subject_matches and primary_author_score < 180:
+            continue
+        title = str(record.get("title") or "")
+        title_score = title_match_score(title, current_title) if current_title else 0
+        if title_score >= 930:
+            continue
+        book = extract_book(record, lang, allow_missing_cover=True)
+        if not book:
+            continue
+        score = (
+            subject_matches * 420
+            + max(0, primary_author_score) * 2
+            + max(0, author_score) // 4
+            + min(float(quality or 0), 45)
+            + (55 if book.get("cover_url") else 0)
+            + min(title_score, 780) * 0.08
+        )
+        book["reason"] = "Same author" if primary_author_score >= 180 else specific_subjects[0]
+        ranked.append((score, book))
+
+    selected = []
+    seen_titles = {normalize_title(current_title)} if current_title else set()
+    author_counts = {}
+    for _score, book in sorted(ranked, key=lambda item: -item[0]):
+        title_key = normalize_title(book.get("title", ""))
+        author_key = normalize_author(book.get("author", ""))
+        if not title_key or title_key in seen_titles or author_counts.get(author_key, 0) >= 2:
+            continue
+        seen_titles.add(title_key)
+        author_counts[author_key] = author_counts.get(author_key, 0) + 1
+        selected.append(book)
+        if len(selected) >= max(1, min(int(limit or 12), 12)):
+            break
+    return canonicalize_book_covers(selected)
 
 def _refresh_similar_books(
     cache_key,
@@ -5838,6 +6139,13 @@ def api_similar():
         add_server_timing("similar", duration=0, description="partial-cache")
         g.cache_control_override = "private, max-age=5"
         return jsonify(partial)
+    local_books = local_similar_books(
+        ol_key,
+        subjects,
+        lang,
+        current_title=current_title,
+        current_authors=current_authors,
+    )
     scheduled = schedule_similar_refresh(
         cache_key, ol_key, subjects, lang, current_title, current_authors
     )
@@ -5853,7 +6161,17 @@ def api_similar():
             }), 503
     add_server_timing("similar", duration=0, description="background")
     g.cache_control_override = "private, max-age=2"
-    return jsonify({"success": True, "books": [], "refreshing": True})
+    if local_books:
+        payload = {
+            "success": True,
+            "books": local_books,
+            "refreshing": True,
+            "partial": True,
+        }
+        cache_set(similar_partial_cache_key(cache_key), payload)
+        add_server_timing("similar-local", duration=0, description="durable-cache")
+        return jsonify(payload)
+    return jsonify({"success": True, "books": [], "refreshing": True, "partial": True})
 
 @app.route("/api/book")
 def api_book():
@@ -6117,6 +6435,9 @@ def api_search():
     if lang not in ("English", "Chinese", "all"):
         lang = default_download_lang
     dedup_on = request.args.get("dedup", "1") == "1"
+    scope = request.args.get("scope", "all").strip().lower()
+    if scope not in ("all", "best"):
+        scope = "all"
     ol_key = request.args.get("ol_key", "").strip()
     identity_detail = server_download_identity(ol_key, get_book_lang())
     target_title = (
@@ -6146,15 +6467,18 @@ def api_search():
         [q, identity_detail.get("download_queries"), fallback_search_aliases],
         limit=DOWNLOAD_ALIAS_SEARCH_LIMIT,
     )
+    full_query_count = len(planned_queries)
     if page > 1:
         planned_queries = [q]
+    elif scope == "best":
+        planned_queries = planned_queries[:1]
     identity_signature = json.dumps(
         [planned_queries, target_titles, target_authors],
         ensure_ascii=False,
         separators=(",", ":"),
     )
     result_cache_key = (
-        f"download_search:v10:{sort}:{order}:{limit}:{page}:"
+        f"download_search:v11:{scope}:{sort}:{order}:{limit}:{page}:"
         f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}:"
         f"{identity_signature}"
     )
@@ -6299,6 +6623,13 @@ def api_search():
         best_book = max(books, key=scorer) if books else None
 
     matched_total = len(books)
+    has_more_options = bool(
+        scope == "best"
+        and page == 1
+        and (matched_total > 1 or total > 1 or full_query_count > 1)
+    )
+    if scope == "best":
+        books = books[:1]
     books = books[:limit]
     multi_identity_search = len(planned_queries) > 1
     if multi_identity_search:
@@ -6341,6 +6672,8 @@ def api_search():
         "searched_queries": searched_queries,
         "complete": search_complete,
         "partial": not search_complete,
+        "progressive": scope == "best",
+        "has_more_options": has_more_options,
     }
     if search_complete:
         cache_set(result_cache_key, result)
@@ -7958,18 +8291,30 @@ def load_cached_shelves():
 
 def cover_warm_jobs_for_shelves(shelves):
     trending = shelves[0].get("books", []) if shelves else []
+    medium_books = list(trending)
+    for shelf in (shelves or [])[1:3]:
+        medium_books.extend(shelf.get("books", [])[:8])
     cover_ids = []
-    for book in trending:
+    trending_cover_ids = []
+    for book in medium_books:
         match = re.fullmatch(
             r"/olcover/(\d+)(?:/[SML](?:\.webp)?)?",
             str(book.get("cover_url", "")),
         )
         if match and match.group(1) not in cover_ids:
             cover_ids.append(match.group(1))
+    for book in trending:
+        match = re.fullmatch(
+            r"/olcover/(\d+)(?:/[SML](?:\.webp)?)?",
+            str(book.get("cover_url", "")),
+        )
+        if match and match.group(1) not in trending_cover_ids:
+            trending_cover_ids.append(match.group(1))
     # Any of the first 16 books may be selected as the large hero. Every
-    # Trending cover can enter the first hydrated shelf at medium size.
+    # Trending cover can enter the first hydrated shelf at medium size. The
+    # first New This Week and Short Reads covers are warmed for the next rails.
     return (
-        [(cover_id, "L") for cover_id in cover_ids[:16]]
+        [(cover_id, "L") for cover_id in trending_cover_ids[:16]]
         + [(cover_id, "M") for cover_id in cover_ids]
     )
 

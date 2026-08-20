@@ -23,11 +23,12 @@ download identity.
 The NYT/Wikipedia signal is a ranking overlay rather than a discovery provider
 and is reported under `ranking_sources`, not candidate `sources`.
 
-The product is intentionally stateless from the reader's perspective. There are
-no user accounts, personal library, reading history, reading-progress tracking,
-or personalized recommendations. SMTP settings remain local to the browser,
-and the server stores only bounded operational and Web Vital aggregates without
-raw URLs, payloads, or IP addresses.
+The product has no user accounts, server-side reader profile, reading-progress
+tracking, or personalized recommendations. Optional Saved, Recent, and Kindle
+history lists remain in browser local storage and never affect ranking. SMTP
+settings also remain local to the browser, and the server stores only bounded
+operational and Web Vital aggregates without raw URLs, payloads, or IP
+addresses.
 
 ## User-Facing Flow Map
 
@@ -434,6 +435,24 @@ Returns:
 ### `GET /api/shelf/<topic>`
 
 Same shape as `/api/category/<topic>`. Used by horizontal homepage shelves.
+`new_this_week` and `new_this_week_fiction` use newest records from the current
+and previous publication year as a weekly refreshed editorial surface.
+`short_reads` and `short_reads_fiction` require a median page count from 1 to
+220. All shelves remain language-scoped and are deduplicated in display order.
+
+### `GET /api/suggestions`
+
+Returns up to eight title/author/ISBN suggestions from LibFlix's bounded local
+catalog corpus. It performs no upstream request and is safe to call while the
+user types.
+
+### `GET /api/covers`
+
+Recovers covers for at most 24 visible Open Library work keys in one request.
+The endpoint checks card hints, stale or fresh assembled details,
+alternate-language canonical details, and the local catalog corpus. It returns
+only local proxy URLs. Missing details may schedule a bounded background refresh
+but never make this request wait for Open Library.
 
 ### `GET /discover`
 
@@ -570,6 +589,12 @@ Params:
 | `ol_key` | Current work key, excluded from results |
 | `book_lang` | Language filter |
 
+The first response may contain an immediate `partial` set ranked from the local
+catalog corpus. The browser keeps those cards visible while bounded remote
+subject and same-author sources refine the shelf. Generic taxonomy tails such
+as `General` are excluded before source selection, and author matches require
+the displayed primary author rather than incidental contributor metadata.
+
 ### `GET /api/search`
 
 Libgen download search.
@@ -586,6 +611,12 @@ Params:
 | `lang` | `English`, `all` |
 | `dedup` | `0`, `1` |
 | `page` | integer |
+| `scope` | `best`, `all`; `best` performs the narrow first pass used by book pages |
+
+Book pages request `scope=best` first and render the recommended edition. A
+later idle `scope=all` request expands aliases and alternatives under the
+collapsed `Other options` disclosure without replacing an already-usable best
+match on failure.
 
 ### `GET /download/<md5>`
 
@@ -667,13 +698,13 @@ fallback; no arbitrary remote URL is accepted from the client.
 
 | Template | Responsibility |
 |---|---|
-| `_navbar.html` | Shared nav, topic/category tabs, expandable discovery search/settings, Kindle sheet, transition overlay, toast, quick peek |
+| `_navbar.html` | Shared nav, fixed instant-search palette, settings, browser-local library, Kindle sheet, route progress, toast, quick peek, and cover recovery |
 | `_book_card.html` | Shared card link, cover, placeholder, hover/focus metadata |
 | `_download_filters.html` | Shared collapsible download filter form |
 | `index.html` | Fixed-height hero, cover-stack carousel, featured topic rail, homepage shelves, horizontal shelf infinite scroll |
 | `topics.html` | Zero-fetch featured and grouped topic catalog with an explicit topic-search form |
 | `category.html` | Category grid and vertical infinite scroll |
-| `discover.html` | Intent switch, topic Start here / Explore layout, reason chips, compact topic filters, identity cards, partial-source status, and vertical infinite scroll |
+| `discover.html` | Automatic intent handling, topic Start here / Explore layout, reason chips, compact topic filters, identity cards, partial-source status, and vertical infinite scroll |
 | `book.html` | Preview spotlight, async description, similar shelf, inline edition results |
 | `search.html` | Direct download edition search page |
 | `results.html` | Older server-rendered download table fallback |
@@ -695,13 +726,16 @@ Backend attachment preparation:
 
 ### Shared App Chrome
 
-`_navbar.html` owns the wide-screen top bar, expandable search, expandable
-settings menu, shared route-transition overlay, and quick-peek book preview
-behavior.
+`_navbar.html` owns the wide-screen top bar, fixed search palette, expandable
+settings menu, browser-local library, shared route progress, quick-peek book
+preview behavior, and visible-card cover recovery.
 
-The collapsed search and settings controls are icon-only. Search expands on
-focus or click, then submits to `/discover`; settings expands to reveal the
-fiction/non-fiction and EN/CN choices plus Kindle delivery settings.
+The search and settings controls are icon-only. Search opens a viewport-fixed
+palette without changing navbar geometry, queries `/api/suggestions` after a
+short debounce, supports keyboard navigation, and submits to `/discover`.
+Settings reveals fiction/non-fiction and EN/CN choices, `My Library`, and Kindle
+delivery settings. On mobile, the bottom navigation controller is the sole
+owner of Search, Browse, and Settings sheet state.
 
 The navbar exposes:
 
@@ -882,6 +916,14 @@ The browser runs a shelf-priority sweep on initial render and after horizontal
 loads, removing any duplicate card from later shelves if an earlier shelf has
 already claimed the same work/title-author identity.
 
+### Browser-local continuity
+
+`My Library` intentionally has no server API. Saved books, recent opens, and
+completed Kindle sends use three versioned `localStorage` keys. Only bounded
+presentation metadata is stored, each item can be removed locally, and none of
+the lists feed search, shelves, or More Like This. This preserves utility
+without creating accounts or a personalized recommendation profile.
+
 ### Category Infinite Scroll
 
 `category.html` uses:
@@ -925,13 +967,14 @@ and WebKit scrollbar hiding rules.
 | Chinese title resolution | memory + SQLite | `chinese_title:v1:<ol_key>` | 30 days |
 | CN English display title | memory + SQLite | `english_title:v1:<ol_key>` | 30 days |
 | Assembled book detail | memory + SQLite | `book_detail:v6:<lang>:<work>` | 7 days fresh; up to 90 days stale |
-| Similar books | memory + SQLite | `similar:v6:...` | 7 days fresh; complete empty results use a 30-minute negative key |
-| Download search results | memory + SQLite | `download_search:v10:...` | 15 minutes for complete searches; stale fallback |
+| Similar books | memory + SQLite | `similar:v8:...` | 7 days fresh; complete empty results use a 30-minute negative key |
+| Download search results | memory + SQLite | `download_search:v11:...` | 15 minutes for complete searches; stale fallback; scope is part of the key |
 | Homepage shelves | memory | `shelves_{lang}_{mode}` | 1 hour |
 | Homepage shelves | disk | `shelf_cache_{lang}_{mode}.json` | immediate restart hydration; stale after 6 hours |
 | Cover images | disk + browser | `covers/<source>/<hash>-<size>.*` | persistent disk; 30 days in browser |
 | Kindle jobs/events | SQLite | UUID + ordered event ids | active lifecycle; old terminal jobs pruned |
 | Versioned static assets | browser HTTP cache | `/static/...?...v=<mtime>` | 1 year immutable |
+| Saved/recent/Kindle lists | browser localStorage | `libflix_saved_books_v1`, `libflix_recent_books_v1`, `libflix_kindle_history_v1` | device-local until removed |
 
 Runtime cache files are ignored by git.
 
@@ -1046,7 +1089,8 @@ characters. It is not a topic ranking source. The language URL helper strips
 obsolete source parameters from older links so current routes stay focused on
 mode, language, category, query, intent, and bounded filter state.
 
-No source creates a user profile. LibFlix has no accounts, personal library,
-reading history, reading-progress tracking, or personalized recommendation
-model; topic expansion and ranking are deterministic for the same query,
-language, filters, provider payloads, and versioned ranker.
+No source creates a user profile. LibFlix has no accounts, server-side library,
+reading-progress tracking, or personalized recommendation model. Browser-local
+Saved, Recent, and Kindle lists are display-only continuity tools; topic
+expansion and ranking remain deterministic for the same query, language,
+filters, provider payloads, and versioned ranker.

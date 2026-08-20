@@ -86,6 +86,108 @@ class PartialNavigationTests(unittest.TestCase):
         self.assertIn("Too many searches at once. Wait a moment", template)
 
 
+class SearchPaletteTests(unittest.TestCase):
+    def test_global_search_is_a_fixed_palette_with_local_suggestions(self):
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+
+        self.assertIn('id="searchPalette" role="dialog"', navbar)
+        self.assertIn('id="searchPaletteInput"', navbar)
+        self.assertIn("/api/suggestions?", navbar)
+        self.assertIn("Checking the local catalog", navbar)
+        self.assertIn(".search-palette-state[hidden] { display:none; }", navbar)
+        self.assertNotIn('class="search-bar', navbar)
+
+    def test_suggestion_api_returns_local_matches_without_provider_fetch(self):
+        suggestion = {
+            "title": "The Energy Game",
+            "author": "Amantha Imber",
+            "ol_key": "/works/OL1W",
+            "cover_url": "",
+        }
+        with (
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "cache_set"),
+            patch.object(app, "local_book_suggestions", return_value=[suggestion]) as local,
+        ):
+            response = app.app.test_client().get(
+                "/api/suggestions?q=The+Energy+Game+Amantha+Imber&book_lang=en"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["books"], [suggestion])
+        local.assert_called_once_with("The Energy Game Amantha Imber", "en", limit=8)
+
+
+class EditorialShelfTests(unittest.TestCase):
+    def test_new_and_short_shelves_follow_trending_in_both_modes(self):
+        self.assertEqual(
+            app.SHELVES_DEF[:3],
+            [
+                ("Trending", "trending"),
+                ("New This Week", "new_this_week"),
+                ("Short Reads", "short_reads"),
+            ],
+        )
+        self.assertEqual(
+            app.FICTION_SHELVES_DEF[:3],
+            [
+                ("Trending", "trending_fiction"),
+                ("New This Week", "new_this_week_fiction"),
+                ("Short Reads", "short_reads_fiction"),
+            ],
+        )
+        homepage = (Path(app.APP_DIR) / "templates" / "index.html").read_text()
+        self.assertIn("const SHELF_API_VERSION = 3", homepage)
+        self.assertIn("'&v=' + SHELF_API_VERSION", homepage)
+
+    def test_editorial_shelf_queries_are_language_scoped_and_bounded(self):
+        new_query, new_sort = app.shelf_query("new_this_week", "en")
+        short_query, short_sort = app.shelf_query("short_reads", "en")
+
+        current_year = app.time.localtime().tm_year
+        self.assertIn(
+            f"first_publish_year:[{current_year - 1} TO {current_year}]",
+            new_query,
+        )
+        self.assertIn("cover_i:*", new_query)
+        self.assertIn("language:eng", new_query)
+        self.assertEqual(new_sort, "new")
+        self.assertIn("number_of_pages_median:[1 TO 220]", short_query)
+        self.assertIn("language:eng", short_query)
+        self.assertEqual(short_sort, "rating")
+
+    def test_short_cached_editorial_shelf_is_refilled_before_page_one(self):
+        cached = [
+            {"title": f"Cached {index}", "author": "Author", "ol_key": f"/works/C{index}W"}
+            for index in range(5)
+        ]
+        fresh = [
+            {"title": f"Fresh {index}", "author": "Author", "ol_key": f"/works/F{index}W"}
+            for index in range(app.SHELF_INITIAL_BATCH_SIZE)
+        ]
+        shelves = [{"name": "New This Week", "topic": "new_this_week", "books": cached}]
+        with (
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "cache_set"),
+            patch.object(app, "get_shelves", return_value=shelves),
+            patch.object(app, "seen_keys_before_shelf", return_value=set()),
+            patch.object(
+                app,
+                "collect_unique_topic_books",
+                return_value=(fresh, len(fresh), 1),
+            ) as collect,
+        ):
+            books, _total, _pages = app.fetch_shelf_page_books(
+                "new_this_week",
+                page=1,
+                mode="nonfiction",
+                lang="en",
+            )
+
+        self.assertEqual(books, fresh)
+        collect.assert_called_once()
+
+
 class DiscoveryShellTests(unittest.TestCase):
     def test_cold_discovery_document_never_waits_for_provider(self):
         with (
@@ -265,12 +367,16 @@ class BookPageStabilityTests(unittest.TestCase):
         self.assertIn("if (!existing || existing.hidden)", template)
         self.assertIn("frame.replaceChildren(image, placeholder)", template)
 
-    def test_loaded_recommendations_are_never_restarted(self):
+    def test_partial_recommendations_refine_once_without_restarting_final_results(self):
         template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
 
         self.assertIn("let similarResultsRendered = false", template)
-        self.assertIn("if (pageDisposed || similarResultsRendered) return;", template)
-        self.assertIn("!similarResultsRendered", template)
+        self.assertIn("let similarResultsPartial = false", template)
+        self.assertIn(
+            "if (pageDisposed || (similarResultsRendered && !similarResultsPartial)) return;",
+            template,
+        )
+        self.assertIn("(!similarResultsRendered || similarResultsPartial)", template)
         self.assertIn(".book-card-link, .similar-loading", template)
 
     def test_provisional_partial_pages_bypass_navigation_cache(self):
@@ -321,6 +427,15 @@ class DownloadShellTests(unittest.TestCase):
         self.assertIn("downloadPagination.replaceChildren();", empty_branch)
         self.assertNotIn("renderPagination", empty_branch)
         self.assertIn(".download-pagination[hidden]", stylesheet)
+
+    def test_book_downloads_render_the_best_match_before_idle_refinement(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+
+        self.assertIn("scope = 'all'", template)
+        self.assertIn("scope === 'best' && data.has_more_options", template)
+        self.assertIn("scheduleFullDownloadSearch(queryIndex)", template)
+        self.assertIn("requestIdleCallback(run, { timeout: 650 })", template)
+        self.assertIn("{ scope: 'all', preserve: true }", template)
 
     def test_best_match_reasons_are_hidden_in_an_accessible_tooltip(self):
         downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()

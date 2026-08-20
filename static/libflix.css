@@ -186,8 +186,7 @@ body.is-navigating .lib-nav::after {
   gap: 6px !important;
 }
 
-.nav-icon-btn,
-.search-bar {
+.nav-icon-btn {
   color: #fff;
 }
 
@@ -198,26 +197,6 @@ body.is-navigating .lib-nav::after {
 
 .nav-icon-btn:hover {
   background: rgba(255, 255, 255, .07) !important;
-}
-
-.search-bar.open,
-.search-bar:focus-within {
-  background: #1b1d21 !important;
-  border-color: rgba(255, 255, 255, .28) !important;
-  box-shadow: 0 0 0 3px rgba(242, 13, 27, .07), 0 12px 32px rgba(0, 0, 0, .34) !important;
-}
-
-.search-bar {
-  display: flex;
-  align-items: center;
-}
-
-.search-bar input {
-  color: #fff !important;
-}
-
-.search-bar input::placeholder {
-  color: #777a82 !important;
 }
 
 .settings-panel {
@@ -1031,6 +1010,49 @@ footer {
   margin-top: 8px !important;
   color: #c2c3c7 !important;
   font-size: 1.08rem !important;
+}
+
+.book-save {
+  width:max-content;
+  min-height:34px;
+  margin-top:15px;
+  padding:0 12px;
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  border:1px solid rgba(255,255,255,.12);
+  border-radius:999px;
+  background:rgba(255,255,255,.055);
+  color:rgba(255,255,255,.72);
+  font-size:.75rem;
+  font-weight:680;
+}
+
+.book-save:hover {
+  border-color:rgba(255,255,255,.22);
+  background:rgba(255,255,255,.09);
+  color:#fff;
+}
+
+.book-save.saved {
+  border-color:rgba(229,9,20,.42);
+  background:rgba(229,9,20,.13);
+  color:#fff;
+}
+
+.book-save svg {
+  width:15px;
+  height:15px;
+  fill:transparent;
+  stroke:currentColor;
+  stroke-width:1.8;
+  stroke-linecap:round;
+  stroke-linejoin:round;
+}
+
+.book-save.saved svg {
+  fill:#e50914;
+  stroke:#e50914;
 }
 
 .detail-description-wrap {

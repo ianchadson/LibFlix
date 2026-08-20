@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-08-21 - Instant discovery and local continuity
+
+- Replaced the expanding navbar search with a fixed desktop/mobile palette that
+  keeps page geometry stable, supports keyboard navigation and recent terms,
+  and returns bounded title/author/ISBN suggestions from the local catalog
+  without waiting for an upstream provider.
+- Added non-personal `New This Week` and `Short Reads` shelves for fiction and
+  non-fiction, plus Top 10 numerals on Trending. The new rails use the existing
+  near-viewport hydration, infinite horizontal loading, and shelf-order dedupe.
+- Added browser-local Saved, Recent, and Kindle history tabs under `My Library`.
+  No account or server profile was introduced, and these lists do not affect
+  discovery or recommendations.
+- Changed book-page edition lookup to render the best candidate from a narrow
+  first pass, then populate collapsed alternatives during idle time without
+  removing a usable result after a later source failure.
+- Seeded More Like This from the local catalog for immediate paint, preserved
+  visible cards during remote refinement, rejected broad taxonomy subjects, and
+  required displayed-author agreement for same-author recommendations.
+- Added batched visible-card cover recovery across local hints, assembled
+  details, alternate-language metadata, and the catalog corpus, with bounded
+  background detail refresh for unresolved works.
+- Added focused cover-to-book View Transitions while retaining stable app-shell
+  navigation and reduced-motion behavior.
+- Fixed duplicate mobile Settings handlers that caused the sheet to open and
+  close in the same tap.
+- Added API, cache, privacy, performance, and regression documentation for the
+  new search, cover, recommendation, download, and local-library paths.
+
 ## 2026-08-17 - Discovery and cover outage hardening
 
 - Kept strict title/author discovery available through directly mapped

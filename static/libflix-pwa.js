@@ -120,8 +120,7 @@
     const browseSheet = document.getElementById('mobileBrowseSheet');
     const browseLinks = document.getElementById('mobileBrowseLinks');
     const browseClose = document.getElementById('mobileBrowseClose');
-    const searchForm = document.querySelector('.search-bar');
-    const searchSubmit = searchForm?.querySelector('.search-submit');
+    const searchForm = document.getElementById('searchPalette');
     const settingsToggle = document.getElementById('navSettingsToggle');
     const settingsPanel = document.getElementById('navSettingsPanel');
     if (!nav || !home || !search || !browse || !settings || !browseSheet || !browseLinks) return;
@@ -201,15 +200,14 @@
       event.stopPropagation();
       setBrowseOpen(false, false);
       window.LibFlixNavUI?.setSettingsOpen(false);
-      searchSubmit?.click();
+      window.LibFlixNavUI?.setSearchOpen(true);
     });
     settings.addEventListener('click', event => {
       event.stopPropagation();
       const shouldOpen = !settingsPanel?.classList.contains('open');
       setBrowseOpen(false, false);
       window.LibFlixNavUI?.setSearchOpen(false);
-      if (shouldOpen) settingsToggle?.click();
-      else window.LibFlixNavUI?.setSettingsOpen(false);
+      window.LibFlixNavUI?.setSettingsOpen(shouldOpen);
     });
     document.addEventListener('click', event => {
       if (!browseSheet.hidden && !browseSheet.contains(event.target) && !browse.contains(event.target)) {
@@ -223,10 +221,12 @@
       settings.classList.toggle('active', settingsPanel?.classList.contains('open'));
       settings.setAttribute('aria-expanded', String(Boolean(settingsPanel?.classList.contains('open'))));
     }).observe(settingsPanel, { attributes: true, attributeFilter: ['class'] });
-    new MutationObserver(() => {
-      search.classList.toggle('active', searchForm?.classList.contains('open'));
-      search.setAttribute('aria-expanded', String(Boolean(searchForm?.classList.contains('open'))));
-    }).observe(searchForm, { attributes: true, attributeFilter: ['class'] });
+    if (searchForm) {
+      new MutationObserver(() => {
+        search.classList.toggle('active', searchForm.classList.contains('open'));
+        search.setAttribute('aria-expanded', String(searchForm.classList.contains('open')));
+      }).observe(searchForm, { attributes: true, attributeFilter: ['class'] });
+    }
     window.addEventListener('libflix:navigated', syncActiveItem);
     syncActiveItem();
   };

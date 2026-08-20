@@ -80,6 +80,17 @@ class PwaIntegrationTests(unittest.TestCase):
         self.assertIn("link.setAttribute('aria-current', 'page')", pwa)
         self.assertIn("currentMarker.setAttribute('aria-hidden', 'true')", pwa)
 
+    def test_mobile_settings_has_one_navigation_owner(self):
+        pwa = (ROOT / "static/libflix-pwa.js").read_text()
+        navbar = (ROOT / "templates/_navbar.html").read_text()
+
+        self.assertIn("settings.addEventListener('click'", pwa)
+        self.assertIn("setSettingsOpen(shouldOpen)", pwa)
+        self.assertNotIn(
+            "document.getElementById('mobileNavSettings')?.addEventListener",
+            navbar,
+        )
+
     def test_worker_is_allowlisted_shell_only(self):
         worker = (ROOT / "static/libflix-sw.js").read_text()
         self.assertIn("SHELL_PATH_SET.has(url.pathname)", worker)

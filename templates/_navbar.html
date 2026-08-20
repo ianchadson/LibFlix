@@ -20,14 +20,40 @@
   .lang-btn { padding:5px 9px; border-radius:999px; font-size:.72rem; color:#aaa; text-decoration:none; white-space:nowrap; transition:all .15s; line-height:1; }
   .lang-btn:hover { color:#fff; background:rgba(255,255,255,.1); }
   .lang-btn.active { background:#e50914; color:#fff; }
-  .search-bar { width:42px; min-width:42px; max-width:42px; height:42px; justify-self:end; overflow:hidden; border:1px solid transparent; background:transparent; border-radius:8px; padding:3px; box-shadow:none; transition:width .24s ease, max-width .24s ease, background .16s ease, border-color .16s ease, box-shadow .16s ease; }
-  .search-bar.open, .search-bar:focus-within { width:min(390px, 36vw); max-width:390px; background:rgba(255,255,255,.105); border-color:rgba(255,255,255,.18); box-shadow:0 12px 28px rgba(0,0,0,.18); }
-  .search-bar input { height:34px !important; min-width:0; border:0 !important; border-radius:5px !important; background:transparent !important; padding:0 11px !important; font-size:.9rem !important; opacity:0; transform:translateX(-6px); transition:opacity .16s ease, transform .16s ease, flex-basis .16s ease, width .16s ease; }
-  .search-bar:not(.open):not(:focus-within) input { width:0 !important; flex:0 0 0 !important; padding:0 !important; }
-  .search-bar.open input, .search-bar:focus-within input { width:0 !important; flex:1 1 0 !important; opacity:1; transform:none; }
-  .search-bar input:focus, .search-bar input:focus-visible { outline:0 !important; box-shadow:none !important; background:transparent !important; }
-  .search-bar button { height:34px; min-width:34px; border-radius:5px !important; padding:0 !important; margin-left:0 !important; font-size:0 !important; font-weight:700; display:inline-flex; align-items:center; justify-content:center; background:transparent !important; border:0 !important; color:#fff !important; }
-  .search-bar.open button, .search-bar:focus-within button { min-width:34px; margin-left:4px !important; font-size:0 !important; }
+  .search-launch { flex:0 0 auto; }
+  .search-palette { position:fixed; inset:0; z-index:9997; display:flex; align-items:flex-start; justify-content:center; padding:clamp(74px, 12vh, 132px) 18px 24px; background:rgba(3,3,4,.74); backdrop-filter:blur(10px); opacity:0; visibility:hidden; pointer-events:none; transition:opacity .18s ease, visibility 0s linear .18s; }
+  .search-palette.open { opacity:1; visibility:visible; pointer-events:auto; transition-delay:0s; }
+  body.search-open { overflow:hidden; }
+  .search-palette-panel { width:min(720px, 100%); max-height:min(690px, calc(100vh - 110px)); overflow:hidden; border:1px solid rgba(255,255,255,.13); border-radius:16px; background:rgba(20,20,22,.985); box-shadow:0 34px 110px rgba(0,0,0,.62); transform:translateY(-10px) scale(.985); transition:transform .2s ease; }
+  .search-palette.open .search-palette-panel { transform:none; }
+  .search-palette-form { display:grid; grid-template-columns:26px minmax(0,1fr) 34px; align-items:center; gap:10px; min-height:68px; padding:0 16px 0 20px; border-bottom:1px solid rgba(255,255,255,.09); }
+  .search-palette-form:focus-within { box-shadow:inset 0 -1px 0 rgba(229,9,20,.7); }
+  .search-palette-form .nav-search-icon { width:19px; height:19px; color:rgba(255,255,255,.72); }
+  .search-palette-form input { width:100%; height:54px; min-width:0; padding:0; border:0; outline:0; appearance:none; -webkit-appearance:none; background:transparent; color:#fff; font-size:1.08rem; font-weight:570; }
+  .search-palette-form input:focus-visible { outline:0 !important; }
+  .search-palette-form input::-webkit-search-cancel-button { display:none; }
+  .search-palette-form input::placeholder { color:rgba(255,255,255,.38); }
+  .search-palette-close { width:34px; height:34px; padding:0; border:0; border-radius:999px; background:rgba(255,255,255,.07); color:rgba(255,255,255,.72); font-size:1.15rem; line-height:1; }
+  .search-palette-close:hover { background:rgba(255,255,255,.12); color:#fff; }
+  .search-palette-body { max-height:calc(min(690px, 100vh - 110px) - 69px); overflow:auto; padding:14px; overscroll-behavior:contain; }
+  .search-palette-label { margin:2px 6px 9px; color:rgba(255,255,255,.42); font-size:.67rem; font-weight:760; letter-spacing:.065em; text-transform:uppercase; }
+  .search-shortcuts { display:flex; flex-wrap:wrap; gap:7px; margin:0 0 15px; }
+  .search-shortcut { display:inline-flex; align-items:center; gap:7px; min-height:34px; padding:0 12px; border:1px solid rgba(255,255,255,.1); border-radius:999px; background:rgba(255,255,255,.055); color:rgba(255,255,255,.82); font-size:.75rem; font-weight:650; text-decoration:none; }
+  .search-shortcut:hover, .search-shortcut:focus-visible { border-color:rgba(229,9,20,.48); background:rgba(229,9,20,.12); color:#fff; }
+  .search-shortcut-dot { width:5px; height:5px; border-radius:999px; background:#e50914; box-shadow:0 0 12px rgba(229,9,20,.7); }
+  .search-palette-results { display:grid; gap:3px; }
+  .search-result { display:grid; grid-template-columns:42px minmax(0,1fr) 20px; align-items:center; gap:12px; min-height:66px; padding:7px 9px; border-radius:9px; color:#fff; text-decoration:none; transition:background .12s ease; }
+  .search-result:hover, .search-result.active, .search-result:focus-visible { background:rgba(255,255,255,.08); outline:0; }
+  .search-result-cover { width:42px; height:56px; border-radius:4px; object-fit:cover; background:#292b30; }
+  .search-result-placeholder { width:42px; height:56px; border-radius:4px; background:linear-gradient(145deg,#2d2f34,#202126); }
+  .search-result-copy { min-width:0; }
+  .search-result-title { overflow:hidden; color:#fff; font-size:.86rem; font-weight:710; line-height:1.22; text-overflow:ellipsis; white-space:nowrap; }
+  .search-result-author { margin-top:4px; overflow:hidden; color:rgba(255,255,255,.52); font-size:.72rem; text-overflow:ellipsis; white-space:nowrap; }
+  .search-result-title, .search-result-author { display:block; }
+  .search-result-arrow { color:rgba(255,255,255,.34); font-size:1rem; }
+  .search-palette-state { min-height:78px; display:flex; align-items:center; justify-content:center; gap:9px; color:rgba(255,255,255,.44); font-size:.78rem; text-align:center; }
+  .search-palette-state[hidden] { display:none; }
+  .search-palette-spinner { width:17px; height:17px; border-radius:999px; border:2px solid rgba(229,9,20,.2); border-top-color:#e50914; animation:appSpin .72s linear infinite; }
   .settings-wrap { position:relative; }
   .settings-panel { position:absolute; right:0; top:calc(100% + 10px); width:260px; padding:12px; border:1px solid rgba(255,255,255,.1); background:rgba(24,24,24,.96); backdrop-filter:blur(6px); border-radius:14px; box-shadow:0 18px 42px rgba(0,0,0,.34); opacity:0; visibility:hidden; transform:translateY(-6px) scale(.98); pointer-events:none; transition:opacity .18s ease, transform .18s ease, visibility 0s linear .18s; z-index:30; }
   .settings-panel.open { opacity:1; visibility:visible; transform:none; pointer-events:auto; transition-delay:0s; }
@@ -38,14 +64,15 @@
   .settings-action-btn { width:100%; min-height:38px; border:1px solid rgba(255,255,255,.1); background:rgba(255,255,255,.065); color:#fff; border-radius:10px; padding:8px 10px; display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:.78rem; font-weight:650; transition:background .16s ease, border-color .16s ease, transform .16s ease; }
   .settings-action-btn:hover { background:rgba(255,255,255,.11); border-color:rgba(255,255,255,.18); transform:translateY(-1px); }
   .settings-action-icon { width:18px; height:18px; border-radius:5px; background:rgba(229,9,20,.16); color:#ff4b54; display:inline-flex; align-items:center; justify-content:center; font-size:.82rem; font-weight:800; flex:0 0 auto; }
+  .settings-action-icon svg { width:12px; height:12px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
   .settings-action-text { display:flex; align-items:center; gap:9px; min-width:0; text-align:left; }
   .settings-action-copy { display:flex; flex-direction:column; gap:2px; min-width:0; }
   .settings-action-title { color:#fff; font-size:.8rem; font-weight:720; line-height:1.1; }
   .settings-action-state { color:rgba(255,255,255,.46); font-size:.67rem; font-weight:570; line-height:1.15; }
   .settings-action-btn.is-configured .settings-action-state { color:#65d994; }
   .settings-action-arrow { color:rgba(255,255,255,.42); font-size:1rem; line-height:1; }
-  .kindle-modal { position:absolute; left:0; right:0; top:0; min-height:100vh; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(4,4,5,.72); z-index:9998; }
-  .kindle-modal.open { display:flex; }
+  .kindle-modal, .library-modal { position:fixed; inset:0; min-height:100vh; display:none; align-items:center; justify-content:center; padding:24px; background:rgba(4,4,5,.72); z-index:9998; }
+  .kindle-modal.open, .library-modal.open { display:flex; }
   .kindle-card { width:min(520px, 100%); border:1px solid rgba(255,255,255,.12); border-radius:18px; background:linear-gradient(145deg, rgba(28,28,29,.98), rgba(16,16,17,.98)); color:#fff; box-shadow:0 30px 90px rgba(0,0,0,.58); overflow:hidden; }
   .kindle-card-head { padding:18px 20px 14px; border-bottom:1px solid rgba(255,255,255,.08); display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
   .kindle-card-title { margin:0; font-size:1.05rem; font-weight:750; letter-spacing:-.01em; }
@@ -67,6 +94,21 @@
   .kindle-secondary { height:40px; border:1px solid rgba(255,255,255,.1); border-radius:999px; background:rgba(255,255,255,.06); color:rgba(255,255,255,.78); padding:0 16px; font-weight:650; font-size:.82rem; }
   .kindle-secondary:hover { background:rgba(255,255,255,.1); color:#fff; }
   .kindle-status { min-height:18px; margin:10px 2px 0; font-size:.78rem; color:rgba(255,255,255,.54); }
+  .library-card { width:min(680px, 100%); max-height:min(760px, calc(100vh - 32px)); display:flex; flex-direction:column; border:1px solid rgba(255,255,255,.12); border-radius:18px; background:rgba(18,18,20,.99); color:#fff; box-shadow:0 30px 90px rgba(0,0,0,.58); overflow:hidden; }
+  .library-tabs { display:flex; gap:4px; padding:12px 16px 0; }
+  .library-tab { min-height:34px; padding:0 13px; border:0; border-radius:999px; background:transparent; color:rgba(255,255,255,.52); font-size:.75rem; font-weight:690; }
+  .library-tab.active { background:rgba(255,255,255,.1); color:#fff; }
+  .library-list { min-height:220px; overflow:auto; padding:12px 16px 18px; }
+  .library-item { display:grid; grid-template-columns:44px minmax(0,1fr) auto; align-items:center; gap:12px; min-height:66px; padding:8px; border-radius:10px; color:#fff; text-decoration:none; }
+  .library-item:hover { background:rgba(255,255,255,.07); }
+  .library-item-cover { width:44px; height:58px; object-fit:cover; border-radius:4px; background:#292b30; }
+  .library-item-link { min-width:0; color:inherit; text-decoration:none; }
+  .library-item-title { overflow:hidden; font-size:.84rem; font-weight:700; text-overflow:ellipsis; white-space:nowrap; }
+  .library-item-meta { margin-top:4px; color:rgba(255,255,255,.48); font-size:.7rem; }
+  .library-item-remove { width:30px; height:30px; border:0; border-radius:999px; background:transparent; color:rgba(255,255,255,.42); font-size:1rem; }
+  .library-item-remove:hover { background:rgba(255,255,255,.08); color:#fff; }
+  .library-empty { min-height:210px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; color:rgba(255,255,255,.4); text-align:center; }
+  .library-empty strong { color:rgba(255,255,255,.72); font-size:.86rem; }
   .cat-tabs { width:100%; max-width:100% !important; justify-content:flex-start; gap:4px !important; padding:0 0 2px; mask-image:linear-gradient(90deg, transparent, #000 18px, #000 calc(100% - 18px), transparent); }
   .lib-nav-main > .cat-tabs { min-width:0; }
   .cat-tab { padding:5px 11px !important; border-radius:999px !important; font-size:.74rem !important; line-height:1; }
@@ -121,12 +163,13 @@
   .quick-peek-loading { margin-top:10px; display:flex; align-items:center; gap:8px; color:rgba(255,255,255,.56); font-size:.74rem; }
   .quick-peek-spinner { width:15px; height:15px; border-radius:999px; border:2px solid rgba(229,9,20,.2); border-top-color:#e50914; animation:appSpin .72s linear infinite; }
   @keyframes appSpin { to { transform:rotate(360deg); } }
+  ::view-transition-group(book-cover) { animation-duration:.32s; animation-timing-function:cubic-bezier(.2,.8,.2,1); }
+  ::view-transition-old(book-cover), ::view-transition-new(book-cover) { height:100%; object-fit:cover; border-radius:8px; }
   @media (prefers-reduced-motion: reduce) {
     .app-transition, .app-transition-core { transition:none; }
     .app-transition-spinner { animation:none; border-color:rgba(229,9,20,.45); }
   }
   @media (min-width: 1180px) {
-    .search-bar.open, .search-bar:focus-within { width:420px; max-width:420px; }
     .cat-tabs { justify-content:center; }
   }
   @media (max-width: 980px) {
@@ -134,7 +177,6 @@
     .lib-nav-main { grid-template-columns:auto 1fr auto; gap:10px; }
     .nav-actions { justify-self:end; }
     .cat-tabs { grid-column:1 / -1; grid-row:2; }
-    .search-bar.open, .search-bar:focus-within { width:min(360px, 52vw); max-width:360px; }
   }
   @media (max-width: 600px) {
     .lib-nav { min-height:84px; padding: 8px 12px 12px; align-items:flex-start; }
@@ -142,10 +184,14 @@
     .navbar-brand { font-size:1.15rem !important; }
     .nav-actions { justify-self:end; }
     .cat-tabs { grid-column:1 / -1; grid-row:2; }
-    .search-bar.open, .search-bar:focus-within { position:absolute; right:0; top:0; width:calc(100vw - 24px); max-width:none; z-index:35; }
     .settings-panel { right:0; width:calc(100vw - 24px); }
-    .kindle-modal { padding:12px; align-items:flex-end; }
+    .search-palette { padding:0; align-items:stretch; background:#101012; backdrop-filter:none; }
+    .search-palette-panel { width:100%; max-height:none; border:0; border-radius:0; box-shadow:none; }
+    .search-palette-form { min-height:64px; padding-left:16px; }
+    .search-palette-body { max-height:calc(100vh - 64px); padding-bottom:calc(88px + env(safe-area-inset-bottom)); }
+    .kindle-modal, .library-modal { padding:12px; align-items:flex-end; }
     .kindle-card { border-radius:18px 18px 14px 14px; }
+    .library-card { max-height:calc(100vh - 24px); border-radius:18px 18px 14px 14px; }
     .kindle-grid { grid-template-columns:1fr; gap:0; }
     .kindle-actions { flex-direction:column; align-items:stretch; }
     .kindle-secondary, .kindle-primary { width:100%; }
@@ -189,12 +235,9 @@
       {% endif %}
       </div>
       <div class="nav-actions">
-        <form {% if search_id %}id="{{ search_id }}" action="javascript:"{% else %}action="{{ search_action | default(discover_url(nav_mode, book_lang)) }}" method="get"{% endif %} class="search-bar" role="search">
-          <input type="text" name="q" value="{{ search_value or '' }}" placeholder="Search..." aria-label="Search books">
-          <button class="search-submit" type="submit" aria-label="Search" aria-expanded="false">
-            <span class="nav-search-icon" aria-hidden="true"></span>
-          </button>
-        </form>
+        <button class="nav-icon-btn search-launch" id="navSearchToggle" type="button" aria-label="Search books" title="Search" aria-expanded="false" aria-controls="searchPalette">
+          <span class="nav-search-icon" aria-hidden="true"></span>
+        </button>
         <div class="settings-wrap">
           <button class="nav-icon-btn" id="navSettingsToggle" type="button" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="navSettingsPanel">
             <span class="nav-gear-icon" aria-hidden="true">
@@ -218,6 +261,19 @@
                 <a href="{{ url_for('switch_language', lang='en', next=lang_url('en')) }}" data-no-prefetch class="lang-btn {% if book_lang == 'en' %}active{% endif %}" title="English books">EN</a>
                 <a href="{{ url_for('switch_language', lang='cn', next=lang_url('cn')) }}" data-no-prefetch class="lang-btn {% if book_lang == 'cn' %}active{% endif %}" title="Chinese books">CN</a>
               </div>
+            </div>
+            <div class="settings-group">
+              <div class="settings-label">Library</div>
+              <button class="settings-action-btn" id="navLibrary" type="button">
+                <span class="settings-action-text">
+                  <span class="settings-action-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18l-6-4-6 4Z"></path></svg></span>
+                  <span class="settings-action-copy">
+                    <span class="settings-action-title">My Library</span>
+                    <span class="settings-action-state" id="navLibraryState">Saved and sent books</span>
+                  </span>
+                </span>
+                <span class="settings-action-arrow" aria-hidden="true">›</span>
+              </button>
             </div>
             <div class="settings-group">
               <div class="settings-label">Kindle</div>
@@ -251,6 +307,31 @@
     </div>
   </div>
 </nav>
+<section class="search-palette" id="searchPalette" role="dialog" aria-modal="true" aria-label="Search LibFlix" aria-hidden="true" inert>
+  <div class="search-palette-panel">
+    <form class="search-palette-form" id="searchPaletteForm" action="{{ search_action | default(discover_url(nav_mode, book_lang)) }}" method="get" role="search">
+      <span class="nav-search-icon" aria-hidden="true"></span>
+      <input id="searchPaletteInput" type="search" name="q" value="{{ search_value or '' }}" placeholder="Title, author or ISBN" aria-label="Search books" autocomplete="off" spellcheck="false">
+      <button class="search-palette-close" id="searchPaletteClose" type="button" aria-label="Close search">×</button>
+    </form>
+    <div class="search-palette-body">
+      <div class="search-palette-label">Explore</div>
+      <div class="search-shortcuts">
+        <a class="search-shortcut" href="{{ category_url('new_this_week_fiction' if nav_mode == 'fiction' else 'new_this_week', nav_mode, book_lang) }}"><span class="search-shortcut-dot"></span>New this week</a>
+        <a class="search-shortcut" href="{{ category_url('short_reads_fiction' if nav_mode == 'fiction' else 'short_reads', nav_mode, book_lang) }}"><span class="search-shortcut-dot"></span>Short reads</a>
+        <a class="search-shortcut" href="{{ category_url('trending_fiction' if nav_mode == 'fiction' else 'trending', nav_mode, book_lang) }}">Trending</a>
+        {% if nav_mode != 'fiction' %}<a class="search-shortcut" href="{{ topics_url(nav_mode, book_lang) }}">Browse topics</a>{% endif %}
+      </div>
+      <div id="searchRecentSection" hidden>
+        <div class="search-palette-label">Recent</div>
+        <div class="search-shortcuts" id="searchRecent"></div>
+      </div>
+      <div class="search-palette-label" id="searchResultsLabel">Quick results</div>
+      <div class="search-palette-results" id="searchPaletteResults" role="listbox" aria-label="Book suggestions"></div>
+      <div class="search-palette-state" id="searchPaletteState">Start typing to find a book.</div>
+    </div>
+  </div>
+</section>
 <section class="mobile-browse-sheet" id="mobileBrowseSheet" aria-label="Browse books" hidden>
   <div class="mobile-browse-head">
     <h2>Browse</h2>
@@ -291,7 +372,7 @@
       </div>
       <button class="kindle-close" type="button" onclick="closeKindleModal()" aria-label="Close Kindle settings">×</button>
     </div>
-    <div class="kindle-form">
+    <form class="kindle-form" id="kindleForm">
       <div class="kindle-field">
         <label for="ke_kindle">Kindle email</label>
         <input id="ke_kindle" autocomplete="email" placeholder="you@kindle.com">
@@ -327,12 +408,29 @@
         {% endif %}
       </div>
       <div class="kindle-actions">
-        <button class="kindle-primary" type="button" onclick="saveKindleSettings()">Save settings</button>
+        <button class="kindle-primary" type="submit">Save settings</button>
         <button class="kindle-secondary" type="button" onclick="closeKindleModal()">Cancel</button>
         <button class="kindle-forget" id="kindleForget" type="button">Forget</button>
       </div>
       <p class="kindle-status" id="ke_status"></p>
+    </form>
+  </div>
+</div>
+<div class="library-modal" id="libraryModal" role="dialog" aria-modal="true" aria-labelledby="libraryModalTitle">
+  <div class="library-card">
+    <div class="kindle-card-head">
+      <div>
+        <h2 class="kindle-card-title" id="libraryModalTitle">My Library</h2>
+        <p class="kindle-card-sub">Stored only in this browser.</p>
+      </div>
+      <button class="kindle-close" id="libraryClose" type="button" aria-label="Close library">×</button>
     </div>
+    <div class="library-tabs" role="tablist" aria-label="Library views">
+      <button class="library-tab active" type="button" role="tab" data-library-tab="saved" aria-selected="true">Saved</button>
+      <button class="library-tab" type="button" role="tab" data-library-tab="recent" aria-selected="false">Recent</button>
+      <button class="library-tab" type="button" role="tab" data-library-tab="kindle" aria-selected="false">Kindle</button>
+    </div>
+    <div class="library-list" id="libraryList"></div>
   </div>
 </div>
 <div class="app-toast" id="appToast" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -371,6 +469,7 @@
     const pageCache = new Map();
     const pendingPages = new Map();
     const loadedCoverUrls = new Set();
+    let pendingBookCoverImage = null;
     let deferredCoverObserver = null;
     const loadDeferredCover = image => {
       if (!(image instanceof HTMLImageElement) || image.getAttribute('src')) return;
@@ -405,6 +504,106 @@
       images.forEach(image => deferredCoverObserver.observe(image));
     };
     window.LibFlixCoverLoader = { register: registerDeferredCovers, load: loadDeferredCover };
+    const missingCoverQueue = new Map();
+    let missingCoverTimer = null;
+    const applyRecoveredCover = (card, coverUrl) => {
+      if (!card?.isConnected || !coverUrl) return;
+      if (card.matches('.search-result')) {
+        const placeholder = card.querySelector('.search-result-placeholder');
+        if (!placeholder) return;
+        const image = document.createElement('img');
+        image.className = 'search-result-cover';
+        image.alt = '';
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        image.referrerPolicy = 'no-referrer';
+        image.src = coverUrl;
+        image.addEventListener('error', () => image.replaceWith(placeholder), { once: true });
+        placeholder.replaceWith(image);
+        return;
+      }
+      let image = card.querySelector('img');
+      if (!image) {
+        image = document.createElement('img');
+        image.alt = card.dataset.title || '';
+        image.loading = 'lazy';
+        image.decoding = 'async';
+        image.referrerPolicy = 'no-referrer';
+        image.addEventListener('load', () => image.classList.add('loaded'));
+        image.addEventListener('error', () => {
+          image.hidden = true;
+          card.querySelector('.placeholder')?.removeAttribute('hidden');
+        });
+        const skeleton = document.createElement('div');
+        skeleton.className = 'cover-skeleton';
+        card.prepend(skeleton, image);
+      }
+      image.hidden = false;
+      image.removeAttribute('src');
+      image.dataset.coverSrc = coverUrl;
+      card.querySelector('.placeholder')?.setAttribute('hidden', '');
+      card.classList.remove('no-cover');
+      loadDeferredCover(image);
+    };
+    const flushMissingCovers = () => {
+      missingCoverTimer = null;
+      const jobs = Array.from(missingCoverQueue.entries()).slice(0, 24);
+      jobs.forEach(([key]) => missingCoverQueue.delete(key));
+      if (!jobs.length) return;
+      const params = new URLSearchParams({ book_lang: document.documentElement.lang === 'zh' ? 'cn' : 'en' });
+      jobs.forEach(([key]) => params.append('ol_key', key));
+      fetch('/api/covers?' + params, { cache: 'no-store' })
+        .then(response => response.json())
+        .then(data => {
+          const covers = data.success ? (data.covers || {}) : {};
+          jobs.forEach(([key, cards]) => cards.forEach(card => applyRecoveredCover(card, covers[key])));
+          (data.refreshing || []).forEach(key => {
+            const cards = jobs.find(([jobKey]) => jobKey === key)?.[1] || [];
+            window.setTimeout(() => cards.forEach(card => {
+              if (!card.isConnected || card.querySelector('img:not([hidden])')) return;
+              card.dataset.coverRecoveryQueued = '0';
+              missingCoverObserver?.observe(card);
+            }), 1400);
+          });
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (missingCoverQueue.size && !missingCoverTimer) missingCoverTimer = window.setTimeout(flushMissingCovers, 40);
+        });
+    };
+    const queueMissingCover = card => {
+      const key = card?.dataset.olKey || '';
+      if (!/^\/works\/OL\d+W$/.test(key) || card.dataset.coverRecoveryQueued === '1') return;
+      if (card.querySelector('img:not([hidden])')) return;
+      card.dataset.coverRecoveryQueued = '1';
+      const cards = missingCoverQueue.get(key) || new Set();
+      cards.add(card);
+      missingCoverQueue.set(key, cards);
+      if (!missingCoverTimer) missingCoverTimer = window.setTimeout(flushMissingCovers, 36);
+    };
+    let missingCoverObserver = null;
+    const registerMissingCovers = (root = document) => {
+      const cards = [];
+      if (root.matches?.('.book-card[data-ol-key], .search-result[data-ol-key]')) cards.push(root);
+      root.querySelectorAll?.('.book-card[data-ol-key], .search-result[data-ol-key]').forEach(card => cards.push(card));
+      const missingCards = cards.filter(card => !card.querySelector('img:not([hidden])'));
+      if (!missingCards.length) return;
+      if (!('IntersectionObserver' in window)) {
+        missingCards.forEach(queueMissingCover);
+        return;
+      }
+      if (!missingCoverObserver) {
+        missingCoverObserver = new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            missingCoverObserver.unobserve(entry.target);
+            queueMissingCover(entry.target);
+          });
+        }, { rootMargin: '420px' });
+      }
+      missingCards.forEach(card => missingCoverObserver.observe(card));
+    };
+    window.LibFlixCoverRecovery = { register: registerMissingCovers };
     const activateTransition = () => {
       const overlay = document.getElementById('appTransition');
       document.body.classList.add('is-leaving');
@@ -579,13 +778,20 @@
         link.href = next.href;
         link.className = next.className;
       });
-      const currentSearch = document.querySelector('.search-bar');
-      const nextSearch = nextDocument.querySelector('.search-bar');
+      const currentSearch = document.getElementById('searchPaletteForm');
+      const nextSearch = nextDocument.getElementById('searchPaletteForm');
       if (currentSearch && nextSearch) {
         currentSearch.setAttribute('action', nextSearch.getAttribute('action') || '/discover');
         const currentInput = currentSearch.querySelector('input[name="q"]');
         const nextInput = nextSearch.querySelector('input[name="q"]');
-        if (currentInput && nextInput) currentInput.value = nextInput.value;
+        if (currentInput && nextInput && !document.getElementById('searchPalette')?.classList.contains('open')) {
+          currentInput.value = nextInput.value;
+        }
+      }
+      const currentShortcuts = document.querySelector('.search-palette-body > .search-shortcuts');
+      const nextShortcuts = nextDocument.querySelector('.search-palette-body > .search-shortcuts');
+      if (currentShortcuts && nextShortcuts) {
+        currentShortcuts.innerHTML = nextShortcuts.innerHTML;
       }
     };
 
@@ -670,8 +876,29 @@
       document.body.className = pageMeta.bodyClass || nextDocument.body.className;
       const importedMain = document.importNode(nextMain, true);
       restoreLoadedCovers(importedMain);
-      currentMain.replaceWith(importedMain);
+      const targetCover = importedMain.querySelector('.detail-cover');
+      const canTransitionCover = Boolean(
+        pendingBookCoverImage
+        && targetCover
+        && document.startViewTransition
+        && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      );
+      if (canTransitionCover) {
+        targetCover.style.viewTransitionName = 'book-cover';
+        const sourceCover = pendingBookCoverImage;
+        const transition = document.startViewTransition(() => currentMain.replaceWith(importedMain));
+        await transition.updateCallbackDone.catch(() => {});
+        transition.finished.finally(() => {
+          sourceCover.style.viewTransitionName = '';
+          targetCover.style.viewTransitionName = '';
+        });
+      } else {
+        if (pendingBookCoverImage) pendingBookCoverImage.style.viewTransitionName = '';
+        currentMain.replaceWith(importedMain);
+      }
+      pendingBookCoverImage = null;
       registerDeferredCovers(importedMain);
+      registerMissingCovers(importedMain);
       importedMain.querySelectorAll('img').forEach(image => {
         if (image.complete && image.naturalWidth > 0) rememberLoadedCover(image);
       });
@@ -745,6 +972,8 @@
         const nextDocument = new DOMParser().parseFromString(page.html, 'text/html');
         await replacePage(nextDocument, url.href, { push, historyEntry, pageMeta: page });
       } catch (error) {
+        if (pendingBookCoverImage) pendingBookCoverImage.style.viewTransitionName = '';
+        pendingBookCoverImage = null;
         if (error.name === 'AbortError') return;
         window.location.assign(url.href);
         return;
@@ -806,6 +1035,10 @@
     document.addEventListener('DOMContentLoaded', () => {
       hideTransition();
       registerDeferredCovers(document);
+      registerMissingCovers(document);
+      new MutationObserver(mutations => mutations.forEach(mutation => mutation.addedNodes.forEach(node => {
+        if (node.nodeType === Node.ELEMENT_NODE) registerMissingCovers(node);
+      }))).observe(document.body, { childList: true, subtree: true });
     }, { once: true });
     window.addEventListener('pageshow', hideTransition);
     window.addEventListener('load', hideTransition);
@@ -832,6 +1065,14 @@
       }
       if (!isInternalNavigation(rawHref)) return;
       event.preventDefault();
+      const selectedCover = link.querySelector('.book-card img.loaded, .hero-book img.loaded');
+      if (selectedCover && document.startViewTransition) {
+        if (pendingBookCoverImage) pendingBookCoverImage.style.viewTransitionName = '';
+        pendingBookCoverImage = selectedCover;
+        selectedCover.style.viewTransitionName = 'book-cover';
+      }
+      if (link.closest('#searchPalette')) window.LibFlixNavUI?.setSearchOpen(false);
+      if (link.closest('#libraryModal')) closeLibrary();
       navigateWithTransition(link.href);
     });
     document.addEventListener('pointerover', event => {
@@ -890,33 +1131,187 @@
       navigateWithTransition(window.location.href, { push: false, historyEntry: event.state || null });
     });
 
-    const searchForm = document.querySelector('.search-bar');
-    const searchInput = searchForm?.querySelector('input[name="q"]');
-    const searchButton = searchForm?.querySelector('button[type="submit"]');
-    const setSearchOpen = open => {
-      if (!searchForm) return;
-      searchForm.classList.toggle('open', open);
-      searchButton?.setAttribute('aria-expanded', String(open));
+    const searchForm = document.getElementById('searchPaletteForm');
+    const searchInput = document.getElementById('searchPaletteInput');
+    const searchButton = document.getElementById('navSearchToggle');
+    const searchPalette = document.getElementById('searchPalette');
+    const searchPaletteClose = document.getElementById('searchPaletteClose');
+    const searchResults = document.getElementById('searchPaletteResults');
+    const searchState = document.getElementById('searchPaletteState');
+    const searchRecent = document.getElementById('searchRecent');
+    const searchRecentSection = document.getElementById('searchRecentSection');
+    let searchRequest = null;
+    let searchTimer = null;
+    let searchActiveIndex = -1;
+    let searchReturnFocus = null;
+    const SEARCH_RECENTS_KEY = 'libflix_recent_searches_v1';
+    const currentBookPath = olKey => {
+      const workId = String(olKey || '').replace(/^\/?works\//, '');
+      const modePrefix = window.location.pathname.startsWith('/fiction') ? '/fiction' : '';
+      const langPrefix = document.documentElement.lang === 'zh' ? '/cn' : '';
+      return modePrefix + langPrefix + '/book/' + encodeURIComponent(workId);
     };
-    searchButton?.addEventListener('mousedown', event => {
-      if (!searchForm.classList.contains('open') && !searchInput?.value.trim()) {
-        event.preventDefault();
+    const readRecentSearches = () => {
+      try {
+        const values = JSON.parse(localStorage.getItem(SEARCH_RECENTS_KEY) || '[]');
+        return Array.isArray(values) ? values.filter(value => typeof value === 'string').slice(0, 5) : [];
+      } catch {
+        return [];
       }
-    });
-    searchButton?.addEventListener('click', event => {
-      if (!searchInput?.value.trim() && document.activeElement !== searchInput) {
-        event.preventDefault();
-        setSearchOpen(true);
-        searchInput?.focus({ preventScroll: true });
-        window.setTimeout(() => searchInput?.focus({ preventScroll: true }), 80);
+    };
+    const rememberSearch = query => {
+      query = String(query || '').trim();
+      if (!query) return;
+      const values = [query, ...readRecentSearches().filter(value => value.toLowerCase() !== query.toLowerCase())].slice(0, 5);
+      try { localStorage.setItem(SEARCH_RECENTS_KEY, JSON.stringify(values)); } catch {}
+    };
+    const renderRecentSearches = () => {
+      const values = readRecentSearches();
+      searchRecentSection.hidden = !values.length;
+      searchRecent.replaceChildren(...values.map(value => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'search-shortcut';
+        button.textContent = value;
+        button.addEventListener('click', () => {
+          searchInput.value = value;
+          requestSearchSuggestions();
+          searchInput.focus({ preventScroll: true });
+        });
+        return button;
+      }));
+    };
+    const setSearchSelection = index => {
+      const options = Array.from(searchResults.querySelectorAll('.search-result'));
+      searchActiveIndex = options.length ? Math.max(-1, Math.min(index, options.length - 1)) : -1;
+      options.forEach((option, optionIndex) => option.classList.toggle('active', optionIndex === searchActiveIndex));
+    };
+    const renderSearchSuggestions = books => {
+      searchActiveIndex = -1;
+      searchResults.replaceChildren(...(books || []).map(book => {
+        const link = document.createElement('a');
+        link.className = 'search-result';
+        link.href = currentBookPath(book.ol_key);
+        link.dataset.olKey = book.ol_key || '';
+        link.setAttribute('role', 'option');
+        link.addEventListener('mouseenter', () => setSearchSelection(Array.from(searchResults.children).indexOf(link)));
+        const cover = book.cover_url ? document.createElement('img') : document.createElement('span');
+        if (book.cover_url) {
+          cover.className = 'search-result-cover';
+          cover.src = book.cover_url;
+          cover.alt = '';
+          cover.loading = 'lazy';
+          cover.decoding = 'async';
+        } else {
+          cover.className = 'search-result-placeholder';
+          cover.setAttribute('aria-hidden', 'true');
+        }
+        const copy = document.createElement('span');
+        copy.className = 'search-result-copy';
+        const title = document.createElement('span');
+        title.className = 'search-result-title';
+        title.textContent = book.title || 'Untitled';
+        const author = document.createElement('span');
+        author.className = 'search-result-author';
+        author.textContent = book.author || '';
+        copy.append(title, author);
+        const arrow = document.createElement('span');
+        arrow.className = 'search-result-arrow';
+        arrow.setAttribute('aria-hidden', 'true');
+        arrow.textContent = '›';
+        link.append(cover, copy, arrow);
+        return link;
+      }));
+      searchState.hidden = Boolean(books?.length);
+      if (!books?.length) searchState.textContent = 'No cached match yet. Press Enter to search the full catalog.';
+    };
+    const fetchSearchSuggestions = query => {
+      searchRequest?.abort();
+      const controller = new AbortController();
+      searchRequest = controller;
+      searchState.hidden = false;
+      searchState.innerHTML = '<span class="search-palette-spinner" aria-hidden="true"></span><span>Checking the local catalog</span>';
+      const mode = window.location.pathname.startsWith('/fiction') ? 'fiction' : 'nonfiction';
+      const lang = document.documentElement.lang === 'zh' ? 'cn' : 'en';
+      fetch('/api/suggestions?' + new URLSearchParams({ q: query, mode, book_lang: lang }), {
+        signal: controller.signal,
+        cache: 'no-store',
+      })
+        .then(response => response.json())
+        .then(data => {
+          if (searchRequest !== controller) return;
+          renderSearchSuggestions(data.success ? data.books : []);
+        })
+        .catch(error => {
+          if (error.name !== 'AbortError' && searchRequest === controller) renderSearchSuggestions([]);
+        })
+        .finally(() => {
+          if (searchRequest === controller) searchRequest = null;
+        });
+    };
+    const requestSearchSuggestions = () => {
+      if (searchTimer) window.clearTimeout(searchTimer);
+      const query = searchInput?.value.trim() || '';
+      if (query.length < 2) {
+        searchRequest?.abort();
+        searchResults.replaceChildren();
+        searchState.hidden = false;
+        searchState.textContent = 'Start typing to find a book.';
+        return;
       }
+      searchTimer = window.setTimeout(() => fetchSearchSuggestions(query), 120);
+    };
+    const setSearchOpen = open => {
+      if (!searchPalette) return;
+      searchPalette.classList.toggle('open', open);
+      searchPalette.setAttribute('aria-hidden', String(!open));
+      searchPalette.inert = !open;
+      searchButton?.setAttribute('aria-expanded', String(open));
+      document.body.classList.toggle('search-open', open);
+      if (open) {
+        searchReturnFocus = document.activeElement;
+        renderRecentSearches();
+        requestSearchSuggestions();
+        window.setTimeout(() => searchInput?.focus({ preventScroll: true }), 30);
+      } else {
+        searchRequest?.abort();
+        if (searchTimer) window.clearTimeout(searchTimer);
+        searchTimer = null;
+        if (searchReturnFocus instanceof HTMLElement) searchReturnFocus.focus({ preventScroll: true });
+        searchReturnFocus = null;
+      }
+    };
+    searchButton?.addEventListener('click', () => setSearchOpen(true));
+    searchPaletteClose?.addEventListener('click', () => setSearchOpen(false));
+    searchPalette?.addEventListener('click', event => {
+      if (event.target === event.currentTarget) setSearchOpen(false);
     });
-    searchForm?.addEventListener('focusin', () => setSearchOpen(true));
+    searchInput?.addEventListener('input', requestSearchSuggestions);
     searchInput?.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && !searchInput.value.trim()) {
+      const options = Array.from(searchResults.querySelectorAll('.search-result'));
+      if (event.key === 'ArrowDown' && options.length) {
+        event.preventDefault();
+        setSearchSelection((searchActiveIndex + 1) % options.length);
+      } else if (event.key === 'ArrowUp' && options.length) {
+        event.preventDefault();
+        setSearchSelection(searchActiveIndex <= 0 ? options.length - 1 : searchActiveIndex - 1);
+      } else if (event.key === 'Enter' && searchActiveIndex >= 0 && options[searchActiveIndex]) {
+        event.preventDefault();
+        options[searchActiveIndex].click();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
         setSearchOpen(false);
-        searchInput.blur();
       }
+    });
+    searchForm?.addEventListener('submit', event => {
+      event.preventDefault();
+      const query = searchInput?.value.trim() || '';
+      if (!query) return;
+      rememberSearch(query);
+      const action = new URL(searchForm.action || '/discover', window.location.href);
+      action.search = new URLSearchParams({ q: query }).toString();
+      setSearchOpen(false);
+      navigateWithTransition(action.href);
     });
 
     const settingsToggle = document.getElementById('navSettingsToggle');
@@ -938,6 +1333,7 @@
     const kindleModalSub = document.getElementById('kindleModalSub');
     const kindlePasswordToggle = document.getElementById('kindlePasswordToggle');
     const kindleForget = document.getElementById('kindleForget');
+    const kindleForm = document.getElementById('kindleForm');
     let modalReturnFocus = null;
     let pendingKindleAction = null;
     const getKindleSettings = () => {
@@ -1063,6 +1459,10 @@
       kindlePasswordToggle.setAttribute('aria-label', show ? 'Hide app password' : 'Show app password');
     });
     kindleForget?.addEventListener('click', window.clearKindleSettings);
+    kindleForm?.addEventListener('submit', event => {
+      event.preventDefault();
+      window.saveKindleSettings();
+    });
     updateKindleConnectionState();
     kindleSettingsButton?.addEventListener('click', event => {
       event.stopPropagation();
@@ -1072,6 +1472,163 @@
     kindleModal?.addEventListener('click', event => {
       if (event.target === event.currentTarget) window.closeKindleModal();
     });
+
+    const libraryButton = document.getElementById('navLibrary');
+    const libraryState = document.getElementById('navLibraryState');
+    const libraryModal = document.getElementById('libraryModal');
+    const libraryClose = document.getElementById('libraryClose');
+    const libraryList = document.getElementById('libraryList');
+    const libraryTabs = Array.from(document.querySelectorAll('[data-library-tab]'));
+    const LIBRARY_KEYS = {
+      saved: 'libflix_saved_books_v1',
+      recent: 'libflix_recent_books_v1',
+      kindle: 'libflix_kindle_history_v1',
+    };
+    let libraryView = 'saved';
+    let libraryReturnFocus = null;
+    const readLibrary = view => {
+      try {
+        const items = JSON.parse(localStorage.getItem(LIBRARY_KEYS[view]) || '[]');
+        return Array.isArray(items) ? items.slice(0, view === 'recent' ? 30 : 80) : [];
+      } catch {
+        return [];
+      }
+    };
+    const writeLibrary = (view, items) => {
+      try { localStorage.setItem(LIBRARY_KEYS[view], JSON.stringify(items)); } catch {}
+    };
+    const normalizeLibraryBook = book => ({
+      ol_key: String(book?.ol_key || ''),
+      title: String(book?.title || 'Book').trim() || 'Book',
+      author: String(book?.author || '').trim(),
+      cover_url: String(book?.cover_url || book?.coverUrl || '').trim(),
+      url: String(book?.url || (book?.ol_key ? currentBookPath(book.ol_key) : '')).trim(),
+      detail: String(book?.detail || '').trim(),
+      timestamp: Number(book?.timestamp) || Date.now(),
+    });
+    const upsertLibraryBook = (view, book, limit = 80) => {
+      const normalized = normalizeLibraryBook(book);
+      const identity = normalized.ol_key || (normalized.title.toLowerCase() + '|' + normalized.author.toLowerCase());
+      const items = [
+        normalized,
+        ...readLibrary(view).filter(item => {
+          const itemIdentity = item.ol_key || (String(item.title || '').toLowerCase() + '|' + String(item.author || '').toLowerCase());
+          return itemIdentity !== identity;
+        }),
+      ].slice(0, limit);
+      writeLibrary(view, items);
+      return normalized;
+    };
+    const updateLibraryState = () => {
+      const count = readLibrary('saved').length;
+      if (libraryState) libraryState.textContent = count ? count + (count === 1 ? ' saved book' : ' saved books') : 'Saved and sent books';
+    };
+    const renderLibrary = () => {
+      const items = readLibrary(libraryView);
+      libraryTabs.forEach(tab => {
+        const active = tab.dataset.libraryTab === libraryView;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', String(active));
+      });
+      if (!items.length) {
+        const empty = document.createElement('div');
+        empty.className = 'library-empty';
+        const title = document.createElement('strong');
+        title.textContent = libraryView === 'saved' ? 'No saved books yet' : libraryView === 'recent' ? 'No recently opened books' : 'No Kindle deliveries yet';
+        const copy = document.createElement('span');
+        copy.textContent = libraryView === 'saved' ? 'Save a title from its book page.' : 'Your activity stays on this device.';
+        empty.append(title, copy);
+        libraryList.replaceChildren(empty);
+        return;
+      }
+      libraryList.replaceChildren(...items.map(item => {
+        const row = document.createElement('div');
+        row.className = 'library-item';
+        const cover = item.cover_url ? document.createElement('img') : document.createElement('span');
+        cover.className = 'library-item-cover';
+        if (item.cover_url) {
+          cover.src = item.cover_url;
+          cover.alt = '';
+          cover.loading = 'lazy';
+        } else {
+          cover.setAttribute('aria-hidden', 'true');
+        }
+        const link = document.createElement(item.url ? 'a' : 'span');
+        link.className = 'library-item-link';
+        if (item.url) link.href = item.url;
+        const title = document.createElement('div');
+        title.className = 'library-item-title';
+        title.textContent = item.title || 'Book';
+        const meta = document.createElement('div');
+        meta.className = 'library-item-meta';
+        meta.textContent = item.detail || item.author || new Date(item.timestamp || Date.now()).toLocaleDateString();
+        link.append(title, meta);
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'library-item-remove';
+        remove.setAttribute('aria-label', 'Remove ' + (item.title || 'book'));
+        remove.textContent = '×';
+        remove.addEventListener('click', () => {
+          const identity = item.ol_key || (String(item.title || '').toLowerCase() + '|' + String(item.author || '').toLowerCase());
+          writeLibrary(libraryView, readLibrary(libraryView).filter(candidate => {
+            const candidateIdentity = candidate.ol_key || (String(candidate.title || '').toLowerCase() + '|' + String(candidate.author || '').toLowerCase());
+            return candidateIdentity !== identity;
+          }));
+          updateLibraryState();
+          renderLibrary();
+        });
+        row.append(cover, link, remove);
+        return row;
+      }));
+    };
+    const closeLibrary = () => {
+      libraryModal?.classList.remove('open');
+      if (!kindleModal?.classList.contains('open')) document.body.classList.remove('modal-open');
+      if (libraryReturnFocus instanceof HTMLElement) libraryReturnFocus.focus({ preventScroll: true });
+      libraryReturnFocus = null;
+    };
+    const openLibrary = (view = 'saved') => {
+      if (!libraryModal) return;
+      libraryView = LIBRARY_KEYS[view] ? view : 'saved';
+      libraryReturnFocus = document.activeElement;
+      renderLibrary();
+      libraryModal.classList.add('open');
+      document.body.classList.add('modal-open');
+      libraryTabs.find(tab => tab.dataset.libraryTab === libraryView)?.focus({ preventScroll: true });
+    };
+    window.LibFlixLibrary = {
+      rememberRecent: book => upsertLibraryBook('recent', book, 30),
+      addKindle: book => upsertLibraryBook('kindle', book, 80),
+      isSaved: olKey => readLibrary('saved').some(item => item.ol_key === olKey),
+      toggleSaved: book => {
+        const normalized = normalizeLibraryBook(book);
+        const items = readLibrary('saved');
+        const exists = items.some(item => item.ol_key === normalized.ol_key);
+        if (exists) writeLibrary('saved', items.filter(item => item.ol_key !== normalized.ol_key));
+        else upsertLibraryBook('saved', normalized, 80);
+        updateLibraryState();
+        return !exists;
+      },
+      open: openLibrary,
+    };
+    libraryButton?.addEventListener('click', event => {
+      event.stopPropagation();
+      setSettingsOpen(false);
+      openLibrary('saved');
+    });
+    libraryClose?.addEventListener('click', closeLibrary);
+    libraryModal?.addEventListener('click', event => {
+      if (event.target === event.currentTarget) closeLibrary();
+    });
+    libraryTabs.forEach(tab => tab.addEventListener('click', () => {
+      libraryView = tab.dataset.libraryTab;
+      renderLibrary();
+    }));
+    document.addEventListener('libflix:kindle-complete', event => {
+      window.LibFlixLibrary.addKindle(event.detail || {});
+      updateLibraryState();
+    });
+    updateLibraryState();
     const appToast = document.getElementById('appToast');
     let toastTimer = null;
     window.LibFlixNotify = (message, type = '', details = null) => {
@@ -1112,16 +1669,23 @@
     };
     document.addEventListener('click', event => {
       const target = event.target;
-      if (searchForm && !searchForm.contains(target) && !searchInput?.value.trim()) setSearchOpen(false);
       if (settingsPanel && settingsToggle && !settingsPanel.contains(target) && !settingsToggle.contains(target)) setSettingsOpen(false);
     });
     document.addEventListener('keydown', event => {
       if (event.key === 'Escape') {
+        setSearchOpen(false);
         setSettingsOpen(false);
         window.closeKindleModal();
+        closeLibrary();
+        return;
+      }
+      const target = event.target;
+      const isTyping = target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target?.isContentEditable;
+      if ((event.key.toLowerCase() === 'k' && (event.metaKey || event.ctrlKey)) || (event.key === '/' && !isTyping)) {
+        event.preventDefault();
+        setSearchOpen(true);
       }
     });
-
     const quickPeek = document.createElement('div');
     quickPeek.className = 'quick-peek';
     quickPeek.setAttribute('role', 'status');

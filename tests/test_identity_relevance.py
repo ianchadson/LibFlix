@@ -395,6 +395,15 @@ class SimilarBookRelevanceTests(unittest.TestCase):
             ]),
             ["Endurance sports", "Motivation (psychology)"],
         )
+        self.assertEqual(
+            app.similar_subject_candidates([
+                "TECHNOLOGY & ENGINEERING / General",
+                "BIOGRAPHY & AUTOBIOGRAPHY / Business",
+                "Inc Apple Computer",
+                "Computer engineers",
+            ]),
+            ["Inc Apple Computer", "Computer engineers"],
+        )
 
     def test_cached_detail_recomputes_recommendation_subjects(self):
         cached = {
@@ -578,6 +587,37 @@ class SimilarBookRelevanceTests(unittest.TestCase):
         self.assertEqual(refresh.call_args.args[2], [])
         self.assertEqual(refresh.call_args.args[5], ["Kazuo Ishiguro"])
 
+    def test_api_similar_serves_local_results_while_remote_refreshes(self):
+        local_book = {
+            "title": "A Related Book",
+            "author": "Example Author",
+            "ol_key": "/works/OL2W",
+            "cover_url": "",
+        }
+        with (
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "cache_set"),
+            patch.object(app, "disk_cache_get", return_value=None),
+            patch.object(app, "disk_cache_get_stale", return_value=None),
+            patch.object(app, "local_similar_books", return_value=[local_book]) as local,
+            patch.object(app, "schedule_similar_refresh", return_value=True) as refresh,
+        ):
+            response = app.app.test_client().get("/api/similar", query_string={
+                "ol_key": "/works/OL1W",
+                "book_lang": "en",
+                "title": "Current Book",
+                "author": "Example Author",
+                "subject": "Productivity",
+            })
+
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["partial"])
+        self.assertTrue(payload["refreshing"])
+        self.assertEqual(payload["books"], [local_book])
+        local.assert_called_once()
+        refresh.assert_called_once()
+
     def test_similar_cache_key_uses_current_relevance_version(self):
         cache_key = app.similar_cache_key(
             "/works/OL1W",
@@ -587,7 +627,7 @@ class SimilarBookRelevanceTests(unittest.TestCase):
             ["Henry Kissinger"],
         )
 
-        self.assertTrue(cache_key.startswith("similar:v6:"))
+        self.assertTrue(cache_key.startswith("similar:v8:"))
 
     def test_confirmed_single_subject_candidates_backfill_after_strict_tier(self):
         strict = self.record(

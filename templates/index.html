@@ -10,13 +10,6 @@
     body { background: #141414; color: #fff; font-family: 'Helvetica Neue', Arial, sans-serif; }
     .navbar { background: linear-gradient(180deg, rgba(20,20,20,.9) 0, rgba(20,20,20,.5) 80%, transparent); z-index: 10; min-height: 48px; }
     .navbar-brand { font-size: 1.3rem; font-weight: 700; color: #e50914 !important; letter-spacing: -1px; }
-    .search-bar { min-width: 0; }
-    .search-bar input { background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); color: #fff; border-radius: 4px; font-size: .82rem; padding: 4px 8px; height: 30px; }
-    .search-bar input:focus { background: rgba(255,255,255,.15); border-color: #e50914; box-shadow: none; color: #fff; }
-    .search-bar input::placeholder { color: rgba(255,255,255,.4); font-size: .78rem; }
-    .search-bar button { background: #e50914; border: none; border-radius: 4px; white-space: nowrap; }
-    .search-bar button:hover { background: #f40612; }
-
     .mode-toggle { display: flex; background: rgba(255,255,255,.08); border-radius: 20px; padding: 1px; }
     .mode-btn { padding: 2px 10px; border-radius: 18px; font-size: .7rem; color: #aaa; text-decoration: none; white-space: nowrap; transition: all .15s; }
     .mode-btn.active { background: #e50914; color: #fff; }
@@ -136,6 +129,9 @@
     .book-card .info .t { font-size: .82rem; font-weight: 700; line-height: 1.12; color: #fff; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .book-card .info .a { font-size: .7rem; font-weight: 500; color: rgba(255,255,255,.76); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 8px; position: relative; z-index: 2; }
+    .ranked-book-link { position:relative; width:188px; padding-left:38px; }
+    .ranked-book-link .book-rank { position:absolute; left:0; bottom:-6px; z-index:0; color:#111214; font-size:6.2rem; font-weight:900; line-height:.82; letter-spacing:0; -webkit-text-stroke:2px rgba(255,255,255,.78); text-shadow:0 10px 28px rgba(0,0,0,.48); pointer-events:none; }
+    .ranked-book-link .book-card { position:relative; z-index:1; }
 
     .error-banner { background: rgba(229,9,20,.2); border: 1px solid #e50914; color: #ff6b6b; padding: 8px 16px; border-radius: 4px; margin-bottom: 1rem; text-align: center; }
 
@@ -198,6 +194,8 @@
       .book-card, .book-card img { width: 120px; }
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
+      .ranked-book-link { width:151px; padding-left:31px; }
+      .ranked-book-link .book-rank { font-size:5rem; -webkit-text-stroke-width:1.5px; }
       .shelf-deferred-placeholder { min-height:180px; }
       .shelf-deferred-card { flex-basis:120px; height:180px; }
       .shelf-more-btn { width: 40px; height: 40px; margin: 0 12px; }
@@ -312,7 +310,7 @@
     {% endif %}
 
     {% for shelf in shelves %}
-    <div class="shelf" data-topic="{{ shelf.topic }}" data-page="0" data-total-pages="25" data-loading="0" data-deferred="1">
+    <div class="shelf" data-topic="{{ shelf.topic }}" data-page="0" data-total-pages="25" data-loading="0" data-deferred="1" data-rendered="0">
       <div class="shelf-head">
         <div class="shelf-title">{{ shelf.name }}</div>
       </div>
@@ -335,6 +333,7 @@
   <script data-page-script>
     const MODE = {{ mode | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
+    const SHELF_API_VERSION = 3;
     const HERO_BOOKS = {{ (hero_items | default([])) | tojson }};
     let heroIndex = 0;
     let heroCycleTimer = null;
@@ -762,13 +761,16 @@
       });
     }
 
-    function bookCardHtml(b) {
+    function bookCardHtml(b, rank = 0) {
       const href = bookUrl(b);
+      const titleValue = String(b.title || 'Untitled');
+      const authorValue = String(b.author || '');
       const fallback = 'this.style.display=\'none\';this.parentNode.querySelector(\'.ph-fallback\').style.display=\'flex\';';
       const cover = b.cover_url
-        ? '<div class="cover-skeleton"></div><img data-cover-src="' + esc(b.cover_url) + '" alt="' + esc(b.title) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none" aria-label="No cover available"></div>'
+        ? '<div class="cover-skeleton"></div><img data-cover-src="' + esc(b.cover_url) + '" alt="' + esc(titleValue) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none" aria-label="No cover available"></div>'
         : '<div class="placeholder" aria-label="No cover available"></div>';
-      return '<a href="' + href + '" class="book-card-link"><div class="book-card" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(b.title || '') + '" data-author="' + esc(b.author || '') + '">' + cover + '<div class="info"><div class="t">' + (b.title.length > 50 ? esc(b.title.slice(0,50)) + '...' : esc(b.title)) + '</div>' + (b.author ? '<div class="a">' + (b.author.length > 35 ? esc(b.author.slice(0,35)) + '...' : esc(b.author)) + '</div>' : '') + '</div></div></a>';
+      const rankLabel = rank > 0 && rank <= 10 ? '<span class="book-rank" aria-hidden="true">' + rank + '</span>' : '';
+      return '<a href="' + href + '" class="book-card-link' + (rankLabel ? ' ranked-book-link' : '') + '">' + rankLabel + '<div class="book-card' + (b.cover_url ? '' : ' no-cover') + '" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(titleValue) + '" data-author="' + esc(authorValue) + '">' + cover + '<div class="info"><div class="t">' + (titleValue.length > 50 ? esc(titleValue.slice(0,50)) + '...' : esc(titleValue)) + '</div>' + (authorValue ? '<div class="a">' + (authorValue.length > 35 ? esc(authorValue.slice(0,35)) + '...' : esc(authorValue)) + '</div>' : '') + '</div></div></a>';
     }
 
     function shelfQueue(shelf) {
@@ -782,9 +784,14 @@
       const batch = queue.splice(0, SHELF_BATCH_SIZE);
       const row = shelf.querySelector('.shelf-row');
       const btn = shelf.querySelector('.shelf-more-btn');
-      if (btn) btn.insertAdjacentHTML('beforebegin', batch.map(bookCardHtml).join(''));
-      else row?.insertAdjacentHTML('beforeend', batch.map(bookCardHtml).join(''));
+      const rendered = Number(shelf.dataset.rendered || '0');
+      const ranked = /^trending(?:_fiction)?$/.test(shelf.dataset.topic || '');
+      const html = batch.map((book, index) => bookCardHtml(book, ranked ? rendered + index + 1 : 0)).join('');
+      if (btn) btn.insertAdjacentHTML('beforebegin', html);
+      else row?.insertAdjacentHTML('beforeend', html);
+      shelf.dataset.rendered = String(rendered + batch.length);
       window.LibFlixCoverLoader?.register(row);
+      window.LibFlixCoverRecovery?.register(row);
       if (!queue.length && Number(shelf.dataset.page || '0') >= Number(shelf.dataset.totalPages || '25')) {
         if (btn) btn.style.display = 'none';
       }
@@ -801,7 +808,7 @@
       shelf.dataset.loading = '1';
       const btn = shelf.querySelector('.shelf-more-btn');
       if (btn) btn.classList.add('loading');
-      fetch('/api/shelf/' + encodeURIComponent(topic) + '?page=' + nextPage + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
+      fetch('/api/shelf/' + encodeURIComponent(topic) + '?page=' + nextPage + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG) + '&v=' + SHELF_API_VERSION)
         .then(r => r.json())
         .then(data => {
           shelf.querySelector('.shelf-deferred-placeholder')?.remove();
