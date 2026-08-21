@@ -4734,8 +4734,14 @@ def cache_headers(resp):
     if request.path == "/static/libflix-sw.js":
         resp.headers["Service-Worker-Allowed"] = "/"
         resp.headers["Cache-Control"] = "no-cache, max-age=0, must-revalidate"
-    if not request.path.startswith("/static/") and (
-        resp.mimetype == "text/html" or request.path.startswith("/api/")
+    # Only a deliberate document navigation may update the browsing language.
+    # API calls and partial-navigation prefetches can finish after a language
+    # switch; allowing those stale responses to set the cookie makes EN/CN
+    # appear to switch back by itself.
+    if (
+        not request.path.startswith("/static/")
+        and resp.mimetype == "text/html"
+        and request.headers.get("X-LibFlix-Navigation") != "partial"
     ):
         resp.set_cookie("book_lang", get_book_lang(), max_age=31536000, samesite="Lax")
     if getattr(g, "rate_limit_headers", None):

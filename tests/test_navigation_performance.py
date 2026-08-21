@@ -182,6 +182,14 @@ class QuickLookTests(unittest.TestCase):
         self.assertIn("const QUICK_PEEK_SCROLL_SETTLE_DELAY = 180", navbar)
         self.assertIn("const QUICK_PEEK_REARM_DISTANCE = 5", navbar)
         self.assertIn("const dismissQuickPeekForScroll = () =>", navbar)
+        self.assertIn("html.quick-peek-scroll-guarded .book-card:hover", navbar)
+        self.assertIn("document.documentElement.classList.add('quick-peek-scroll-guarded')", navbar)
+        self.assertIn("const releaseQuickPeekScrollGuard = () =>", navbar)
+        self.assertIn("document.documentElement.classList.remove('quick-peek-scroll-guarded')", navbar)
+        self.assertNotIn(
+            "requestAnimationFrame(() => quickPeek.classList.remove('is-scroll-dismissed'))",
+            navbar,
+        )
         self.assertIn(
             "document.addEventListener('scroll', dismissQuickPeekForScroll",
             navbar,

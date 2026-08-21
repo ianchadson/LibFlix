@@ -1,6 +1,7 @@
 import json
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from bs4 import BeautifulSoup
 
@@ -35,6 +36,29 @@ class PwaIntegrationTests(unittest.TestCase):
                         self.assertNotIn("Set-Cookie", response.headers)
                     finally:
                         response.close()
+
+    def test_stale_chinese_requests_cannot_reverse_an_english_switch(self):
+        with app.app.test_client() as client:
+            switched = client.get("/language/en?next=/")
+            self.assertEqual(switched.status_code, 302)
+            self.assertIn("book_lang=en", switched.headers.get("Set-Cookie", ""))
+
+            stale_api = client.get("/api/health?book_lang=cn")
+            self.assertEqual(stale_api.status_code, 200)
+            self.assertNotIn("Set-Cookie", stale_api.headers)
+
+            with patch.object(app, "get_shelves", return_value=[]):
+                stale_prefetch = client.get(
+                    "/cn",
+                    headers={"X-LibFlix-Navigation": "partial"},
+                )
+                home = client.get("/")
+            self.assertEqual(stale_prefetch.status_code, 200)
+            self.assertNotIn("Set-Cookie", stale_prefetch.headers)
+            self.assertEqual(
+                BeautifulSoup(home.data, "html.parser").html.get("lang"),
+                "en",
+            )
 
     def test_manifest_has_no_dead_search_shortcut(self):
         manifest = json.loads((ROOT / "static/manifest.webmanifest").read_text())

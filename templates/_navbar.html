@@ -157,6 +157,9 @@
   a:has(.book-card):focus-visible { box-shadow:0 0 0 2px rgba(229,9,20,.85), 0 0 0 5px rgba(229,9,20,.18); }
   a.quick-peek-target .book-card { transform:none !important; box-shadow:none !important; }
   a.quick-peek-target .book-card .info { opacity:0 !important; }
+  html.quick-peek-scroll-guarded .book-card { transition:none !important; }
+  html.quick-peek-scroll-guarded .book-card:hover { transform:none !important; box-shadow:0 10px 30px rgba(0,0,0,.22) !important; }
+  html.quick-peek-scroll-guarded .book-card:not(.no-cover) .info { opacity:0 !important; transform:translateY(9px) !important; transition:none !important; }
   .quick-peek { position:fixed; display:block; box-sizing:border-box; width:var(--quick-peek-width, 150px); height:var(--quick-peek-height, 225px); overflow:hidden; padding:0; border:1px solid rgba(255,255,255,.16); border-radius:8px; background:#191a1e; color:#fff; box-shadow:0 18px 44px rgba(0,0,0,.54), 0 0 0 1px rgba(0,0,0,.2); z-index:9000; opacity:0; transform:translateY(3px); pointer-events:none; transition:opacity .1s ease, transform .14s cubic-bezier(.2,.8,.2,1); contain:layout paint style; }
   .quick-peek.visible { opacity:1; transform:translateY(0); }
   .quick-peek.is-scroll-dismissed { opacity:0; transform:translateY(0); transition:none; }
@@ -1936,9 +1939,6 @@
       quickPeekRetryTimer = null;
       quickPeek.classList.remove('visible');
       quickPeek.setAttribute('aria-hidden', 'true');
-      if (immediate) {
-        requestAnimationFrame(() => quickPeek.classList.remove('is-scroll-dismissed'));
-      }
     };
     const syncQuickPeekAfterScroll = () => {
       quickPeekScrollFrame = null;
@@ -1993,14 +1993,23 @@
       }, QUICK_PEEK_OPEN_DELAY);
     };
     const dismissQuickPeekForScroll = () => {
-      quickPeekScrollGuarded = true;
-      const pointer = quickPeekLastPointer || quickPeekPointer;
-      quickPeekScrollOrigin = pointer ? { ...pointer } : null;
+      if (!quickPeekScrollGuarded) {
+        quickPeekScrollGuarded = true;
+        const pointer = quickPeekLastPointer || quickPeekPointer;
+        quickPeekScrollOrigin = pointer ? { ...pointer } : null;
+        document.documentElement.classList.add('quick-peek-scroll-guarded');
+        hideQuickPeek(true);
+      }
       if (quickPeekScrollIdleTimer) window.clearTimeout(quickPeekScrollIdleTimer);
       quickPeekScrollIdleTimer = window.setTimeout(() => {
         quickPeekScrollIdleTimer = null;
       }, QUICK_PEEK_SCROLL_SETTLE_DELAY);
-      hideQuickPeek(true);
+    };
+    const releaseQuickPeekScrollGuard = () => {
+      quickPeekScrollGuarded = false;
+      quickPeekScrollOrigin = null;
+      document.documentElement.classList.remove('quick-peek-scroll-guarded');
+      quickPeek.classList.remove('is-scroll-dismissed');
     };
     document.addEventListener('pointerover', event => {
       if (!window.matchMedia('(hover: hover)').matches) return;
@@ -2019,8 +2028,7 @@
         const deltaX = pointer.x - (quickPeekScrollOrigin?.x ?? pointer.x);
         const deltaY = pointer.y - (quickPeekScrollOrigin?.y ?? pointer.y);
         if (quickPeekScrollOrigin && Math.hypot(deltaX, deltaY) < QUICK_PEEK_REARM_DISTANCE) return;
-        quickPeekScrollGuarded = false;
-        quickPeekScrollOrigin = null;
+        releaseQuickPeekScrollGuard();
         const elementAtPointer = document.elementFromPoint(pointer.x, pointer.y);
         const link = elementAtPointer?.closest?.('a:has(.book-card)');
         if (link) queueQuickPeek(link, pointer);
@@ -2051,7 +2059,10 @@
         suppressFocusQuickPeek = false;
         return;
       }
-      if (link) showQuickPeek(link);
+      if (link) {
+        if (quickPeekScrollGuarded) releaseQuickPeekScrollGuard();
+        showQuickPeek(link);
+      }
     });
     document.addEventListener('focusout', event => {
       const link = event.target.closest('a:has(.book-card)');
@@ -2110,6 +2121,10 @@
       }));
     }).observe(document.body, { childList: true, subtree: true });
     window.addEventListener('libflix:navigated', () => {
+      if (quickPeekScrollIdleTimer) window.clearTimeout(quickPeekScrollIdleTimer);
+      quickPeekScrollIdleTimer = null;
+      releaseQuickPeekScrollGuard();
+      hideQuickPeek();
       quickPeekWarmBudget = 6;
       registerQuickPeekCards();
     });
