@@ -155,13 +155,29 @@
   }
   a:has(.book-card) { display:inline-block; border-radius:10px; outline:none; position:relative; z-index:1; }
   a:has(.book-card):focus-visible { box-shadow:0 0 0 2px rgba(229,9,20,.85), 0 0 0 5px rgba(229,9,20,.18); }
-  .quick-peek { position:absolute; width:min(390px, calc(100vw - 28px)); max-height:min(430px, calc(100vh - 28px)); overflow:hidden; padding:16px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:rgba(18,18,18,.97); color:#fff; box-shadow:0 18px 46px rgba(0,0,0,.48); backdrop-filter:blur(6px); z-index:9000; opacity:0; transform:translateY(8px) scale(.98); pointer-events:none; transition:opacity .14s ease, transform .14s ease; }
-  .quick-peek.visible { opacity:1; transform:none; }
-  .quick-peek-title { font-size:.95rem; line-height:1.18; font-weight:750; margin:0; }
-  .quick-peek-author { margin-top:4px; color:rgba(255,255,255,.66); font-size:.78rem; }
-  .quick-peek-desc { margin-top:12px; color:rgba(255,255,255,.78); font-size:.8rem; line-height:1.46; display:-webkit-box; -webkit-line-clamp:8; -webkit-box-orient:vertical; overflow:hidden; }
-  .quick-peek-loading { margin-top:10px; display:flex; align-items:center; gap:8px; color:rgba(255,255,255,.56); font-size:.74rem; }
-  .quick-peek-spinner { width:15px; height:15px; border-radius:999px; border:2px solid rgba(229,9,20,.2); border-top-color:#e50914; animation:appSpin .72s linear infinite; }
+  a.quick-peek-target .book-card { transform:none !important; box-shadow:none !important; }
+  a.quick-peek-target .book-card .info { opacity:0 !important; }
+  .quick-peek { position:fixed; display:block; box-sizing:border-box; width:var(--quick-peek-width, 150px); height:var(--quick-peek-height, 225px); overflow:hidden; padding:0; border:1px solid rgba(255,255,255,.16); border-radius:8px; background:#191a1e; color:#fff; box-shadow:0 18px 44px rgba(0,0,0,.54), 0 0 0 1px rgba(0,0,0,.2); z-index:9000; opacity:0; transform:translateY(3px); pointer-events:none; transition:opacity .1s ease, transform .14s cubic-bezier(.2,.8,.2,1); contain:layout paint style; }
+  .quick-peek.visible { opacity:1; transform:translateY(0); }
+  .quick-peek-cover { position:absolute; inset:0; overflow:hidden; background:#26282d; }
+  .quick-peek-cover::after { content:""; position:absolute; inset:0; box-shadow:inset 0 0 0 1px rgba(255,255,255,.04); pointer-events:none; }
+  .quick-peek-cover img { width:100%; height:100%; display:block; object-fit:cover; opacity:1; }
+  .quick-peek-cover-placeholder { width:100%; height:100%; display:flex; align-items:center; justify-content:center; color:rgba(255,255,255,.24); font-size:2rem; font-weight:750; background:linear-gradient(145deg, #303238, #202126); }
+  .quick-peek-content { position:absolute; inset:0; z-index:1; min-width:0; display:flex; flex-direction:column; justify-content:flex-end; padding:13px 12px 11px; background:linear-gradient(180deg, rgba(7,8,10,.08) 0%, rgba(7,8,10,.24) 28%, rgba(7,8,10,.86) 62%, rgba(7,8,10,.98) 100%); }
+  .quick-peek-title { font-size:.9rem; line-height:1.14; font-weight:780; margin:0; text-shadow:0 1px 8px rgba(0,0,0,.8); display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+  .quick-peek-author { margin-top:4px; color:rgba(255,255,255,.7); font-size:.69rem; line-height:1.2; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .quick-peek-description { min-height:0; margin-top:9px; overflow:hidden; }
+  .quick-peek-desc { color:rgba(255,255,255,.79); font-size:.68rem; line-height:1.35; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
+  .quick-peek-skeleton { display:grid; gap:5px; padding-top:1px; }
+  .quick-peek-skeleton-line { height:5px; border-radius:999px; background:linear-gradient(100deg, rgba(255,255,255,.08) 8%, rgba(255,255,255,.2) 18%, rgba(255,255,255,.08) 33%); background-size:220% 100%; animation:quickPeekShimmer 1.1s linear infinite; }
+  .quick-peek-skeleton-line:nth-child(2) { width:92%; }
+  .quick-peek-skeleton-line:nth-child(3) { width:74%; }
+  .quick-peek-empty { display:none; }
+  .quick-peek-action { display:flex; align-items:center; gap:5px; margin-top:9px; color:rgba(255,255,255,.92); font-size:.68rem; font-weight:720; }
+  .quick-peek-action-arrow { color:#ff2634; font-size:.92rem; line-height:1; }
+  .quick-peek.is-compact .quick-peek-description { display:none; }
+  .quick-peek.is-compact .quick-peek-action { margin-top:7px; }
+  @keyframes quickPeekShimmer { to { background-position-x:-220%; } }
   @keyframes appSpin { to { transform:rotate(360deg); } }
   ::view-transition-group(book-cover) { animation-duration:.32s; animation-timing-function:cubic-bezier(.2,.8,.2,1); }
   ::view-transition-old(book-cover), ::view-transition-new(book-cover) { height:100%; object-fit:cover; border-radius:8px; }
@@ -197,6 +213,7 @@
     .kindle-secondary, .kindle-primary { width:100%; }
     .mode-btn { padding:5px 10px; font-size:.68rem; }
     .lang-btn { padding:5px 8px; font-size:.68rem; }
+    .quick-peek { display:none; }
   }
 </style>
 {% set nav_mode = mode | default('nonfiction') %}
@@ -1688,149 +1705,229 @@
     });
     const quickPeek = document.createElement('div');
     quickPeek.className = 'quick-peek';
-    quickPeek.setAttribute('role', 'status');
-    quickPeek.setAttribute('aria-live', 'polite');
+    quickPeek.id = 'bookQuickPeek';
+    quickPeek.setAttribute('role', 'tooltip');
+    quickPeek.setAttribute('aria-hidden', 'true');
     document.body.appendChild(quickPeek);
     const quickPeekCache = window.LibFlixBookPreviewCache || new Map();
     window.LibFlixBookPreviewCache = quickPeekCache;
+    const quickPeekRequests = new Map();
     let quickPeekTimer = null;
     let quickPeekActiveLink = null;
     let quickPeekPendingLink = null;
     let quickPeekPointer = null;
     let quickPeekScrollFrame = null;
-    let quickPeekAbortController = null;
     let quickPeekRetryTimer = null;
+    let quickPeekWarmTimer = null;
+    let quickPeekWarmBudget = 6;
+    const quickPeekWarmQueue = new Map();
     let suppressFocusQuickPeek = false;
-    const QUICK_PEEK_MAX_RETRIES = 4;
+    const QUICK_PEEK_OPEN_DELAY = 90;
+    const QUICK_PEEK_MAX_RETRIES = 2;
 
     const truncate = (value, length) => {
       const text = String(value || '').trim();
       return text.length > length ? text.slice(0, length - 1).trim() + '...' : text;
     };
-    const renderQuickPeek = (card, state, details) => {
-      const title = card.dataset.title || 'Untitled';
-      const author = card.dataset.author || '';
+    const quickPeekKey = card => card?.dataset.olKey || '';
+    const quickPeekLang = () => document.documentElement.lang === 'zh' ? 'cn' : 'en';
+    const quickPeekCacheKey = card => quickPeekLang() + ':' + quickPeekKey(card);
+    const cachedQuickPeek = card => quickPeekCache.get(quickPeekCacheKey(card)) || {};
+    const renderQuickPeek = (link, card, state, details = {}) => {
+      const title = details.title || card.dataset.title || 'Untitled';
+      const author = details.author || card.dataset.author || '';
       const desc = details?.description || card.dataset.description || '';
+      const coverNode = document.createElement('div');
+      coverNode.className = 'quick-peek-cover';
+      coverNode.setAttribute('aria-hidden', 'true');
+      const sourceImage = card.querySelector('img:not([hidden])');
+      const coverUrl = sourceImage?.currentSrc || sourceImage?.src || details.cover_url || '';
+      if (coverUrl) {
+        const image = document.createElement('img');
+        image.src = coverUrl;
+        image.alt = '';
+        image.decoding = 'async';
+        image.referrerPolicy = 'no-referrer';
+        coverNode.appendChild(image);
+      } else {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'quick-peek-cover-placeholder';
+        placeholder.textContent = title.trim().charAt(0).toUpperCase() || 'B';
+        coverNode.appendChild(placeholder);
+      }
+
+      const contentNode = document.createElement('div');
+      contentNode.className = 'quick-peek-content';
       const titleNode = document.createElement('div');
       titleNode.className = 'quick-peek-title';
       titleNode.textContent = truncate(title, 92);
-      const nodes = [titleNode];
+      contentNode.appendChild(titleNode);
       if (author) {
         const authorNode = document.createElement('div');
         authorNode.className = 'quick-peek-author';
         authorNode.textContent = truncate(author, 70);
-        nodes.push(authorNode);
+        contentNode.appendChild(authorNode);
       }
+
+      const descriptionWrap = document.createElement('div');
+      descriptionWrap.className = 'quick-peek-description';
       if (state === 'loading') {
-        const loadingNode = document.createElement('div');
-        loadingNode.className = 'quick-peek-loading';
-        const spinner = document.createElement('span');
-        spinner.className = 'quick-peek-spinner';
-        spinner.setAttribute('aria-hidden', 'true');
-        const label = document.createElement('span');
-        label.textContent = 'Loading details';
-        loadingNode.append(spinner, label);
-        nodes.push(loadingNode);
-      } else {
+        const skeleton = document.createElement('div');
+        skeleton.className = 'quick-peek-skeleton';
+        skeleton.setAttribute('aria-label', 'Loading description');
+        for (let index = 0; index < 3; index += 1) {
+          const line = document.createElement('span');
+          line.className = 'quick-peek-skeleton-line';
+          skeleton.appendChild(line);
+        }
+        descriptionWrap.appendChild(skeleton);
+      } else if (desc) {
         const descriptionNode = document.createElement('div');
         descriptionNode.className = 'quick-peek-desc';
-        descriptionNode.textContent = desc
-          ? truncate(desc, 760)
-          : 'No description available yet.';
-        nodes.push(descriptionNode);
+        descriptionNode.textContent = truncate(desc, 620);
+        descriptionWrap.appendChild(descriptionNode);
+      } else {
+        const emptyNode = document.createElement('div');
+        emptyNode.className = 'quick-peek-empty';
+        emptyNode.textContent = 'No description available.';
+        descriptionWrap.appendChild(emptyNode);
       }
-      quickPeek.replaceChildren(...nodes);
+      contentNode.appendChild(descriptionWrap);
+
+      const actionNode = document.createElement('div');
+      actionNode.className = 'quick-peek-action';
+      const actionLabel = document.createElement('span');
+      actionLabel.textContent = card.dataset.quickPeekAction || 'View details';
+      const actionArrow = document.createElement('span');
+      actionArrow.className = 'quick-peek-action-arrow';
+      actionArrow.setAttribute('aria-hidden', 'true');
+      actionArrow.textContent = '›';
+      actionNode.append(actionLabel, actionArrow);
+      contentNode.appendChild(actionNode);
+
+      quickPeek.replaceChildren(coverNode, contentNode);
+      link.setAttribute('aria-describedby', quickPeek.id);
     };
-    const positionQuickPeek = (link, pointer = quickPeekPointer) => {
-      const rect = link.getBoundingClientRect();
-      const peekRect = quickPeek.getBoundingClientRect();
-      const anchorX = pointer?.x ?? (rect.left + Math.min(rect.width * .82, rect.width - 10));
-      const anchorY = pointer?.y ?? (rect.top + Math.min(32, rect.height * .18));
-      let left = anchorX + 18;
-      if (left + peekRect.width > window.innerWidth - 14) left = anchorX - peekRect.width - 18;
-      left = Math.max(14, Math.min(left, window.innerWidth - peekRect.width - 14));
-      let top = anchorY + 14;
-      if (top + peekRect.height > window.innerHeight - 14) top = anchorY - peekRect.height - 14;
-      top = Math.max(14, top);
-      quickPeek.style.left = left + 'px';
-      quickPeek.style.top = top + 'px';
+    const positionQuickPeek = link => {
+      const card = link?.querySelector('.book-card');
+      if (!card) return;
+      const rect = card.getBoundingClientRect();
+      const width = Math.max(1, rect.width);
+      const height = Math.max(1, rect.height);
+      quickPeek.classList.toggle('is-compact', width < 138 || height < 205);
+      quickPeek.style.setProperty('--quick-peek-width', width + 'px');
+      quickPeek.style.setProperty('--quick-peek-height', height + 'px');
+      quickPeek.style.left = rect.left + 'px';
+      quickPeek.style.top = rect.top + 'px';
     };
-    const fetchQuickPeekDetails = (link, card, quickPeekLang, cacheKey, attempt = 0) => {
-      if (quickPeekActiveLink !== link) return;
-      if (quickPeekAbortController) quickPeekAbortController.abort();
-      quickPeekAbortController = new AbortController();
-      const activeController = quickPeekAbortController;
-      fetch('/api/book?ol_key=' + encodeURIComponent(card.dataset.olKey || '') + '&book_lang=' + quickPeekLang, { signal: activeController.signal })
-        .then(response => response.json())
-        .then(data => {
+    const requestQuickPeekKeys = (keys, force = false) => {
+      const requestLang = quickPeekLang();
+      const validKeys = Array.from(new Set(keys)).filter(key => /^\/works\/OL\d+W$/.test(key));
+      const requests = [];
+      const newKeys = [];
+      validKeys.forEach(key => {
+        const cacheKey = requestLang + ':' + key;
+        const cached = quickPeekCache.get(cacheKey);
+        const freshEnough = cached?._previewCachedAt && Date.now() - cached._previewCachedAt < 450;
+        if (!force && (cached?.description || freshEnough)) return;
+        if (quickPeekRequests.has(cacheKey)) {
+          requests.push(quickPeekRequests.get(cacheKey));
+        } else {
+          newKeys.push(key);
+        }
+      });
+      if (newKeys.length) {
+        const params = new URLSearchParams({ book_lang: requestLang });
+        newKeys.slice(0, 8).forEach(key => params.append('ol_key', key));
+        const request = fetch('/api/quick-look?' + params, { cache: 'no-store' })
+          .then(response => response.ok ? response.json() : Promise.reject(new Error('Preview unavailable')))
+          .then(data => {
+            const books = data.success ? (data.books || {}) : {};
+            newKeys.forEach(key => {
+              const details = books[key] || {};
+              details._previewCachedAt = Date.now();
+              quickPeekCache.set(requestLang + ':' + key, details);
+            });
+            return books;
+          })
+          .finally(() => {
+            newKeys.forEach(key => quickPeekRequests.delete(requestLang + ':' + key));
+          });
+        newKeys.forEach(key => quickPeekRequests.set(requestLang + ':' + key, request));
+        requests.push(request);
+      }
+      return Promise.all(requests);
+    };
+    const fetchQuickPeekDetails = (link, card, attempt = 0, force = false) => {
+      const olKey = quickPeekKey(card);
+      if (!olKey) return;
+      requestQuickPeekKeys([olKey], force)
+        .then(() => {
           if (quickPeekActiveLink !== link) return;
-          const details = data.success ? data : {};
-          if (!data.refreshing || data.description) {
-            details._previewCachedAt = Date.now();
-            quickPeekCache.set(cacheKey, details);
-          }
-          if (data.description || !data.refreshing) {
-            renderQuickPeek(card, 'done', details);
-            positionQuickPeek(link, quickPeekPointer);
+          const details = cachedQuickPeek(card);
+          if (details.description || !details.refreshing) {
+            renderQuickPeek(link, card, details.description ? 'done' : 'empty', details);
+            positionQuickPeek(link);
             return;
           }
           if (attempt >= QUICK_PEEK_MAX_RETRIES) {
-            renderQuickPeek(card, 'done', details);
-            positionQuickPeek(link, quickPeekPointer);
+            renderQuickPeek(link, card, 'empty', details);
+            positionQuickPeek(link);
             return;
           }
           quickPeekRetryTimer = window.setTimeout(() => {
             quickPeekRetryTimer = null;
-            fetchQuickPeekDetails(link, card, quickPeekLang, cacheKey, attempt + 1);
-          }, 550 + attempt * 450);
+            fetchQuickPeekDetails(link, card, attempt + 1, true);
+          }, 460 + attempt * 360);
         })
         .catch(() => {
           if (quickPeekActiveLink !== link) return;
-          renderQuickPeek(card, 'done', {});
-          positionQuickPeek(link, quickPeekPointer);
-        })
-        .finally(() => {
-          if (quickPeekAbortController === activeController) quickPeekAbortController = null;
+          renderQuickPeek(link, card, 'empty', cachedQuickPeek(card));
+          positionQuickPeek(link);
         });
     };
-    const showQuickPeek = (link, pointer) => {
+    const showQuickPeek = link => {
       const card = link.querySelector('.book-card');
       if (!card) return;
+      if (quickPeekActiveLink && quickPeekActiveLink !== link) {
+        quickPeekActiveLink.classList.remove('quick-peek-target');
+      }
+      link.classList.add('quick-peek-target');
       quickPeekActiveLink = link;
-      if (pointer) quickPeekPointer = pointer;
       if (quickPeekRetryTimer) window.clearTimeout(quickPeekRetryTimer);
       quickPeekRetryTimer = null;
-      renderQuickPeek(card, card.dataset.description ? 'done' : 'loading');
+      const details = cachedQuickPeek(card);
+      const localDescription = details.description || card.dataset.description || '';
+      renderQuickPeek(link, card, localDescription ? 'done' : 'loading', details);
       quickPeek.classList.add('visible');
-      positionQuickPeek(link, quickPeekPointer);
-      const olKey = card.dataset.olKey || '';
+      quickPeek.setAttribute('aria-hidden', 'false');
+      positionQuickPeek(link);
+      const olKey = quickPeekKey(card);
       if (!olKey) {
-        renderQuickPeek(card, 'done', {});
-        positionQuickPeek(link, quickPeekPointer);
+        renderQuickPeek(link, card, 'empty', {});
+        positionQuickPeek(link);
         return;
       }
-      const quickPeekLang = document.documentElement.lang === 'zh' ? 'cn' : 'en';
-      const cacheKey = quickPeekLang + ':' + olKey;
-      if (quickPeekCache.has(cacheKey)) {
-        renderQuickPeek(card, 'done', quickPeekCache.get(cacheKey));
-        positionQuickPeek(link, quickPeekPointer);
+      if (localDescription) {
         return;
       }
-      fetchQuickPeekDetails(link, card, quickPeekLang, cacheKey);
+      fetchQuickPeekDetails(link, card);
     };
     const hideQuickPeek = () => {
+      quickPeekActiveLink?.classList.remove('quick-peek-target');
+      quickPeekPendingLink?.classList.remove('quick-peek-target');
+      quickPeekActiveLink?.removeAttribute('aria-describedby');
       quickPeekActiveLink = null;
       quickPeekPendingLink = null;
       quickPeekPointer = null;
       if (quickPeekTimer) clearTimeout(quickPeekTimer);
       if (quickPeekScrollFrame) cancelAnimationFrame(quickPeekScrollFrame);
-      if (quickPeekAbortController) quickPeekAbortController.abort();
       if (quickPeekRetryTimer) window.clearTimeout(quickPeekRetryTimer);
       quickPeekTimer = null;
       quickPeekScrollFrame = null;
-      quickPeekAbortController = null;
       quickPeekRetryTimer = null;
       quickPeek.classList.remove('visible');
+      quickPeek.setAttribute('aria-hidden', 'true');
     };
     const syncQuickPeekAfterScroll = () => {
       quickPeekScrollFrame = null;
@@ -1841,13 +1938,18 @@
         }
         return;
       }
-      if (!quickPeekActiveLink || !quickPeekPointer) return;
-      const elementAtPointer = document.elementFromPoint(quickPeekPointer.x, quickPeekPointer.y);
-      if (!elementAtPointer || !quickPeekActiveLink.contains(elementAtPointer)) {
+      if (!quickPeekActiveLink) return;
+      if (quickPeekPointer) {
+        const elementAtPointer = document.elementFromPoint(quickPeekPointer.x, quickPeekPointer.y);
+        if (!elementAtPointer || !quickPeekActiveLink.contains(elementAtPointer)) {
+          hideQuickPeek();
+          return;
+        }
+      } else if (!quickPeekActiveLink.contains(document.activeElement)) {
         hideQuickPeek();
         return;
       }
-      positionQuickPeek(quickPeekActiveLink, quickPeekPointer);
+      positionQuickPeek(quickPeekActiveLink);
     };
     const scheduleQuickPeekScrollSync = () => {
       if (!quickPeekActiveLink) {
@@ -1862,20 +1964,28 @@
     document.addEventListener('pointerover', event => {
       if (!window.matchMedia('(hover: hover)').matches) return;
       const link = event.target.closest('a:has(.book-card)');
-      if (!link) return;
+      if (!link || link.contains(event.relatedTarget)) return;
       quickPeekPointer = { x: event.clientX, y: event.clientY };
+      quickPeekPendingLink?.classList.remove('quick-peek-target');
       quickPeekPendingLink = link;
+      link.classList.add('quick-peek-target');
+      const card = link.querySelector('.book-card');
+      if (card) requestQuickPeekKeys([quickPeekKey(card)]).catch(() => {});
       if (quickPeekTimer) clearTimeout(quickPeekTimer);
       quickPeekTimer = setTimeout(() => {
+        quickPeekTimer = null;
         quickPeekPendingLink = null;
         const elementAtPointer = quickPeekPointer ? document.elementFromPoint(quickPeekPointer.x, quickPeekPointer.y) : null;
-        if (elementAtPointer && link.contains(elementAtPointer)) showQuickPeek(link, quickPeekPointer);
-      }, 280);
+        if (elementAtPointer && link.contains(elementAtPointer)) {
+          showQuickPeek(link);
+        } else {
+          link.classList.remove('quick-peek-target');
+        }
+      }, QUICK_PEEK_OPEN_DELAY);
     });
     document.addEventListener('pointermove', event => {
-      if (!quickPeekActiveLink || !quickPeekActiveLink.contains(event.target)) return;
+      if (!quickPeekActiveLink && !quickPeekPendingLink) return;
       quickPeekPointer = { x: event.clientX, y: event.clientY };
-      positionQuickPeek(quickPeekActiveLink, quickPeekPointer);
     });
     document.addEventListener('pointerout', event => {
       const link = event.target.closest('a:has(.book-card)');
@@ -1907,7 +2017,58 @@
       hideQuickPeek();
     });
     document.addEventListener('scroll', scheduleQuickPeekScrollSync, { passive: true, capture: true });
-    window.addEventListener('resize', hideQuickPeek);
+    window.addEventListener('resize', scheduleQuickPeekScrollSync);
+
+    const flushQuickPeekWarmQueue = () => {
+      quickPeekWarmTimer = null;
+      if (!quickPeekWarmBudget || !quickPeekWarmQueue.size) return;
+      const keys = Array.from(quickPeekWarmQueue.keys()).slice(0, Math.min(6, quickPeekWarmBudget));
+      keys.forEach(key => quickPeekWarmQueue.delete(key));
+      quickPeekWarmBudget -= keys.length;
+      requestQuickPeekKeys(keys).catch(() => {});
+    };
+    const scheduleQuickPeekWarm = () => {
+      if (quickPeekWarmTimer || !quickPeekWarmBudget) return;
+      if ('requestIdleCallback' in window) {
+        quickPeekWarmTimer = window.requestIdleCallback(flushQuickPeekWarmQueue, { timeout: 1100 });
+      } else {
+        quickPeekWarmTimer = window.setTimeout(flushQuickPeekWarmQueue, 650);
+      }
+    };
+    const shouldWarmQuickPeek = () => {
+      const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      return window.matchMedia('(hover: hover)').matches
+        && !connection?.saveData
+        && !String(connection?.effectiveType || '').includes('2g');
+    };
+    const quickPeekWarmObserver = 'IntersectionObserver' in window
+      ? new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            quickPeekWarmObserver.unobserve(entry.target);
+            const key = quickPeekKey(entry.target);
+            if (key && !cachedQuickPeek(entry.target).description) quickPeekWarmQueue.set(key, true);
+          });
+          if (quickPeekWarmQueue.size) scheduleQuickPeekWarm();
+        }, { rootMargin: '140px' })
+      : null;
+    const registerQuickPeekCards = (root = document) => {
+      if (!shouldWarmQuickPeek() || !quickPeekWarmObserver || !quickPeekWarmBudget) return;
+      const cards = [];
+      if (root.matches?.('.book-card[data-ol-key]')) cards.push(root);
+      root.querySelectorAll?.('.book-card[data-ol-key]').forEach(card => cards.push(card));
+      cards.forEach(card => quickPeekWarmObserver.observe(card));
+    };
+    registerQuickPeekCards();
+    new MutationObserver(mutations => {
+      mutations.forEach(mutation => mutation.addedNodes.forEach(node => {
+        if (node.nodeType === Node.ELEMENT_NODE) registerQuickPeekCards(node);
+      }));
+    }).observe(document.body, { childList: true, subtree: true });
+    window.addEventListener('libflix:navigated', () => {
+      quickPeekWarmBudget = 6;
+      registerQuickPeekCards();
+    });
   })();
 
   (() => {

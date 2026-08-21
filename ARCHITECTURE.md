@@ -454,6 +454,13 @@ alternate-language canonical details, and the local catalog corpus. It returns
 only local proxy URLs. Missing details may schedule a bounded background refresh
 but never make this request wait for Open Library.
 
+### `GET /api/quick-look`
+
+Returns preview metadata for at most eight Open Library work keys from memory,
+durable detail cache, book hints, alternate-language cache, or curated metadata.
+It never waits for a provider. Missing descriptions schedule the existing
+bounded detail worker and return `refreshing: true` for a short browser recheck.
+
 ### `GET /discover`
 
 Renders auto-detected topic discovery or strict Open Library identity results.
@@ -803,17 +810,21 @@ an Open Library work key.
 
 Quick peek behavior:
 
-- waits briefly before opening so normal cursor movement does not spam requests
-- shows title and author immediately from card data
-- fetches `/api/book?ol_key=...&book_lang=...` for description details
-- caches successful detail responses per work key
-- tracks the latest pointer position and repositions on `pointermove`
-- clamps itself to the viewport so it stays near the cursor and does not drift
-  off screen
-- omits subject/category tags to reserve space for the description
+- begins the local preview request on pointer intent and opens after 90 ms
+- shows title, author, and the existing cover immediately from card data
+- fetches `/api/quick-look` without blocking on an upstream provider
+- coalesces and caches requests by language and Open Library work key
+- occupies the cover's exact width, height, and position without obscuring a
+  neighboring book
+- does no positioning work on ordinary `pointermove`
+- reserves description geometry with a three-line skeleton and stops after two
+  short background rechecks
+- warms at most six nearby cards during browser idle time, except on data-saver
+  or 2G connections
 
-The quick-peek element is `position: fixed`; pointer coordinates and viewport
-clamping therefore remain in the same coordinate system even after scrolling.
+The Quick Look element is `position: fixed`, but its complete geometry comes
+from the active cover's bounding box. Scroll and resize updates therefore keep
+the overlay exactly inside the image rather than near the pointer.
 
 ### Download Edition UI
 

@@ -848,29 +848,6 @@ footer {
   color: #494c53 !important;
 }
 
-/* Quick peek stays anchored to the viewport cursor. */
-.quick-peek {
-  position: fixed !important;
-  width: min(410px, calc(100vw - 28px)) !important;
-  padding: 17px !important;
-  border-radius: 8px !important;
-  border-color: var(--app-line-strong) !important;
-  background: rgba(21, 23, 26, .98) !important;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, .56) !important;
-}
-
-.quick-peek-title {
-  font-size: 1rem !important;
-  letter-spacing: 0 !important;
-}
-
-.quick-peek-desc {
-  color: #c5c6ca !important;
-  font-size: .84rem !important;
-  line-height: 1.55 !important;
-  -webkit-line-clamp: 9 !important;
-}
-
 /* Homepage hero refinements */
 .page-home .hero {
   height: 480px !important;

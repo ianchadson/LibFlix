@@ -195,10 +195,11 @@ current and previous year pages provide the optional NYT number-one signal.
   at the end of each shelf instead of a full-height tile.
 - **Hidden horizontal scrollbars** - homepage shelf rows hide scrollbars while
   preserving horizontal scrolling.
-- **Hover quick peek** - book cards keep title/author overlays hidden until
-  hover/focus, then fetch Open Library details for a cursor-anchored quick peek
-  panel. The panel prioritizes title, author, and a longer description, and
-  stays within the viewport near the cursor.
+- **Cover-contained Quick Look** - book cards keep details hidden until
+  hover/focus, then place the preview inside the exact cover footprint rather
+  than following the pointer or covering a neighboring book. Title and author
+  paint immediately; a compact description skeleton is replaced from local
+  metadata while missing details refresh asynchronously.
 
 ### Category Pages
 
@@ -393,6 +394,7 @@ current and previous year pages provide the optional NYT number-one signal.
 | `/api/book` | JSON endpoint for Open Library work details |
 | `/api/suggestions` | Bounded local title/author/ISBN suggestions for the search palette |
 | `/api/covers` | Batched local cover recovery for currently visible work keys |
+| `/api/quick-look` | Batched local-only descriptions for cover-contained Quick Look previews |
 | `/api/cn-display-title` | Cached English display-title lookup for CN browse cards |
 | `/api/cn-display-titles` | Batched English display-title lookup for visible CN cards |
 | `/api/similar` | JSON endpoint for canonical similar books with mapped Inventaire outage fallback |
@@ -527,7 +529,7 @@ python3 app.py
 
 For UI validation, use headless Playwright with an isolated Chromium context.
 Validate persistent navigation, browser history, delayed route loading,
-quick-peek positioning after scroll, fixed desktop/mobile search, My Library,
+cover-contained Quick Look after scroll, fixed desktop/mobile search, My Library,
 editorial shelf hydration, progressive edition loading, cover cache hits, and
 background Kindle progress. Do not use the installed Chrome profile.
 

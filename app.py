@@ -4514,6 +4514,7 @@ RUNTIME_RATE_LIMIT_RULES = {
     "api_discover": ("discovery", RateLimitRule(24, 60)),
     "api_suggestions": ("suggestions", RateLimitRule(120, 60)),
     "api_covers": ("covers", RateLimitRule(120, 60)),
+    "api_quick_look": ("quick-look", RateLimitRule(120, 60)),
     "api_similar": ("similar", RateLimitRule(36, 60)),
     "api_book": ("book-detail", RateLimitRule(24, 60)),
     "api_search": ("search", RateLimitRule(24, 60)),
@@ -4528,6 +4529,7 @@ RUNTIME_GLOBAL_RATE_LIMIT_RULES = {
     "api_discover": ("discovery-global", RateLimitRule(120, 60)),
     "api_suggestions": ("suggestions-global", RateLimitRule(1200, 60)),
     "api_covers": ("covers-global", RateLimitRule(1200, 60)),
+    "api_quick_look": ("quick-look-global", RateLimitRule(1200, 60)),
     "api_similar": ("similar-global", RateLimitRule(240, 60)),
     "api_book": ("book-detail-global", RateLimitRule(120, 60)),
     "api_search": ("search-global", RateLimitRule(120, 60)),
@@ -5122,6 +5124,66 @@ def api_suggestions():
     g.cache_control_override = "private, max-age=30"
     add_server_timing("suggestions", duration=0, description="local")
     return jsonify({"success": True, "books": books})
+
+
+def local_quick_look_detail(ol_key, lang=None):
+    """Return the best preview already held locally and refresh it asynchronously."""
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    work_id = work_id_from_ol_key(ol_key)
+    detail, cache_state = cached_book_detail(work_id, lang, allow_stale=True)
+    candidates = [
+        detail or {},
+        hinted_book_metadata(work_id, lang) or {},
+        alternate_canonical_book_detail(work_id, lang) or {},
+        known_book_metadata(work_id, lang) or {},
+    ]
+
+    def first_value(field):
+        return next(
+            (candidate.get(field) for candidate in candidates if candidate.get(field)),
+            "",
+        )
+
+    descriptions = []
+    for candidate in candidates:
+        description = normalize_description_text(candidate.get("description", ""))
+        if description and is_english_text(description):
+            descriptions.append(description)
+    description = max(descriptions, key=len, default="")
+    should_refresh = not description or cache_state in {"stale", "miss"}
+    scheduled = schedule_book_detail_refresh(work_id, lang) if should_refresh else False
+    with BOOK_DETAIL_REFRESH_LOCK:
+        refreshing = scheduled or (lang, work_id) in BOOK_DETAIL_REFRESHING
+
+    return {
+        "title": first_value("title"),
+        "author": first_value("author"),
+        "cover_url": localize_cover_url(first_value("cover_url")),
+        "description": description,
+        "refreshing": refreshing,
+        "cache": cache_state,
+    }
+
+
+@app.route("/api/quick-look")
+def api_quick_look():
+    """Serve bounded hover previews without blocking on a provider request."""
+    ol_keys = list(dict.fromkeys(
+        key.strip()
+        for key in request.args.getlist("ol_key")[:8]
+        if re.fullmatch(r"/works/OL\d+W", key.strip())
+    ))
+    if not ol_keys:
+        return jsonify({"success": False, "error": "No valid Open Library works"}), 400
+    lang = get_book_lang()
+    books = {
+        ol_key: local_quick_look_detail(ol_key, lang)
+        for ol_key in ol_keys
+    }
+    refreshing = any(book.get("refreshing") for book in books.values())
+    g.cache_control_override = "no-store" if refreshing else "private, max-age=300"
+    add_server_timing("quick-look", duration=0, description="local")
+    return jsonify({"success": True, "books": books, "refreshing": refreshing})
 
 
 @app.route("/api/covers")

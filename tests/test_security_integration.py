@@ -158,9 +158,11 @@ class SecurityIntegrationTests(unittest.TestCase):
         self.assertIn("api_discover", app.RUNTIME_RATE_LIMIT_RULES)
         self.assertIn("api_similar", app.RUNTIME_RATE_LIMIT_RULES)
         self.assertIn("api_book", app.RUNTIME_RATE_LIMIT_RULES)
+        self.assertIn("api_quick_look", app.RUNTIME_RATE_LIMIT_RULES)
         self.assertIn("api_discover", app.RUNTIME_GLOBAL_RATE_LIMIT_RULES)
         self.assertIn("api_similar", app.RUNTIME_GLOBAL_RATE_LIMIT_RULES)
         self.assertIn("api_book", app.RUNTIME_GLOBAL_RATE_LIMIT_RULES)
+        self.assertIn("api_quick_look", app.RUNTIME_GLOBAL_RATE_LIMIT_RULES)
 
         with app.app.test_request_context(
             "/api/similar?ol_key=/works/OL1W&subject=One&subject=Two&author=A"

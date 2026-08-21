@@ -118,6 +118,74 @@ class SearchPaletteTests(unittest.TestCase):
         local.assert_called_once_with("The Energy Game Amantha Imber", "en", limit=8)
 
 
+class QuickLookTests(unittest.TestCase):
+    def test_quick_look_api_serves_cached_description_without_provider_wait(self):
+        detail = {
+            "title": "Fast Book",
+            "author": "Local Author",
+            "cover_url": "/olcover/1",
+            "description": "This is the story of a book and the people in the world.",
+        }
+        with (
+            patch.object(app, "cached_book_detail", return_value=(detail, "memory")),
+            patch.object(app, "hinted_book_metadata", return_value=None),
+            patch.object(app, "alternate_canonical_book_detail", return_value={}),
+            patch.object(app, "known_book_metadata", return_value=None),
+            patch.object(app, "schedule_book_detail_refresh") as refresh,
+        ):
+            response = app.app.test_client().get(
+                "/api/quick-look?ol_key=/works/OL1W&book_lang=en"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()["books"]["/works/OL1W"]
+        self.assertEqual(payload["description"], detail["description"])
+        self.assertFalse(payload["refreshing"])
+        refresh.assert_not_called()
+
+    def test_quick_look_api_schedules_missing_description_in_background(self):
+        hint = {"title": "Cold Book", "author": "Local Author"}
+        with (
+            patch.object(app, "cached_book_detail", return_value=(None, "miss")),
+            patch.object(app, "hinted_book_metadata", return_value=hint),
+            patch.object(app, "alternate_canonical_book_detail", return_value={}),
+            patch.object(app, "known_book_metadata", return_value=None),
+            patch.object(app, "schedule_book_detail_refresh", return_value=True) as refresh,
+        ):
+            response = app.app.test_client().get(
+                "/api/quick-look?ol_key=/works/OL2W&book_lang=en"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()["books"]["/works/OL2W"]
+        self.assertEqual(payload["title"], "Cold Book")
+        self.assertEqual(payload["description"], "")
+        self.assertTrue(payload["refreshing"])
+        refresh.assert_called_once_with("OL2W", "en")
+
+    def test_quick_look_is_cover_contained_and_prefetched_with_a_small_budget(self):
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+
+        self.assertIn("const QUICK_PEEK_OPEN_DELAY = 90", navbar)
+        self.assertIn("const QUICK_PEEK_MAX_RETRIES = 2", navbar)
+        self.assertIn("fetch('/api/quick-look?'", navbar)
+        self.assertIn("const rect = card.getBoundingClientRect();", navbar)
+        self.assertIn("quickPeek.style.left = rect.left + 'px'", navbar)
+        self.assertIn("quickPeek.style.top = rect.top + 'px'", navbar)
+        self.assertIn("quickPeek.style.setProperty('--quick-peek-width', width + 'px')", navbar)
+        self.assertIn("a.quick-peek-target .book-card { transform:none !important", navbar)
+        self.assertIn("link.classList.add('quick-peek-target')", navbar)
+        self.assertNotIn("quickPeek.classList.toggle('is-left'", navbar)
+        self.assertIn("let quickPeekWarmBudget = 6", navbar)
+        self.assertIn("requestIdleCallback", navbar)
+        self.assertIn("connection?.saveData", navbar)
+        self.assertNotIn("label.textContent = 'Loading details'", navbar)
+        pointer_move = navbar.split(
+            "document.addEventListener('pointermove'", 1
+        )[1].split("document.addEventListener('pointerout'", 1)[0]
+        self.assertNotIn("positionQuickPeek", pointer_move)
+
+
 class EditorialShelfTests(unittest.TestCase):
     def test_new_and_short_shelves_follow_trending_in_both_modes(self):
         self.assertEqual(
@@ -385,11 +453,11 @@ class BookPageStabilityTests(unittest.TestCase):
         self.assertIn("const cacheControl = response.headers.get('cache-control')", navbar)
         self.assertIn("cacheable ? storeCachedPage(url.href, page) : page", navbar)
 
-    def test_quick_peek_keeps_loading_until_refresh_finishes(self):
+    def test_quick_peek_stops_after_bounded_background_retries(self):
         navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
 
-        self.assertIn("const QUICK_PEEK_MAX_RETRIES = 4", navbar)
-        self.assertIn("fetchQuickPeekDetails(link, card, quickPeekLang, cacheKey, attempt + 1)", navbar)
+        self.assertIn("const QUICK_PEEK_MAX_RETRIES = 2", navbar)
+        self.assertIn("fetchQuickPeekDetails(link, card, attempt + 1, true)", navbar)
         self.assertIn("details?.description || card.dataset.description", navbar)
         self.assertIn("window.clearTimeout(quickPeekRetryTimer)", navbar)
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-08-21 - Cover-contained Quick Look
+
+- Replaced the cursor-following tooltip with a preview that occupies the exact
+  hovered-cover bounds. Details sit over a restrained cover gradient without
+  covering neighboring books, and pointer movement triggers no layout work.
+- Reduced hover intent delay from 280 ms to 90 ms and start fetching local
+  preview data as soon as pointer intent begins, before the card opens.
+- Added `/api/quick-look`, a bounded batch endpoint that returns only local
+  cached metadata and schedules missing descriptions in the background rather
+  than blocking the hover interaction on Open Library.
+- Replaced loading text and spinners with a compact three-line skeleton inside
+  the cover, capped active retries at two, and coalesced duplicate requests per
+  work key.
+- Added low-priority warming for at most six nearby cards per view. Warming is
+  disabled for data-saver and 2G connections and resets after app navigation.
+
 ## 2026-08-21 - Instant discovery and local continuity
 
 - Replaced the expanding navbar search with a fixed desktop/mobile palette that
