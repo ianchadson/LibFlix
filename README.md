@@ -199,7 +199,9 @@ current and previous year pages provide the optional NYT number-one signal.
   hover/focus, then place the preview inside the exact cover footprint rather
   than following the pointer or covering a neighboring book. Title and author
   paint immediately; a compact description skeleton is replaced from local
-  metadata while missing details refresh asynchronously.
+  metadata while missing details refresh asynchronously. Scrolling dismisses
+  the preview and requires fresh pointer intent, preventing it from jumping
+  between books passing under a stationary cursor.
 
 ### Category Pages
 

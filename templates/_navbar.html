@@ -159,6 +159,7 @@
   a.quick-peek-target .book-card .info { opacity:0 !important; }
   .quick-peek { position:fixed; display:block; box-sizing:border-box; width:var(--quick-peek-width, 150px); height:var(--quick-peek-height, 225px); overflow:hidden; padding:0; border:1px solid rgba(255,255,255,.16); border-radius:8px; background:#191a1e; color:#fff; box-shadow:0 18px 44px rgba(0,0,0,.54), 0 0 0 1px rgba(0,0,0,.2); z-index:9000; opacity:0; transform:translateY(3px); pointer-events:none; transition:opacity .1s ease, transform .14s cubic-bezier(.2,.8,.2,1); contain:layout paint style; }
   .quick-peek.visible { opacity:1; transform:translateY(0); }
+  .quick-peek.is-scroll-dismissed { opacity:0; transform:translateY(0); transition:none; }
   .quick-peek-cover { position:absolute; inset:0; overflow:hidden; background:#26282d; }
   .quick-peek-cover::after { content:""; position:absolute; inset:0; box-shadow:inset 0 0 0 1px rgba(255,255,255,.04); pointer-events:none; }
   .quick-peek-cover img { width:100%; height:100%; display:block; object-fit:cover; opacity:1; }
@@ -1716,7 +1717,11 @@
     let quickPeekActiveLink = null;
     let quickPeekPendingLink = null;
     let quickPeekPointer = null;
+    let quickPeekLastPointer = null;
     let quickPeekScrollFrame = null;
+    let quickPeekScrollIdleTimer = null;
+    let quickPeekScrollGuarded = false;
+    let quickPeekScrollOrigin = null;
     let quickPeekRetryTimer = null;
     let quickPeekWarmTimer = null;
     let quickPeekWarmBudget = 6;
@@ -1724,6 +1729,8 @@
     let suppressFocusQuickPeek = false;
     const QUICK_PEEK_OPEN_DELAY = 90;
     const QUICK_PEEK_MAX_RETRIES = 2;
+    const QUICK_PEEK_SCROLL_SETTLE_DELAY = 180;
+    const QUICK_PEEK_REARM_DISTANCE = 5;
 
     const truncate = (value, length) => {
       const text = String(value || '').trim();
@@ -1913,7 +1920,8 @@
       }
       fetchQuickPeekDetails(link, card);
     };
-    const hideQuickPeek = () => {
+    const hideQuickPeek = (immediate = false) => {
+      if (immediate) quickPeek.classList.add('is-scroll-dismissed');
       quickPeekActiveLink?.classList.remove('quick-peek-target');
       quickPeekPendingLink?.classList.remove('quick-peek-target');
       quickPeekActiveLink?.removeAttribute('aria-describedby');
@@ -1928,6 +1936,9 @@
       quickPeekRetryTimer = null;
       quickPeek.classList.remove('visible');
       quickPeek.setAttribute('aria-hidden', 'true');
+      if (immediate) {
+        requestAnimationFrame(() => quickPeek.classList.remove('is-scroll-dismissed'));
+      }
     };
     const syncQuickPeekAfterScroll = () => {
       quickPeekScrollFrame = null;
@@ -1961,11 +1972,9 @@
       if (quickPeekScrollFrame) return;
       quickPeekScrollFrame = requestAnimationFrame(syncQuickPeekAfterScroll);
     };
-    document.addEventListener('pointerover', event => {
-      if (!window.matchMedia('(hover: hover)').matches) return;
-      const link = event.target.closest('a:has(.book-card)');
-      if (!link || link.contains(event.relatedTarget)) return;
-      quickPeekPointer = { x: event.clientX, y: event.clientY };
+    const queueQuickPeek = (link, pointer) => {
+      if (!link) return;
+      quickPeekPointer = pointer;
       quickPeekPendingLink?.classList.remove('quick-peek-target');
       quickPeekPendingLink = link;
       link.classList.add('quick-peek-target');
@@ -1982,10 +1991,43 @@
           link.classList.remove('quick-peek-target');
         }
       }, QUICK_PEEK_OPEN_DELAY);
+    };
+    const dismissQuickPeekForScroll = () => {
+      quickPeekScrollGuarded = true;
+      const pointer = quickPeekLastPointer || quickPeekPointer;
+      quickPeekScrollOrigin = pointer ? { ...pointer } : null;
+      if (quickPeekScrollIdleTimer) window.clearTimeout(quickPeekScrollIdleTimer);
+      quickPeekScrollIdleTimer = window.setTimeout(() => {
+        quickPeekScrollIdleTimer = null;
+      }, QUICK_PEEK_SCROLL_SETTLE_DELAY);
+      hideQuickPeek(true);
+    };
+    document.addEventListener('pointerover', event => {
+      if (!window.matchMedia('(hover: hover)').matches) return;
+      const link = event.target.closest('a:has(.book-card)');
+      if (!link || link.contains(event.relatedTarget)) return;
+      const pointer = { x: event.clientX, y: event.clientY };
+      quickPeekLastPointer = pointer;
+      if (quickPeekScrollGuarded) return;
+      queueQuickPeek(link, pointer);
     });
     document.addEventListener('pointermove', event => {
+      const pointer = { x: event.clientX, y: event.clientY };
+      quickPeekLastPointer = pointer;
+      if (quickPeekScrollGuarded) {
+        if (quickPeekScrollIdleTimer) return;
+        const deltaX = pointer.x - (quickPeekScrollOrigin?.x ?? pointer.x);
+        const deltaY = pointer.y - (quickPeekScrollOrigin?.y ?? pointer.y);
+        if (quickPeekScrollOrigin && Math.hypot(deltaX, deltaY) < QUICK_PEEK_REARM_DISTANCE) return;
+        quickPeekScrollGuarded = false;
+        quickPeekScrollOrigin = null;
+        const elementAtPointer = document.elementFromPoint(pointer.x, pointer.y);
+        const link = elementAtPointer?.closest?.('a:has(.book-card)');
+        if (link) queueQuickPeek(link, pointer);
+        return;
+      }
       if (!quickPeekActiveLink && !quickPeekPendingLink) return;
-      quickPeekPointer = { x: event.clientX, y: event.clientY };
+      quickPeekPointer = pointer;
     });
     document.addEventListener('pointerout', event => {
       const link = event.target.closest('a:has(.book-card)');
@@ -2016,7 +2058,9 @@
       if (!link || link.contains(event.relatedTarget)) return;
       hideQuickPeek();
     });
-    document.addEventListener('scroll', scheduleQuickPeekScrollSync, { passive: true, capture: true });
+    document.addEventListener('wheel', dismissQuickPeekForScroll, { passive: true, capture: true });
+    document.addEventListener('touchmove', dismissQuickPeekForScroll, { passive: true, capture: true });
+    document.addEventListener('scroll', dismissQuickPeekForScroll, { passive: true, capture: true });
     window.addEventListener('resize', scheduleQuickPeekScrollSync);
 
     const flushQuickPeekWarmQueue = () => {

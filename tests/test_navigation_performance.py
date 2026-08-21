@@ -179,6 +179,17 @@ class QuickLookTests(unittest.TestCase):
         self.assertIn("let quickPeekWarmBudget = 6", navbar)
         self.assertIn("requestIdleCallback", navbar)
         self.assertIn("connection?.saveData", navbar)
+        self.assertIn("const QUICK_PEEK_SCROLL_SETTLE_DELAY = 180", navbar)
+        self.assertIn("const QUICK_PEEK_REARM_DISTANCE = 5", navbar)
+        self.assertIn("const dismissQuickPeekForScroll = () =>", navbar)
+        self.assertIn(
+            "document.addEventListener('scroll', dismissQuickPeekForScroll",
+            navbar,
+        )
+        self.assertNotIn(
+            "document.addEventListener('scroll', scheduleQuickPeekScrollSync",
+            navbar,
+        )
         self.assertNotIn("label.textContent = 'Loading details'", navbar)
         pointer_move = navbar.split(
             "document.addEventListener('pointermove'", 1

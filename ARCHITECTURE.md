@@ -817,14 +817,18 @@ Quick peek behavior:
 - occupies the cover's exact width, height, and position without obscuring a
   neighboring book
 - does no positioning work on ordinary `pointermove`
+- dismisses immediately on wheel, touch, or nested/page scroll and suppresses
+  scroll-generated hover changes until the pointer moves again after settling
 - reserves description geometry with a three-line skeleton and stops after two
   short background rechecks
 - warms at most six nearby cards during browser idle time, except on data-saver
   or 2G connections
 
 The Quick Look element is `position: fixed`, but its complete geometry comes
-from the active cover's bounding box. Scroll and resize updates therefore keep
-the overlay exactly inside the image rather than near the pointer.
+from the active cover's bounding box. Resize updates keep the overlay exactly
+inside the image rather than near the pointer. A scroll dismisses it instead of
+allowing stationary-pointer events to cycle through cards moving underneath; a
+fresh pointer movement rearms hover intent.
 
 ### Download Edition UI
 

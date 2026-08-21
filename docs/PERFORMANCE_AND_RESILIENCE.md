@@ -495,7 +495,8 @@ Run UI checks with headless isolated Chromium. Verify:
 
 1. Navigate Home -> category -> book -> Back without replacing the navbar.
 2. Scroll a category, hover a later card, and confirm Quick Look matches the
-   cover bounds exactly and does not follow pointer movement.
+   cover bounds exactly. While it is open, wheel-scroll through at least one
+   card row and confirm it closes without reopening until the pointer moves.
 3. Confirm desktop and 390 px mobile layouts have no horizontal overflow.
 4. Request the same canonical `.webp` cover twice and confirm local `MISS` then
    `HIT`; in production, confirm the CDN changes from `MISS` to `HIT` too.

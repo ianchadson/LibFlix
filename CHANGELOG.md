@@ -13,6 +13,9 @@
 - Replaced loading text and spinners with a compact three-line skeleton inside
   the cover, capped active retries at two, and coalesced duplicate requests per
   work key.
+- Quick Look now dismisses immediately when scrolling begins, ignores the
+  stationary-pointer hover events produced as books move underneath it, and
+  rearms only after scrolling settles and the pointer moves intentionally.
 - Added low-priority warming for at most six nearby cards per view. Warming is
   disabled for data-saver and 2G connections and resets after app navigation.
 
