@@ -284,7 +284,7 @@ class DiscoveryFallbackTests(TemporaryCacheTest):
         self.assertEqual((total, total_pages), (1, 1))
 
     def test_empty_cached_identity_uses_curated_recovery(self):
-        key = "discover:v9:en:The Energy Game Amantha Imber:1"
+        key = "discover:v11:en:The Energy Game Amantha Imber:1"
         app.cache_set(key, ([], 0, 1))
 
         books, total, total_pages = app.cached_discovery_books(
@@ -299,6 +299,49 @@ class DiscoveryFallbackTests(TemporaryCacheTest):
     def test_curated_identity_recovery_remains_strict(self):
         self.assertEqual(app.known_identity_books("energy", "en"), [])
         self.assertEqual(app.known_identity_books("unrelated meditation", "en"), [])
+
+    def test_curated_identity_handles_natural_omitted_stop_words(self):
+        books = app.known_identity_books(
+            "mans search meaning viktor frankl",
+            "en",
+        )
+
+        self.assertEqual([book["ol_key"] for book in books], ["/works/OL1268413W"])
+
+    def test_chinese_identity_uses_verified_localized_metadata(self):
+        books = app.known_identity_books("三体 刘慈欣", "cn")
+
+        self.assertEqual([book["ol_key"] for book in books], ["/works/OL17267881W"])
+        self.assertEqual(books[0]["title"], "三体")
+        self.assertEqual(books[0]["author"], "刘慈欣")
+
+    def test_chinese_identity_adds_title_only_catalog_fallback(self):
+        record = self.energy_game_record(
+            key="/works/OL31608032W",
+            title="百年孤独(精)",
+            author_name=["加西亚·马尔克斯"],
+            language=[],
+            cover_i=13183294,
+        )
+
+        def search_response(_path, params):
+            if params.get("title") == "百年孤独":
+                return {"numFound": 1, "docs": [record]}
+            return {"numFound": 0, "docs": []}
+
+        with patch.object(app, "ol_get", side_effect=search_response) as ol_get:
+            books, total, total_pages = app.fetch_discovery_books(
+                "百年孤独 加西亚马尔克斯",
+                lang="cn",
+            )
+
+        self.assertEqual([book["ol_key"] for book in books], ["/works/OL31608032W"])
+        self.assertEqual((total, total_pages), (1, 1))
+        self.assertEqual(ol_get.call_count, 3)
+        self.assertTrue(any(
+            call.args[1].get("title") == "百年孤独"
+            for call in ol_get.call_args_list
+        ))
 
     def test_art_of_simple_living_sparse_work_stays_in_discovery_results(self):
         records = [

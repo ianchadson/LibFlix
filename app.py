@@ -246,6 +246,53 @@ KNOWN_WORK_METADATA = {
         "author": "Shunmyo Masuno",
         "cover_url": "",
     },
+    "OL1268413W": {
+        "title": "Man's Search for Meaning",
+        "title_aliases": [
+            "Man's Search for Meaning: An Introduction to Logotherapy",
+            "... Trotzdem Ja zum Leben sagen",
+        ],
+        "author": "Viktor E. Frankl",
+        "cover_url": "/olcover/8516506/M.webp",
+    },
+    "OL18108064W": {
+        "title": "Can't Hurt Me",
+        "title_aliases": ["Can't Hurt Me: Master Your Mind and Defy the Odds"],
+        "author": "David Goggins",
+        "cover_url": "/olcover/8305903/M.webp",
+    },
+    "OL17267881W": {
+        "title": "The Three-Body Problem",
+        "localized_title": "三体",
+        "title_aliases": ["Three Body", "三体"],
+        "author": "Cixin Liu",
+        "localized_author": "刘慈欣",
+        "cover_url": "/olcover/9157544/M.webp",
+    },
+    "OL15861449W": {
+        "title": "To Live",
+        "localized_title": "活着",
+        "title_aliases": ["To Live", "活着"],
+        "author": "Yu Hua",
+        "localized_author": "余华",
+        "cover_url": "/olcover/6823968/M.webp",
+    },
+    "OL3240279W": {
+        "title": "Chronicle of a Blood Merchant",
+        "localized_title": "许三观卖血记",
+        "title_aliases": ["Chronicle of a Blood Merchant", "许三观卖血记"],
+        "author": "Yu Hua",
+        "localized_author": "余华",
+        "cover_url": "/olcover/5239941/M.webp",
+    },
+    "OL2625457W": {
+        "title": "Norwegian Wood",
+        "localized_title": "挪威的森林",
+        "title_aliases": ["Norwegian Wood", "挪威的森林"],
+        "author": "Haruki Murakami",
+        "localized_author": "村上春树",
+        "cover_url": "/olcover/2237620/M.webp",
+    },
 }
 GENERIC_SIMILAR_SUBJECTS = {
     "action/adventure", "biography", "business", "competition", "contests",
@@ -2215,6 +2262,19 @@ DISCOVERY_STOP_WORDS = frozenset({
     "a", "about", "an", "and", "at", "book", "books", "by", "for", "from",
     "in", "of", "on", "or", "the", "to", "with",
 })
+DISCOVERY_DERIVATIVE_MARKERS = (
+    "adaptation",
+    "adapted",
+    "analysis",
+    "book review",
+    "companion",
+    "key takeaways",
+    "study guide",
+    "summary",
+    "summaries",
+    "unofficial",
+    "workbook",
+)
 
 def normalize_relevance_text(value):
     value = normalize_match_text(value)
@@ -2226,6 +2286,48 @@ def relevance_tokens(value):
     tokens = normalize_relevance_text(value).split()
     meaningful = [token for token in tokens if token not in DISCOVERY_STOP_WORDS]
     return meaningful or tokens
+
+
+def compact_cjk_text(value):
+    return "".join(re.findall(r"[\u3400-\u9fff]", str(value or "")))
+
+
+def cjk_identity_title(query):
+    """Return a conservative title-only fallback for Chinese identity queries."""
+    for token in re.sub(r"\s+", " ", str(query or "")).strip().split(" "):
+        compact = compact_cjk_text(token)
+        if len(compact) >= 2:
+            return compact[:80]
+    return ""
+
+
+def cjk_token_evidence(query_tokens, value):
+    compact = compact_cjk_text(value)
+    if not compact:
+        return set()
+    return {
+        token
+        for token in query_tokens
+        if compact_cjk_text(token) and compact_cjk_text(token) in compact
+    }
+
+
+def discovery_derivative_penalty(title_text, query_text, authors):
+    penalty = 0
+    for marker in DISCOVERY_DERIVATIVE_MARKERS:
+        if marker in title_text and marker not in query_text:
+            penalty += 650
+
+    # Some derivative records put the original author's byline in their title
+    # while crediting a different author in the catalogue author field.
+    if " by " in f" {title_text} " and " by " not in f" {query_text} ":
+        byline = title_text.rsplit(" by ", 1)[-1]
+        byline_tokens = set(relevance_tokens(byline))
+        author_tokens = set(relevance_tokens(" ".join(authors)))
+        query_tokens = set(relevance_tokens(query_text))
+        if byline_tokens & query_tokens and not (author_tokens & byline_tokens):
+            penalty += 800
+    return min(penalty, 1300)
 
 def discovery_identifier(value):
     isbn = normalize_isbn(value)
@@ -2267,10 +2369,14 @@ def discovery_record_relevance(record, query):
     best_title_evidence = set()
     best_fuzzy_ratio = 0.0
     best_fuzzy_min_length = 0
+    best_title_text = ""
     for title in titles:
         title_text = normalize_relevance_text(title)
         title_tokens = set(relevance_tokens(title))
-        title_evidence = query_tokens & title_tokens
+        title_evidence = (
+            (query_tokens & title_tokens)
+            | cjk_token_evidence(query_tokens, title)
+        )
         overlap = len(title_evidence)
         if len(title_evidence) > len(best_title_evidence):
             best_title_evidence = title_evidence
@@ -2288,12 +2394,38 @@ def discovery_record_relevance(record, query):
                 best_fuzzy_min_length = min(len(query_text), len(title_text))
             if ratio >= 0.62:
                 score += round(220 * ratio)
-        best_score = max(best_score, score)
-    author_tokens = set(relevance_tokens(" ".join(authors)))
-    author_evidence = query_tokens & author_tokens
+        if score > best_score:
+            best_score = score
+            best_title_text = title_text
+    author_text = " ".join(authors)
+    author_tokens = set(relevance_tokens(author_text))
+    author_evidence = (
+        (query_tokens & author_tokens)
+        | cjk_token_evidence(query_tokens, author_text)
+    )
     author_overlap = len(author_evidence)
     combined_evidence = best_title_evidence | author_evidence
     best_score += round(360 * author_overlap / max(len(query_tokens), 1))
+
+    author_identity_bonus = 0
+    for author in authors:
+        candidate_tokens = set(relevance_tokens(author))
+        candidate_evidence = (
+            (query_tokens & candidate_tokens)
+            | cjk_token_evidence(query_tokens, author)
+        )
+        if not candidate_evidence:
+            continue
+        coverage = len(candidate_evidence) / max(len(candidate_tokens), 1)
+        if coverage >= 0.6:
+            author_identity_bonus = max(author_identity_bonus, round(520 * coverage))
+    best_score += author_identity_bonus
+
+    query_cjk = compact_cjk_text(query)
+    candidate_cjk = compact_cjk_text(" ".join([*titles, *authors]))
+    if query_cjk and len(query_tokens) == 1 and query_cjk in candidate_cjk:
+        combined_evidence.add(next(iter(query_tokens)))
+        best_score += 800
 
     # Open Library can append highly rated but unrelated books. Require at
     # least two thirds of a multi-token identity query to be evidenced by the
@@ -2305,7 +2437,14 @@ def discovery_record_relevance(record, query):
         if best_fuzzy_ratio < 0.88 or best_fuzzy_min_length < 5:
             return 0
         best_score += round(300 * best_fuzzy_ratio)
-    return best_score
+    return max(
+        1,
+        best_score - discovery_derivative_penalty(
+            best_title_text,
+            query_text,
+            authors,
+        ),
+    )
 
 def rank_discovery_records(records, query):
     ranked = []
@@ -3352,6 +3491,10 @@ def known_identity_books(q, lang=None):
         metadata = known_book_metadata(work_id, lang)
         if not metadata or (lang == "cn" and not metadata.get("localized_title")):
             continue
+        author = (
+            metadata.get("localized_author")
+            if lang == "cn" else metadata.get("author")
+        ) or metadata.get("author", "")
         record = {
             "key": metadata.get("ol_key"),
             "title": metadata.get("title"),
@@ -3360,12 +3503,13 @@ def known_identity_books(q, lang=None):
                 metadata.get("title_aliases"),
             ]),
             "author_name": bounded_identity_values([
+                author,
                 metadata.get("author"),
                 metadata.get("authors"),
             ], limit=8),
             "isbn": metadata.get("isbns") or [],
         }
-        if discovery_record_relevance(record, q) < 900:
+        if discovery_record_relevance(record, q) < 560:
             continue
         title = (
             metadata.get("localized_title")
@@ -3373,7 +3517,7 @@ def known_identity_books(q, lang=None):
         ) or metadata.get("title") or "Book"
         book = {
             "title": title,
-            "author": metadata.get("author", ""),
+            "author": author,
             "cover_url": localize_cover_url(metadata.get("cover_url", "")),
             "ol_key": metadata.get("ol_key", ""),
             "description": metadata.get("description", ""),
@@ -3389,7 +3533,7 @@ def known_identity_books(q, lang=None):
 def cached_discovery_books(q, page=1, lang=None):
     """Return discovery data without ever waiting on Open Library."""
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v9:{lang}:{q}:{page}"
+    ckey = f"discover:v11:{lang}:{q}:{page}"
     cached = cache_get(ckey, 900)
     if cached is None:
         cached = disk_cache_get(ckey, 900)
@@ -3452,7 +3596,7 @@ def fetch_inventaire_identity_books(q, lang=None):
 
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v9:{lang}:{q}:{page}"
+    ckey = f"discover:v11:{lang}:{q}:{page}"
     cached = cached_discovery_books(q, page, lang)
     if cached is not None:
         return cached
@@ -3460,6 +3604,7 @@ def fetch_discovery_books(q, page=1, lang=None):
     covered_query = (
         f"{q} cover_i:* language:{BOOK_LANG_CONFIG[lang]['ol_lang']}"
     )
+    chinese_title = cjk_identity_title(q) if lang == "cn" and page == 1 else ""
 
     def fetch_search(query, limit):
         try:
@@ -3477,14 +3622,29 @@ def fetch_discovery_books(q, page=1, lang=None):
         except Exception:
             return None
 
+    def fetch_title_search(title, limit):
+        try:
+            return ol_get("/search.json", {
+                "title": title,
+                "limit": limit,
+                "page": 1,
+                "fields": OL_BOOK_FIELDS,
+            })
+        except Exception:
+            return None
+
     # Preserve exact sparse matches while fetching a cover-rich result set in
     # parallel so cover quality does not add a second origin wait.
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         raw_future = pool.submit(fetch_search, q, DISCOVERY_SEARCH_LIMIT)
         covered_future = pool.submit(
             fetch_search,
             covered_query,
             DISCOVERY_COVER_PAGE_SIZE,
+        )
+        title_future = (
+            pool.submit(fetch_title_search, chinese_title, DISCOVERY_SEARCH_LIMIT)
+            if chinese_title else None
         )
         inventaire_future = (
             pool.submit(fetch_inventaire_identity_books, q, lang)
@@ -3492,6 +3652,7 @@ def fetch_discovery_books(q, page=1, lang=None):
         )
         raw_data = raw_future.result()
         covered_data = covered_future.result()
+        title_data = title_future.result() if title_future is not None else None
         if inventaire_future is not None:
             try:
                 inventaire_books, inventaire_available = inventaire_future.result()
@@ -3504,6 +3665,7 @@ def fetch_discovery_books(q, page=1, lang=None):
     if (
         raw_data is None
         and covered_data is None
+        and title_data is None
         and not inventaire_available
         and not known_books
     ):
@@ -3511,6 +3673,7 @@ def fetch_discovery_books(q, page=1, lang=None):
 
     raw_data = raw_data or {}
     covered_data = covered_data or {}
+    title_data = title_data or {}
 
     books = []
     seen_keys = set()
@@ -3558,6 +3721,10 @@ def fetch_discovery_books(q, page=1, lang=None):
         raw_data.get("docs", [])[:DISCOVERY_SEARCH_LIMIT],
         q,
     )
+    title_records = rank_discovery_records(
+        title_data.get("docs", [])[:DISCOVERY_SEARCH_LIMIT],
+        q,
+    )
     covered_records = rank_discovery_records(
         covered_data.get("docs", [])[:DISCOVERY_COVER_PAGE_SIZE],
         q,
@@ -3565,6 +3732,11 @@ def fetch_discovery_books(q, page=1, lang=None):
     if page == 1:
         append_records(
             raw_records,
+            allow_missing_cover=True,
+            maximum=DISCOVERY_RAW_PREFIX_LIMIT,
+        )
+        append_records(
+            title_records,
             allow_missing_cover=True,
             maximum=DISCOVERY_RAW_PREFIX_LIMIT,
         )
@@ -3597,7 +3769,7 @@ def fetch_discovery_books(q, page=1, lang=None):
         books.append(fallback)
         remember_book(fallback, seen_keys)
 
-    result_data = covered_data if covered_added else raw_data
+    result_data = covered_data if covered_added else (raw_data or title_data)
     result_limit = DISCOVERY_COVER_PAGE_SIZE if covered_added else DISCOVERY_SEARCH_LIMIT
     total = result_data.get("numFound", 0) if result_data else 0
     if page == 1:
@@ -5072,6 +5244,24 @@ def local_book_suggestions(query, lang=None, limit=8):
         ]
     for book in hints:
         consider(book, 25)
+
+    for work_id in KNOWN_WORK_METADATA:
+        metadata = known_book_metadata(work_id, lang)
+        if not metadata or (lang == "cn" and not metadata.get("localized_title")):
+            continue
+        author = (
+            metadata.get("localized_author")
+            if lang == "cn" else metadata.get("author")
+        ) or metadata.get("author", "")
+        consider({
+            "title": (
+                metadata.get("localized_title")
+                if lang == "cn" else metadata.get("title")
+            ) or metadata.get("title", ""),
+            "author": author,
+            "cover_url": localize_cover_url(metadata.get("cover_url", "")),
+            "ol_key": metadata.get("ol_key", ""),
+        }, 35)
 
     for mode in ("nonfiction", "fiction"):
         shelves = (

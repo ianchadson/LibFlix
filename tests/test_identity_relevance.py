@@ -356,6 +356,80 @@ class DiscoveryRelevanceTests(unittest.TestCase):
             0,
         )
 
+    def test_discovery_prefers_canonical_author_over_derivative_books(self):
+        records = [
+            {
+                "key": "/works/OL1W",
+                "title": "Summary of Man's Search for Meaning by Viktor Frankl",
+                "author_name": ["Sapiens Editorial"],
+            },
+            {
+                "key": "/works/OL2W",
+                "title": "Man's Search for Meaning: An Introduction to Logotherapy",
+                "author_name": ["Viktor E. Frankl"],
+            },
+            {
+                "key": "/works/OL3W",
+                "title": "Workbook for Man's Search for Meaning",
+                "author_name": ["Reader Press"],
+            },
+        ]
+
+        ranked = app.rank_discovery_records(
+            records,
+            "mans search meaning viktor frankl",
+        )
+
+        self.assertEqual(ranked[0]["key"], "/works/OL2W")
+
+    def test_discovery_rejects_embedded_byline_as_author_evidence(self):
+        records = [
+            {
+                "key": "/works/OL1W",
+                "title": "Thinking Fast and Slow by Daniel Kahneman",
+                "author_name": ["Gloria J. Russell"],
+            },
+            {
+                "key": "/works/OL2W",
+                "title": "Thinking, Fast and Slow",
+                "author_name": ["Daniel Kahneman"],
+            },
+        ]
+
+        ranked = app.rank_discovery_records(records, "thinking fast slow kahneman")
+
+        self.assertEqual(ranked[0]["key"], "/works/OL2W")
+
+    def test_discovery_prefers_catalog_author_over_title_appended_name(self):
+        records = [
+            {
+                "key": "/works/OL1W",
+                "title": "The hobbit, J.R.R. Tolkien",
+                "author_name": ["Spark Publishing"],
+            },
+            {
+                "key": "/works/OL2W",
+                "title": "The Hobbit",
+                "author_name": ["J.R.R. Tolkien"],
+            },
+        ]
+
+        ranked = app.rank_discovery_records(records, "The Hobbit J R R Tolkien")
+
+        self.assertEqual(ranked[0]["key"], "/works/OL2W")
+
+    def test_discovery_matches_chinese_author_punctuation(self):
+        record = {
+            "key": "/works/OL1W",
+            "title": "百年孤独(精)",
+            "author_name": ["加西亚·马尔克斯"],
+        }
+
+        self.assertGreater(
+            app.discovery_record_relevance(record, "百年孤独 加西亚马尔克斯"),
+            0,
+        )
+
 
 class SimilarBookRelevanceTests(unittest.TestCase):
     @staticmethod
