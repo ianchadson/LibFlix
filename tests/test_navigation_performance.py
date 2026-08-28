@@ -537,6 +537,17 @@ class DownloadShellTests(unittest.TestCase):
         self.assertIn(".edition-recommendation:focus-within .edition-reasons-tooltip", stylesheet)
         self.assertIn("visibility: hidden;", stylesheet)
 
+    def test_download_tap_uses_native_browser_navigation(self):
+        downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()
+        download_handler = downloads.split(
+            "const download = event.target.closest('.edition-download');", 1
+        )[1].split("const kindle =", 1)[0]
+
+        self.assertNotIn("event.preventDefault()", download_handler)
+        self.assertNotIn("prepareDownload", downloads)
+        self.assertNotIn("data-preparable", downloads)
+        self.assertIn("setDownloadBusy(download, 'Starting')", download_handler)
+
 
 if __name__ == "__main__":
     unittest.main()
