@@ -80,6 +80,23 @@
       <nav class="download-pagination" id="downloadPagination" aria-label="Download result pages" hidden></nav>
     </section>
 
+    <section class="reviews-section" id="reviewsSection" aria-labelledby="reviewsHeading" aria-busy="true">
+      <div class="reviews-heading-row">
+        <h2 class="reviews-section-title" id="reviewsHeading">Reviews</h2>
+        <a class="reviews-source-link" id="reviewsSourceLink" href="#" target="_blank" rel="noopener noreferrer" hidden>View source</a>
+      </div>
+      <div class="reviews-loading" id="reviewsLoading" role="status" aria-label="Loading reviews">
+        <div class="reviews-summary-skeleton"></div>
+        <div class="review-skeletons" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+      </div>
+      <div class="reviews-content" id="reviewsContent" hidden>
+        <div class="reviews-summary" id="reviewsSummary"></div>
+        <div class="review-grid" id="reviewGrid"></div>
+      </div>
+    </section>
+
     <section class="similar-section" id="similarSection" aria-labelledby="similarHeading">
       <h2 class="shelf-title" id="similarHeading">More Like This</h2>
       <div class="shelf-row" id="similarRow" aria-live="polite" aria-busy="true">
@@ -123,6 +140,7 @@
     let lastSimilarSeedSignature = '';
     let activeDetailRequest = null;
     let activeSimilarRequest = null;
+    let activeReceptionRequest = null;
     const INITIAL_DETAIL_COMPLETE = {{ complete | default(false) | tojson }};
     const INITIAL_PRIMARY_CONTENT_READY = Boolean(
       olKey
@@ -144,6 +162,11 @@
     let detailRetryTimer = null;
     let similarRetryTimer = null;
     let similarWarmTimer = null;
+    let receptionRetryTimer = null;
+    let receptionObserver = null;
+    let receptionRequested = false;
+    let receptionRetryCount = 0;
+    let receptionRetryDeadline = 0;
     const bookSaveButton = document.getElementById('bookSave');
 
     function localLibraryRecord() {
@@ -179,6 +202,151 @@
 
     function escapeHtml(value) {
       return window.LibFlixDownloads.escapeHtml(value);
+    }
+
+    function safeReceptionUrl(value) {
+      try {
+        const url = new URL(String(value || ''), window.location.origin);
+        if (url.protocol !== 'https:') return '';
+        if (!['www.goodreads.com', 'goodreads.com', 'openlibrary.org', 'bookmarks.reviews'].includes(url.hostname)) return '';
+        return url.href;
+      } catch (_error) {
+        return '';
+      }
+    }
+
+    function compactReviewCount(value) {
+      const count = Math.max(0, Number(value) || 0);
+      return new Intl.NumberFormat(undefined, {
+        notation: count >= 1000 ? 'compact' : 'standard',
+        maximumFractionDigits: 1,
+      }).format(count);
+    }
+
+    function ratingStars(value) {
+      const rating = Math.max(0, Math.min(5, Number(value) || 0));
+      const whole = Math.floor(rating);
+      const fraction = rating - whole;
+      return `<span class="reviews-stars" aria-label="${rating.toFixed(1)} out of 5">${Array.from({ length: 5 }, (_item, index) => {
+        const starNumber = index + 1;
+        const starClass = starNumber <= whole
+          ? 'is-filled'
+          : (starNumber === whole + 1 && fraction >= .25 ? (fraction >= .75 ? 'is-filled' : 'is-half') : '');
+        return `<span class="${starClass}" aria-hidden="true">★</span>`;
+      }).join('')}</span>`;
+    }
+
+    function hideReviewsSection() {
+      const section = document.getElementById('reviewsSection');
+      if (section) section.hidden = true;
+    }
+
+    function renderBookReception(data) {
+      const section = document.getElementById('reviewsSection');
+      const loading = document.getElementById('reviewsLoading');
+      const content = document.getElementById('reviewsContent');
+      const summary = document.getElementById('reviewsSummary');
+      const grid = document.getElementById('reviewGrid');
+      const sourceLink = document.getElementById('reviewsSourceLink');
+      const rating = data?.rating || null;
+      const reviews = Array.isArray(data?.reviews) ? data.reviews.slice(0, 3) : [];
+      if (!section || (!rating && !reviews.length)) {
+        hideReviewsSection();
+        return;
+      }
+
+      const reviewsSource = data?.reviews_source || null;
+      const sourceUrl = safeReceptionUrl(reviewsSource?.url || data.source_url || rating?.url);
+      if (sourceUrl) {
+        sourceLink.href = sourceUrl;
+        sourceLink.textContent = `View on ${reviewsSource?.source || rating?.source || 'source'}`;
+        sourceLink.hidden = false;
+      }
+
+      if (rating) {
+        const average = Math.max(0, Math.min(5, Number(rating.average) || 0));
+        const countLabel = rating.ratings_count
+          ? `${compactReviewCount(rating.ratings_count)} ratings`
+          : 'Reader rating';
+        const otherRatings = (Array.isArray(data.other_ratings) ? data.other_ratings : [])
+          .filter(item => item?.average && item?.source)
+          .map(item => `<span>${escapeHtml(item.source)} ${Number(item.average).toFixed(2)} · ${compactReviewCount(item.ratings_count)} ratings</span>`)
+          .join('');
+        summary.innerHTML = `
+          <div class="reviews-score">${average.toFixed(2)}</div>
+          <div class="reviews-score-copy">
+            ${ratingStars(average)}
+            <div><strong>${escapeHtml(rating.source || 'Readers')}</strong><span>${escapeHtml(countLabel)}</span></div>
+          </div>
+          ${otherRatings ? `<div class="reviews-secondary-score">${otherRatings}</div>` : ''}
+        `;
+        summary.hidden = false;
+      } else {
+        summary.hidden = true;
+      }
+
+      grid.innerHTML = reviews.map(review => {
+        const reviewUrl = safeReceptionUrl(review.url || sourceUrl);
+        const reviewer = escapeHtml(review.reviewer || 'Goodreads reader');
+        const sentiment = String(review.sentiment || '').trim();
+        const reviewSourceName = String(review.source || reviewsSource?.source || 'source');
+        const reviewLinkLabel = reviewSourceName === 'Goodreads' ? 'Full review' : 'Source';
+        return `
+          <article class="review-card">
+            ${review.rating ? ratingStars(review.rating) : (sentiment ? `<span class="review-sentiment">${escapeHtml(sentiment)}</span>` : '')}
+            <blockquote>${escapeHtml(review.excerpt || '')}</blockquote>
+            <footer>
+              <cite>${reviewer}</cite>
+              ${reviewUrl ? `<a href="${escapeHtml(reviewUrl)}" target="_blank" rel="noopener noreferrer" aria-label="View ${reviewer}'s review on ${escapeHtml(reviewSourceName)}">${reviewLinkLabel}</a>` : ''}
+            </footer>
+          </article>
+        `;
+      }).join('');
+      grid.hidden = !reviews.length;
+      loading.hidden = true;
+      content.hidden = false;
+      section.setAttribute('aria-busy', 'false');
+    }
+
+    function scheduleReceptionRetry() {
+      if (pageDisposed || Date.now() >= receptionRetryDeadline) {
+        hideReviewsSection();
+        return false;
+      }
+      receptionRetryCount += 1;
+      const delay = Math.min(800 + receptionRetryCount * 350, 2600);
+      receptionRetryTimer = window.setTimeout(() => {
+        receptionRetryTimer = null;
+        loadBookReception(true);
+      }, delay);
+      return true;
+    }
+
+    function loadBookReception(isRetry = false) {
+      if (pageDisposed || !olKey || (!isRetry && receptionRequested)) return;
+      if (!isRetry) receptionRetryDeadline = Date.now() + 35000;
+      receptionRequested = true;
+      const controller = new AbortController();
+      activeReceptionRequest?.abort();
+      activeReceptionRequest = controller;
+      fetch('/api/book-reception?' + new URLSearchParams({
+        ol_key: olKey,
+        book_lang: BOOK_LANG,
+      }), { cache: 'no-store', signal: controller.signal })
+        .then(response => response.json())
+        .then(data => {
+          if (pageDisposed || activeReceptionRequest !== controller) return;
+          if (data?.success) {
+            renderBookReception(data);
+            return;
+          }
+          if (data?.refreshing && scheduleReceptionRetry()) return;
+          hideReviewsSection();
+        })
+        .catch(error => {
+          if (error.name === 'AbortError' || pageDisposed) return;
+          if (!scheduleReceptionRetry()) hideReviewsSection();
+        });
     }
 
     function normalizeDownloadQueries(provided) {
@@ -909,6 +1077,18 @@
         .finally(() => { sendingMd5 = null; });
     };
 
+    const reviewsSection = document.getElementById('reviewsSection');
+    if ('IntersectionObserver' in window && reviewsSection) {
+      receptionObserver = new IntersectionObserver(entries => {
+        if (!entries.some(entry => entry.isIntersecting)) return;
+        receptionObserver.disconnect();
+        loadBookReception();
+      }, { rootMargin: '700px 0px' });
+      receptionObserver.observe(reviewsSection);
+    } else {
+      loadBookReception();
+    }
+
     const similarSection = document.querySelector('.similar-section');
     if ('IntersectionObserver' in window && similarSection) {
       similarObserver = new IntersectionObserver(entries => {
@@ -932,14 +1112,17 @@
       if (activeSearch) activeSearch.abort();
       activeDetailRequest?.abort();
       activeSimilarRequest?.abort();
+      activeReceptionRequest?.abort();
       if (detailRetryTimer) window.clearTimeout(detailRetryTimer);
       if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
       if (similarWarmTimer) window.clearTimeout(similarWarmTimer);
+      if (receptionRetryTimer) window.clearTimeout(receptionRetryTimer);
       if (downloadRefineTimer) {
         if ('cancelIdleCallback' in window) window.cancelIdleCallback(downloadRefineTimer);
         else window.clearTimeout(downloadRefineTimer);
       }
       similarObserver?.disconnect();
+      receptionObserver?.disconnect();
     };
   </script>
 </body>

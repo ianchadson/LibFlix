@@ -43,6 +43,9 @@ python3 app.py
 No API key is required. Open Library provides the canonical catalog, Inventaire
 supplements broad-topic searches with public semantic metadata, and Wikipedia's
 current and previous year pages provide the optional NYT number-one signal.
+Book pages can also show cached public Goodreads ratings and short attributed
+Goodreads or Book Marks excerpts, with Open Library ratings as the reliable
+fallback.
 
 ## Screenshots
 
@@ -227,6 +230,12 @@ current and previous year pages provide the optional NYT number-one signal.
 - **Monotonic secondary content** - downloads and More Like This may transition
   from one loading state to results, but later metadata cannot restart or hide
   an already-visible result set.
+- **In-page reviews** - a viewport-deferred Reviews section combines a public
+  Goodreads aggregate with at most three short attributed Goodreads or Book
+  Marks excerpts. Exact title/author checks reject derivative or unrelated
+  pages. Open Library ratings remain available when review sources block or
+  change their markup, and the entire section disappears quietly when no source
+  has usable data.
 - **More Like This** - up to two specific subjects plus the current author feed
   a bounded, locally ranked single-row shelf. Multi-subject and same-author
   books win over tangential popularity matches, while broad taxonomy labels are
@@ -400,6 +409,7 @@ current and previous year pages provide the optional NYT number-one signal.
 | `/api/suggestions` | Bounded local title/author/ISBN suggestions for the search palette |
 | `/api/covers` | Batched local cover recovery for currently visible work keys |
 | `/api/quick-look` | Batched local-only descriptions for cover-contained Quick Look previews |
+| `/api/book-reception` | Cached ratings and bounded public review excerpts for one canonical work |
 | `/api/cn-display-title` | Cached English display-title lookup for CN browse cards |
 | `/api/cn-display-titles` | Batched English display-title lookup for visible CN cards |
 | `/api/similar` | JSON endpoint for canonical similar books with mapped Inventaire outage fallback |
@@ -434,6 +444,9 @@ current and previous year pages provide the optional NYT number-one signal.
 | `LIBFLIX_UPSTREAM_JSON_MAX_BYTES` | `2097152` | Maximum decoded Open Library or Inventaire JSON response size |
 | `LIBFLIX_OL_REFRESH_PENDING_LIMIT` | `12` | Maximum active and queued stale Open Library refreshes per worker |
 | `LIBFLIX_INVENTAIRE_REFRESH_PENDING_LIMIT` | `12` | Maximum active and queued stale Inventaire refreshes per worker |
+| `LIBFLIX_GOODREADS_REVIEWS` | `1` | Enable best-effort Goodreads rating and excerpt enrichment |
+| `LIBFLIX_BOOK_RECEPTION_TTL` | `604800` | Fresh lifetime for a successful Reviews payload |
+| `LIBFLIX_BOOK_RECEPTION_STALE_TTL` | `7776000` | Maximum stale Reviews fallback lifetime |
 | `KINDLE_SOURCE_CACHE_TTL` | `86400` seconds | Idle lifetime for a verified EPUB/PDF source copy |
 | `KINDLE_SOURCE_CACHE_MAX_BYTES` | `5368709120` | Shared source-cache byte quota |
 | `KINDLE_PDF_METADATA_MAX_BYTES` | `20971520` | Largest PDF rewritten solely to improve metadata |
@@ -522,6 +535,7 @@ See [CHANGELOG.md](CHANGELOG.md) for dated implementation details.
 - **Backend:** Flask, requests, BeautifulSoup4
 - **Frontend:** Local CSS and vanilla JavaScript
 - **Discovery:** Open Library Search/Works/Covers APIs, mapped Inventaire identity/topic metadata and covers, and an attributed Wikipedia NYT number-one history signal
+- **Reviews:** cached Goodreads public-page aggregates, Goodreads or Book Marks excerpts, and Open Library ratings fallback
 - **Downloads:** Modular downloader interface, currently libgen.li
 - **Port:** 5800
 

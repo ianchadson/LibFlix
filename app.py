@@ -197,6 +197,56 @@ NYT_READ_TIMEOUT = max(
     2.0,
     min(float(os.environ.get("NYT_READ_TIMEOUT", "8")), 12.0),
 )
+GOODREADS = "https://www.goodreads.com"
+BOOKMARKS_REVIEWS = "https://bookmarks.reviews"
+BOOK_RECEPTION_CACHE_VERSION = 1
+BOOK_RECEPTION_FRESH_TTL = max(
+    3600,
+    int(os.environ.get("LIBFLIX_BOOK_RECEPTION_TTL", "604800")),
+)
+BOOK_RECEPTION_STALE_TTL = max(
+    BOOK_RECEPTION_FRESH_TTL,
+    int(os.environ.get("LIBFLIX_BOOK_RECEPTION_STALE_TTL", "7776000")),
+)
+BOOK_RECEPTION_FAILURE_TTL = max(
+    60,
+    int(os.environ.get("LIBFLIX_BOOK_RECEPTION_FAILURE_TTL", "600")),
+)
+GOODREADS_REVIEWS_ENABLED = os.environ.get(
+    "LIBFLIX_GOODREADS_REVIEWS",
+    "1",
+).strip().casefold() not in {"0", "false", "no", "off"}
+GOODREADS_HTML_MAX_BYTES = max(
+    512 * 1024,
+    min(
+        2 * 1024 * 1024,
+        int(os.environ.get("LIBFLIX_GOODREADS_HTML_MAX_BYTES", str(1280 * 1024))),
+    ),
+)
+GOODREADS_CONNECT_TIMEOUT = max(
+    1.0,
+    min(float(os.environ.get("LIBFLIX_GOODREADS_CONNECT_TIMEOUT", "3")), 5.0),
+)
+GOODREADS_READ_TIMEOUT = max(
+    2.0,
+    min(float(os.environ.get("LIBFLIX_GOODREADS_READ_TIMEOUT", "8")), 12.0),
+)
+GOODREADS_MIN_INTERVAL = max(
+    0.5,
+    float(os.environ.get("LIBFLIX_GOODREADS_MIN_INTERVAL", "1.0")),
+)
+GOODREADS_REVIEW_LIMIT = 3
+GOODREADS_REVIEW_MAX_CHARS = 280
+GOODREADS_REVIEW_MAX_WORDS = 45
+GOODREADS_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/128.0.0.0 Safari/537.36"
+)
+BOOKMARKS_HTML_MAX_BYTES = 768 * 1024
+BOOKMARKS_CONNECT_TIMEOUT = 2.5
+BOOKMARKS_READ_TIMEOUT = 5.0
+BOOKMARKS_MIN_INTERVAL = 1.0
 INVENTAIRE_FRESH_TTL = 21600
 INVENTAIRE_STALE_TTL = 604800
 INVENTAIRE_CONNECT_TIMEOUT = max(
@@ -448,6 +498,32 @@ OL_CONNECT_TIMEOUT = max(1.0, float(os.environ.get("OPENLIBRARY_CONNECT_TIMEOUT"
 OL_READ_TIMEOUT = max(2.0, float(os.environ.get("OPENLIBRARY_READ_TIMEOUT", "15")))
 OL_CIRCUIT_FAILURE_THRESHOLD = 3
 OL_CIRCUIT_COOLDOWN = 60
+GOODREADS_GATEWAY_LOCK = threading.Lock()
+GOODREADS_STATE_LOCK = threading.Lock()
+GOODREADS_LAST_REQUEST_AT = 0.0
+GOODREADS_FAILURES = 0
+GOODREADS_CIRCUIT_OPEN_UNTIL = 0.0
+GOODREADS_CIRCUIT_FAILURE_THRESHOLD = 2
+GOODREADS_CIRCUIT_COOLDOWN = 300
+BOOKMARKS_GATEWAY_LOCK = threading.Lock()
+BOOKMARKS_LAST_REQUEST_AT = 0.0
+BOOK_RECEPTION_REFRESH_LOCK = threading.Lock()
+BOOK_RECEPTION_REFRESHING = set()
+BOOK_RECEPTION_REFRESH_PENDING_LIMIT = max(
+    2,
+    int(os.environ.get("LIBFLIX_BOOK_RECEPTION_REFRESH_PENDING_LIMIT", "8")),
+)
+BOOK_RECEPTION_EXECUTOR = ThreadPoolExecutor(
+    max_workers=2,
+    thread_name_prefix="book-reception",
+)
+BOOK_RECEPTION_ENRICH_LOCK = threading.Lock()
+BOOK_RECEPTION_ENRICHING = set()
+BOOK_RECEPTION_ENRICH_PENDING_LIMIT = 8
+BOOK_RECEPTION_ENRICH_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="book-reception-goodreads",
+)
 INVENTAIRE_GATEWAY_LOCK = threading.Lock()
 INVENTAIRE_STATE_LOCK = threading.Lock()
 INVENTAIRE_INFLIGHT_LOCK = threading.Lock()
@@ -4222,6 +4298,701 @@ def author_match_score(candidate, target):
     sequence_score = round(140 * SequenceMatcher(None, candidate, target).ratio())
     return max(token_score, sequence_score)
 
+
+def safe_goodreads_url(value, allowed_paths=("/book/show/", "/review/show/")):
+    """Return a canonical Goodreads URL without accepting an arbitrary host."""
+    candidate = urljoin(GOODREADS, str(value or "").strip())
+    parsed = urlsplit(candidate)
+    hostname = (parsed.hostname or "").casefold()
+    if parsed.scheme != "https" or hostname not in {"goodreads.com", "www.goodreads.com"}:
+        return ""
+    if allowed_paths and not any(parsed.path.startswith(prefix) for prefix in allowed_paths):
+        return ""
+    return f"{GOODREADS}{parsed.path}"
+
+
+def _goodreads_number(value, integer=False):
+    cleaned = re.sub(r"[^0-9.]", "", str(value or ""))
+    if not cleaned:
+        return 0 if integer else 0.0
+    try:
+        number = float(cleaned)
+    except ValueError:
+        return 0 if integer else 0.0
+    return max(0, int(number)) if integer else max(0.0, number)
+
+
+def _goodreads_derivative_penalty(candidate_title, requested_title):
+    candidate = normalize_match_text(candidate_title)
+    requested = normalize_match_text(requested_title)
+    return -1200 if any(
+        marker in candidate and marker not in requested
+        for marker in EDITORIAL_DERIVATIVE_MARKERS
+    ) else 0
+
+
+def parse_goodreads_search(html, title, author=""):
+    """Choose one strongly matching canonical Goodreads book result."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    candidates = []
+    for row in soup.select('tr[itemtype*="schema.org/Book"], tr'):
+        title_link = row.select_one("a.bookTitle")
+        if not title_link:
+            continue
+        candidate_title = title_link.get_text(" ", strip=True)
+        candidate_author_node = row.select_one("a.authorName")
+        candidate_author = (
+            candidate_author_node.get_text(" ", strip=True)
+            if candidate_author_node
+            else ""
+        )
+        book_url = safe_goodreads_url(title_link.get("href"))
+        title_score = title_match_score(candidate_title, title)
+        author_score = author_match_score(candidate_author, author)
+        if not book_url or title_score < 850:
+            continue
+        if author and author_score < 70:
+            continue
+        candidates.append({
+            "title": candidate_title,
+            "author": candidate_author,
+            "url": book_url,
+            "score": (
+                title_score
+                + author_score
+                + _goodreads_derivative_penalty(candidate_title, title)
+            ),
+        })
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: candidate["score"])
+
+
+def _goodreads_jsonld_records(value):
+    if isinstance(value, list):
+        for item in value:
+            yield from _goodreads_jsonld_records(item)
+        return
+    if not isinstance(value, dict):
+        return
+    yield value
+    graph = value.get("@graph")
+    if isinstance(graph, (dict, list)):
+        yield from _goodreads_jsonld_records(graph)
+
+
+def _goodreads_author_name(value):
+    values = value if isinstance(value, list) else [value]
+    names = []
+    for item in values:
+        if isinstance(item, dict) and item.get("name"):
+            names.append(str(item["name"]).strip())
+        elif isinstance(item, str):
+            names.append(item.strip())
+    return ", ".join(name for name in names if name)
+
+
+def bounded_review_excerpt(value):
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    words = text.split()
+    truncated = False
+    if len(words) > GOODREADS_REVIEW_MAX_WORDS:
+        text = " ".join(words[:GOODREADS_REVIEW_MAX_WORDS])
+        truncated = True
+    if len(text) > GOODREADS_REVIEW_MAX_CHARS:
+        text = text[:GOODREADS_REVIEW_MAX_CHARS].rsplit(" ", 1)[0]
+        truncated = True
+    return text.rstrip(" ,.;:-") + ("..." if truncated else "")
+
+
+def parse_goodreads_book(html, expected_title, expected_author, page_url):
+    """Extract only aggregate data and short, attributed public excerpts."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    book_record = None
+    for script in soup.select('script[type="application/ld+json"]'):
+        raw = script.string or script.get_text()
+        if not raw or len(raw) > 256 * 1024:
+            continue
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        for record in _goodreads_jsonld_records(value):
+            record_type = record.get("@type")
+            record_types = record_type if isinstance(record_type, list) else [record_type]
+            if "Book" in record_types:
+                book_record = record
+                break
+        if book_record:
+            break
+    if not book_record:
+        return None
+
+    page_title = str(book_record.get("name") or "").strip()
+    page_author = _goodreads_author_name(book_record.get("author"))
+    if title_match_score(page_title, expected_title) < 850:
+        return None
+    if expected_author and author_match_score(page_author, expected_author) < 70:
+        return None
+
+    aggregate = book_record.get("aggregateRating")
+    aggregate = aggregate if isinstance(aggregate, dict) else {}
+    average = _goodreads_number(aggregate.get("ratingValue"))
+    ratings_count = _goodreads_number(aggregate.get("ratingCount"), integer=True)
+    reviews_count = _goodreads_number(aggregate.get("reviewCount"), integer=True)
+    reviews = []
+    seen_excerpts = set()
+    for card in soup.select(".ReviewCard"):
+        content = card.select_one(".ReviewText__content")
+        if not content:
+            continue
+        if content.select_one('[class*="Spoiler"], [data-testid*="spoiler"]'):
+            continue
+        content_copy = BeautifulSoup(str(content), "html.parser")
+        for node in content_copy.select("script, style, svg, img, picture, button"):
+            node.decompose()
+        excerpt = bounded_review_excerpt(content_copy.get_text(" ", strip=True))
+        if len(excerpt) < 40 or "spoiler" in excerpt.casefold():
+            continue
+        excerpt_key = normalize_match_text(excerpt)
+        if not excerpt_key or excerpt_key in seen_excerpts:
+            continue
+        reviewer_node = card.select_one(".ReviewerProfile__name a")
+        review_link = card.select_one('a[href*="/review/show/"]')
+        review_url = safe_goodreads_url(
+            review_link.get("href") if review_link else "",
+            allowed_paths=("/review/show/",),
+        )
+        rating_node = card.select_one('.RatingStars[aria-label*="Rating"]')
+        rating_match = re.search(
+            r"Rating\s+([1-5])\s+out\s+of\s+5",
+            rating_node.get("aria-label", "") if rating_node else "",
+            flags=re.IGNORECASE,
+        )
+        reviews.append({
+            "reviewer": (
+                reviewer_node.get_text(" ", strip=True)
+                if reviewer_node
+                else "Goodreads reader"
+            ),
+            "rating": int(rating_match.group(1)) if rating_match else 0,
+            "excerpt": excerpt,
+            "url": review_url or page_url,
+        })
+        seen_excerpts.add(excerpt_key)
+        if len(reviews) >= GOODREADS_REVIEW_LIMIT:
+            break
+
+    canonical_url = safe_goodreads_url(page_url)
+    if not canonical_url:
+        return None
+    return {
+        "source": "Goodreads",
+        "average": round(average, 2) if 1 <= average <= 5 else 0,
+        "ratings_count": ratings_count,
+        "reviews_count": reviews_count,
+        "url": canonical_url,
+        "reviews": reviews,
+    }
+
+
+def goodreads_status():
+    with GOODREADS_STATE_LOCK:
+        return {
+            "circuit_open": time.monotonic() < GOODREADS_CIRCUIT_OPEN_UNTIL,
+            "retry_after": max(
+                0,
+                round(GOODREADS_CIRCUIT_OPEN_UNTIL - time.monotonic()),
+            ),
+        }
+
+
+def _goodreads_success():
+    global GOODREADS_FAILURES, GOODREADS_CIRCUIT_OPEN_UNTIL
+    with GOODREADS_STATE_LOCK:
+        GOODREADS_FAILURES = 0
+        GOODREADS_CIRCUIT_OPEN_UNTIL = 0.0
+
+
+def _goodreads_failure():
+    global GOODREADS_FAILURES, GOODREADS_CIRCUIT_OPEN_UNTIL
+    with GOODREADS_STATE_LOCK:
+        GOODREADS_FAILURES += 1
+        if GOODREADS_FAILURES >= GOODREADS_CIRCUIT_FAILURE_THRESHOLD:
+            GOODREADS_CIRCUIT_OPEN_UNTIL = (
+                time.monotonic() + GOODREADS_CIRCUIT_COOLDOWN
+            )
+
+
+def goodreads_fetch_html(path, params=None):
+    global GOODREADS_LAST_REQUEST_AT
+    if not GOODREADS_REVIEWS_ENABLED or goodreads_status()["circuit_open"]:
+        return None
+    url = safe_goodreads_url(path, allowed_paths=("/search", "/book/show/"))
+    if not url:
+        return None
+    try:
+        with GOODREADS_GATEWAY_LOCK:
+            wait_for = GOODREADS_MIN_INTERVAL - (
+                time.monotonic() - GOODREADS_LAST_REQUEST_AT
+            )
+            if wait_for > 0:
+                time.sleep(wait_for)
+            GOODREADS_LAST_REQUEST_AT = time.monotonic()
+        response = SESSION.get(
+            url,
+            params=params,
+            headers={
+                "User-Agent": GOODREADS_BROWSER_USER_AGENT,
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.8",
+            },
+            timeout=(GOODREADS_CONNECT_TIMEOUT, GOODREADS_READ_TIMEOUT),
+            allow_redirects=True,
+            stream=True,
+        )
+        try:
+            response.raise_for_status()
+            if response.status_code != 200:
+                raise ValueError("Goodreads returned a challenge response")
+            final_url = safe_goodreads_url(
+                getattr(response, "url", url),
+                allowed_paths=("/search", "/book/show/"),
+            )
+            content_type = response.headers.get("Content-Type", "text/html")
+            if not final_url or "html" not in content_type.casefold():
+                raise ValueError("Goodreads returned an invalid response")
+            html = bounded_upstream_text(
+                response,
+                maximum=GOODREADS_HTML_MAX_BYTES,
+            )
+        finally:
+            response.close()
+        _goodreads_success()
+        return html
+    except (requests.RequestException, UnicodeDecodeError, ValueError):
+        _goodreads_failure()
+        return None
+
+
+def fetch_goodreads_reception(title, author):
+    if not title or title.casefold() in {"book", "untitled"}:
+        return None
+    search_html = goodreads_fetch_html(
+        "/search",
+        params={
+            "q": title,
+            "search_type": "books",
+            "search[field]": "title",
+        },
+    )
+    if not search_html:
+        return None
+    candidate = parse_goodreads_search(search_html, title, author)
+    if not candidate:
+        return None
+    book_html = goodreads_fetch_html(candidate["url"])
+    if not book_html:
+        return None
+    return parse_goodreads_book(
+        book_html,
+        expected_title=title,
+        expected_author=author,
+        page_url=candidate["url"],
+    )
+
+
+def safe_bookmarks_url(value):
+    candidate = urljoin(BOOKMARKS_REVIEWS, str(value or "").strip())
+    parsed = urlsplit(candidate)
+    if (
+        parsed.scheme != "https"
+        or (parsed.hostname or "").casefold() != "bookmarks.reviews"
+        or not parsed.path.startswith("/reviews/")
+    ):
+        return ""
+    path = re.sub(r"/{2,}", "/", parsed.path)
+    return f"{BOOKMARKS_REVIEWS}{path}"
+
+
+def bookmarks_title_slug(title):
+    ascii_title = unicodedata.normalize("NFKD", str(title or ""))
+    ascii_title = ascii_title.encode("ascii", "ignore").decode("ascii").casefold()
+    return re.sub(r"-+", "-", re.sub(r"[^a-z0-9]+", "-", ascii_title)).strip("-")
+
+
+def bookmarks_fetch_html(title):
+    global BOOKMARKS_LAST_REQUEST_AT
+    slug = bookmarks_title_slug(title)
+    url = safe_bookmarks_url(f"/reviews/{slug}/")
+    if not url:
+        return None, ""
+    try:
+        with BOOKMARKS_GATEWAY_LOCK:
+            wait_for = BOOKMARKS_MIN_INTERVAL - (
+                time.monotonic() - BOOKMARKS_LAST_REQUEST_AT
+            )
+            if wait_for > 0:
+                time.sleep(wait_for)
+            BOOKMARKS_LAST_REQUEST_AT = time.monotonic()
+        response = SESSION.get(
+            url,
+            headers={
+                "User-Agent": f"LibFlix/1.0 ({OL_CONTACT})",
+                "Accept": "text/html,application/xhtml+xml",
+                "Accept-Language": "en-US,en;q=0.8",
+            },
+            timeout=(BOOKMARKS_CONNECT_TIMEOUT, BOOKMARKS_READ_TIMEOUT),
+            allow_redirects=True,
+            stream=True,
+        )
+        try:
+            response.raise_for_status()
+            if response.status_code != 200:
+                raise ValueError("Book Marks returned an incomplete response")
+            final_url = safe_bookmarks_url(getattr(response, "url", url))
+            content_type = response.headers.get("Content-Type", "text/html")
+            if not final_url or "html" not in content_type.casefold():
+                raise ValueError("Book Marks returned an invalid response")
+            html = bounded_upstream_text(
+                response,
+                maximum=BOOKMARKS_HTML_MAX_BYTES,
+            )
+        finally:
+            response.close()
+        return html, final_url
+    except (requests.RequestException, UnicodeDecodeError, ValueError):
+        return None, ""
+
+
+def parse_bookmarks_reception(html, expected_title, expected_author, page_url):
+    soup = BeautifulSoup(html or "", "html.parser")
+    title_node = soup.select_one(".book_detail_title")
+    author_node = soup.select_one('.book_detail_author [itemprop="name"]')
+    page_title = title_node.get_text(" ", strip=True) if title_node else ""
+    page_author = author_node.get_text(" ", strip=True) if author_node else ""
+    if title_match_score(page_title, expected_title) < 850:
+        return None
+    if expected_author and author_match_score(page_author, expected_author) < 70:
+        return None
+    source_url = safe_bookmarks_url(page_url)
+    if not source_url:
+        return None
+
+    reviews = []
+    seen_excerpts = set()
+    for item in soup.select('span[itemprop="review"]'):
+        excerpt_node = item.select_one('[itemprop="reviewBody"]')
+        if not excerpt_node:
+            continue
+        excerpt = bounded_review_excerpt(excerpt_node.get_text(" ", strip=True))
+        excerpt_key = normalize_match_text(excerpt)
+        if len(excerpt) < 40 or not excerpt_key or excerpt_key in seen_excerpts:
+            continue
+        reviewer_node = item.select_one(
+            '.bookmarks_pullquote_reviewer [itemprop="author"] [itemprop="name"]'
+        )
+        publication_node = item.select_one(".bookmarks_source_link")
+        sentiment_node = item.select_one(".review_rating")
+        reviewer = reviewer_node.get_text(" ", strip=True) if reviewer_node else "Critic"
+        publication = (
+            publication_node.get_text(" ", strip=True)
+            if publication_node
+            else ""
+        )
+        reviews.append({
+            "reviewer": " · ".join(part for part in (reviewer, publication) if part),
+            "rating": 0,
+            "sentiment": (
+                sentiment_node.get_text(" ", strip=True)
+                if sentiment_node
+                else ""
+            ),
+            "excerpt": excerpt,
+            "url": source_url,
+        })
+        seen_excerpts.add(excerpt_key)
+        if len(reviews) >= GOODREADS_REVIEW_LIMIT:
+            break
+    if not reviews:
+        return None
+    return {
+        "source": "Book Marks",
+        "url": source_url,
+        "reviews": reviews,
+    }
+
+
+def fetch_bookmarks_reception(title, author):
+    if not title or title.casefold() in {"book", "untitled"}:
+        return None
+    html, page_url = bookmarks_fetch_html(title)
+    if not html:
+        return None
+    return parse_bookmarks_reception(html, title, author, page_url)
+
+
+def fetch_openlibrary_reception(ol_key):
+    payload = ol_get(f"{ol_key}/ratings.json") or {}
+    summary = payload.get("summary")
+    summary = summary if isinstance(summary, dict) else {}
+    average = _goodreads_number(summary.get("average"))
+    count = _goodreads_number(summary.get("count"), integer=True)
+    if not 1 <= average <= 5 or count < 1:
+        return None
+    return {
+        "source": "Open Library",
+        "average": round(average, 2),
+        "ratings_count": count,
+        "reviews_count": 0,
+        "url": f"{OL}{ol_key}",
+    }
+
+
+def book_reception_cache_key(work_id, lang):
+    return f"book_reception:v{BOOK_RECEPTION_CACHE_VERSION}:{lang}:{work_id}"
+
+
+def book_reception_failure_key(work_id, lang):
+    return f"book_reception_failure:v{BOOK_RECEPTION_CACHE_VERSION}:{lang}:{work_id}"
+
+
+def cached_book_reception(work_id, lang, allow_stale=True):
+    key = book_reception_cache_key(work_id, lang)
+    cached = cache_get(key, BOOK_RECEPTION_FRESH_TTL)
+    if isinstance(cached, dict) and cached.get("success"):
+        return cached, "memory"
+    cached = disk_cache_get(key, BOOK_RECEPTION_FRESH_TTL)
+    if isinstance(cached, dict) and cached.get("success"):
+        cache_set(key, cached)
+        return cached, "disk"
+    if allow_stale:
+        stale = disk_cache_get_stale(key, BOOK_RECEPTION_STALE_TTL)
+        if isinstance(stale, dict) and stale.get("success"):
+            return stale, "stale"
+    return None, "miss"
+
+
+def build_book_reception(work_id, lang, include_goodreads=True):
+    ol_key = ol_key_from_work_id(work_id)
+    if not ol_key:
+        return None
+    detail, _cache_state = get_book_detail(work_id, lang)
+    detail = detail or {}
+    title_candidates = bounded_identity_values([
+        detail.get("title"),
+        detail.get("download_title"),
+        detail.get("title_aliases"),
+    ], limit=8)
+    title = next(
+        (candidate for candidate in title_candidates if not is_chinese_title(candidate)),
+        title_candidates[0] if title_candidates else "",
+    )
+    author = str(detail.get("author") or "").strip()
+
+    with ThreadPoolExecutor(max_workers=3, thread_name_prefix="reception-source") as pool:
+        openlibrary_future = pool.submit(fetch_openlibrary_reception, ol_key)
+        goodreads_future = (
+            pool.submit(fetch_goodreads_reception, title, author)
+            if include_goodreads and GOODREADS_REVIEWS_ENABLED and title
+            else None
+        )
+        bookmarks_future = (
+            pool.submit(fetch_bookmarks_reception, title, author)
+            if title
+            else None
+        )
+        try:
+            openlibrary_rating = openlibrary_future.result()
+        except Exception:
+            openlibrary_rating = None
+        try:
+            goodreads = goodreads_future.result() if goodreads_future else None
+        except Exception:
+            goodreads = None
+        try:
+            bookmarks = bookmarks_future.result() if bookmarks_future else None
+        except Exception:
+            bookmarks = None
+
+    primary = None
+    reviews = []
+    reviews_source = None
+    other_ratings = []
+    if goodreads:
+        reviews = goodreads.pop("reviews", [])
+        if reviews:
+            reviews_source = {
+                "source": "Goodreads",
+                "url": goodreads.get("url", ""),
+            }
+        if goodreads.get("average"):
+            primary = goodreads
+    if not reviews and bookmarks:
+        reviews = bookmarks.get("reviews", [])
+        if reviews:
+            reviews_source = {
+                "source": "Book Marks",
+                "url": bookmarks.get("url", ""),
+            }
+    if openlibrary_rating:
+        if primary:
+            other_ratings.append(openlibrary_rating)
+        else:
+            primary = openlibrary_rating
+    if not primary and not reviews:
+        return None
+    return {
+        "success": True,
+        "rating": primary,
+        "other_ratings": other_ratings,
+        "reviews": reviews,
+        "reviews_source": reviews_source,
+        "source_url": (
+            (reviews_source or {}).get("url")
+            or (goodreads or {}).get("url")
+            or (primary or {}).get("url")
+            or ""
+        ),
+        "fetched_at": int(time.time()),
+    }
+
+
+def _enrich_book_reception_with_goodreads(work_id, lang, cache_key):
+    detail, _cache_state = get_book_detail(work_id, lang)
+    detail = detail or {}
+    title_candidates = bounded_identity_values([
+        detail.get("title"),
+        detail.get("download_title"),
+        detail.get("title_aliases"),
+    ], limit=8)
+    title = next(
+        (candidate for candidate in title_candidates if not is_chinese_title(candidate)),
+        title_candidates[0] if title_candidates else "",
+    )
+    author = str(detail.get("author") or "").strip()
+    goodreads = fetch_goodreads_reception(title, author) if title else None
+    if not goodreads:
+        return
+
+    current, _state = cached_book_reception(work_id, lang)
+    payload = dict(current or {
+        "success": True,
+        "rating": None,
+        "other_ratings": [],
+        "reviews": [],
+        "reviews_source": None,
+        "source_url": "",
+    })
+    goodreads = dict(goodreads)
+    goodreads_reviews = goodreads.pop("reviews", [])
+    previous_rating = payload.get("rating")
+    other_ratings = list(payload.get("other_ratings") or [])
+    if goodreads.get("average"):
+        if (
+            previous_rating
+            and previous_rating.get("source") != "Goodreads"
+            and not any(
+                rating.get("source") == previous_rating.get("source")
+                for rating in other_ratings
+            )
+        ):
+            other_ratings.append(previous_rating)
+        payload["rating"] = goodreads
+        payload["other_ratings"] = other_ratings
+    if goodreads_reviews:
+        payload["reviews"] = goodreads_reviews
+        payload["reviews_source"] = {
+            "source": "Goodreads",
+            "url": goodreads.get("url", ""),
+        }
+        payload["source_url"] = goodreads.get("url", "")
+    payload["fetched_at"] = int(time.time())
+    if payload.get("rating") or payload.get("reviews"):
+        cache_set(cache_key, payload)
+        disk_cache_set(cache_key, payload)
+
+
+def _run_book_reception_enrichment(work_id, lang, cache_key):
+    try:
+        _enrich_book_reception_with_goodreads(work_id, lang, cache_key)
+    except Exception:
+        pass
+    finally:
+        with BOOK_RECEPTION_ENRICH_LOCK:
+            BOOK_RECEPTION_ENRICHING.discard(cache_key)
+
+
+def schedule_book_reception_enrichment(work_id, lang, cache_key):
+    with BOOK_RECEPTION_ENRICH_LOCK:
+        if (
+            cache_key in BOOK_RECEPTION_ENRICHING
+            or len(BOOK_RECEPTION_ENRICHING) >= BOOK_RECEPTION_ENRICH_PENDING_LIMIT
+        ):
+            return False
+        BOOK_RECEPTION_ENRICHING.add(cache_key)
+    try:
+        BOOK_RECEPTION_ENRICH_EXECUTOR.submit(
+            _run_book_reception_enrichment,
+            work_id,
+            lang,
+            cache_key,
+        )
+    except RuntimeError:
+        with BOOK_RECEPTION_ENRICH_LOCK:
+            BOOK_RECEPTION_ENRICHING.discard(cache_key)
+        return False
+    return True
+
+
+def _refresh_book_reception(work_id, lang, cache_key):
+    try:
+        payload = build_book_reception(work_id, lang, include_goodreads=False)
+        if payload and payload.get("success"):
+            cache_set(cache_key, payload)
+            disk_cache_set(cache_key, payload)
+            CACHE.pop(book_reception_failure_key(work_id, lang), None)
+            if GOODREADS_REVIEWS_ENABLED:
+                schedule_book_reception_enrichment(work_id, lang, cache_key)
+        else:
+            payload = build_book_reception(work_id, lang, include_goodreads=True)
+            if payload and payload.get("success"):
+                cache_set(cache_key, payload)
+                disk_cache_set(cache_key, payload)
+                CACHE.pop(book_reception_failure_key(work_id, lang), None)
+            else:
+                cache_set(book_reception_failure_key(work_id, lang), True)
+    except Exception:
+        cache_set(book_reception_failure_key(work_id, lang), True)
+    finally:
+        with BOOK_RECEPTION_REFRESH_LOCK:
+            BOOK_RECEPTION_REFRESHING.discard(cache_key)
+
+
+def schedule_book_reception_refresh(work_id, lang):
+    cache_key = book_reception_cache_key(work_id, lang)
+    with BOOK_RECEPTION_REFRESH_LOCK:
+        if (
+            cache_key in BOOK_RECEPTION_REFRESHING
+            or len(BOOK_RECEPTION_REFRESHING) >= BOOK_RECEPTION_REFRESH_PENDING_LIMIT
+        ):
+            return False
+        BOOK_RECEPTION_REFRESHING.add(cache_key)
+    try:
+        BOOK_RECEPTION_EXECUTOR.submit(
+            _refresh_book_reception,
+            work_id,
+            lang,
+            cache_key,
+        )
+    except RuntimeError:
+        with BOOK_RECEPTION_REFRESH_LOCK:
+            BOOK_RECEPTION_REFRESHING.discard(cache_key)
+        return False
+    return True
+
 def identity_match(score_fn, candidate, primary="", aliases=None):
     targets = bounded_identity_values([primary, aliases], limit=DOWNLOAD_IDENTITY_VALUE_LIMIT)
     if not targets:
@@ -5033,6 +5804,7 @@ RUNTIME_RATE_LIMIT_RULES = {
     "api_suggestions": ("suggestions", RateLimitRule(120, 60)),
     "api_covers": ("covers", RateLimitRule(120, 60)),
     "api_quick_look": ("quick-look", RateLimitRule(120, 60)),
+    "api_book_reception": ("book-reception", RateLimitRule(90, 60)),
     "api_similar": ("similar", RateLimitRule(36, 60)),
     "api_book": ("book-detail", RateLimitRule(24, 60)),
     "api_search": ("search", RateLimitRule(24, 60)),
@@ -5048,6 +5820,7 @@ RUNTIME_GLOBAL_RATE_LIMIT_RULES = {
     "api_suggestions": ("suggestions-global", RateLimitRule(1200, 60)),
     "api_covers": ("covers-global", RateLimitRule(1200, 60)),
     "api_quick_look": ("quick-look-global", RateLimitRule(1200, 60)),
+    "api_book_reception": ("book-reception-global", RateLimitRule(1200, 60)),
     "api_similar": ("similar-global", RateLimitRule(240, 60)),
     "api_book": ("book-detail-global", RateLimitRule(120, 60)),
     "api_search": ("search-global", RateLimitRule(120, 60)),
@@ -5311,11 +6084,14 @@ def api_health():
         "service": "libflix",
         "database": database,
         "openlibrary": openlibrary_status(),
+        "goodreads": goodreads_status(),
         "inventaire": inventaire_status(),
         "nyt_bestsellers": nyt_status(),
         "cache": {
             "memory_entries": len(CACHE),
             "book_refreshes": len(BOOK_DETAIL_REFRESHING),
+            "book_reception_refreshes": len(BOOK_RECEPTION_REFRESHING),
+            "book_reception_enrichments": len(BOOK_RECEPTION_ENRICHING),
             "similar_refreshes": len(SIMILAR_REFRESHING),
             "loaded_shelf_sets": sum(
                 1 for key in CACHE if str(key).startswith("shelves_")
@@ -6922,6 +7698,53 @@ def api_similar():
         add_server_timing("similar-local", duration=0, description="durable-cache")
         return jsonify(payload)
     return jsonify({"success": True, "books": [], "refreshing": True, "partial": True})
+
+@app.route("/api/book-reception")
+def api_book_reception():
+    ol_key = request.args.get("ol_key", "").strip()
+    if not re.fullmatch(r"/works/OL\d+W", ol_key):
+        return jsonify({
+            "success": False,
+            "error": "Invalid Open Library work",
+        }), 400
+    work_id = work_id_from_ol_key(ol_key)
+    lang = normalize_book_lang(request.args.get("book_lang")) or get_book_lang()
+    payload, cache_state = cached_book_reception(work_id, lang)
+    if payload and cache_state != "stale":
+        response_payload = dict(payload)
+        response_payload.update({"cache": cache_state, "refreshing": False})
+        add_server_timing("book-reception", duration=0, description=cache_state)
+        return jsonify(response_payload)
+
+    failure_key = book_reception_failure_key(work_id, lang)
+    recent_failure = cache_get(failure_key, BOOK_RECEPTION_FAILURE_TTL)
+    scheduled = False if recent_failure else schedule_book_reception_refresh(work_id, lang)
+    cache_key = book_reception_cache_key(work_id, lang)
+    with BOOK_RECEPTION_REFRESH_LOCK:
+        refreshing = scheduled or cache_key in BOOK_RECEPTION_REFRESHING
+
+    if payload:
+        response_payload = dict(payload)
+        response_payload.update({"cache": "stale", "refreshing": refreshing})
+        add_server_timing("book-reception", duration=0, description="stale")
+        return jsonify(response_payload)
+
+    if refreshing:
+        g.cache_control_override = "no-store"
+        add_server_timing("book-reception", duration=0, description="background")
+        return jsonify({
+            "success": False,
+            "refreshing": True,
+            "cache": "miss",
+        }), 202
+
+    add_server_timing("book-reception", duration=0, description="unavailable")
+    return jsonify({
+        "success": False,
+        "refreshing": False,
+        "cache": "miss",
+    })
+
 
 @app.route("/api/book")
 def api_book():

@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-08-29 - In-page reader reviews
+
+- Added a responsive Reviews section to canonical book pages with a Goodreads
+  aggregate, up to three short attributed Goodreads or Book Marks excerpts, and
+  Open Library ratings fallback.
+- Kept review enrichment off the primary page path with viewport-deferred
+  loading, a bounded background refresh queue, shared seven-day cache, 90-day
+  stale fallback, and quiet empty-state removal.
+- Split cold loading into a fast Open Library/Book Marks stage and a later
+  Goodreads cache upgrade so bot challenges or slow Goodreads pages never hold
+  the visible Reviews section open.
+- Added exact title/author validation, derivative-page rejection, spoiler
+  filtering, strict Goodreads URL validation, bounded response sizes, request
+  spacing, timeouts, a circuit breaker, and a kill switch.
+
 ## 2026-08-29 - Fiction discovery quality and browse polish
 
 - Added a 40-genre fiction browser with exact Open Library subject-key queries,

@@ -155,6 +155,7 @@ cheap while avoiding whole-cache rewrites.
 |---|---|---|
 | Open Library JSON | `ol:*` | 6 hours on disk |
 | Assembled book detail | `book_detail:v6:*` | 7 days |
+| Reader reviews | `book_reception:v1:*` | 7 days; up to 90 days stale |
 | Similar books | `similar:v8:*` | 7 days; complete empty results use a 30-minute negative key |
 | Download source search | `download_search:v11:*` | 15 minutes for complete searches only |
 | CN/English title helpers | language-specific keys | 30 days |
@@ -421,7 +422,8 @@ sender list before delivery.
 - SQLite availability;
 - loaded shelf state;
 - Open Library circuit state;
-- active Kindle job counts.
+- Goodreads challenge circuit and active Reviews queues;
+- active Kindle job counts;
 - writable rate-limiter and metrics storage readiness, plus degraded/dropped
   operation counters.
 

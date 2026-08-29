@@ -181,6 +181,9 @@ Browser requests /book/OL3431878W
   -> bounded background task refreshes missing/stale metadata
   -> cached subjects seed /api/similar without blocking the page
   -> JS fetches /api/search for download options
+  -> Reviews enters the preload margin and fetches /api/book-reception
+  -> a fresh or stale local payload renders immediately; a cold miss schedules
+     a bounded background refresh and the browser polls without blocking content
   -> shared download-ui.js renders responsive edition rows
 ```
 
@@ -213,6 +216,28 @@ Important behavior:
 - More Like This uses the shared card and quick-peek behavior.
 - Long descriptions clamp on compact screens and can be expanded in place.
 - Download result count summaries are hidden.
+
+### Reader Reviews (`GET /api/book-reception`)
+
+The endpoint accepts one validated Open Library work key and derives title and
+author identity on the server. It never accepts an arbitrary upstream URL.
+Goodreads search candidates must pass strong title and author checks, while
+summary, workbook, companion, and other derivative pages receive a hard
+penalty. The selected book page supplies its aggregate rating and up to three
+short, attributed, non-spoiler reader excerpts. When Goodreads presents a bot
+challenge, Book Marks can provide bounded professional-review excerpts instead.
+Open Library's ratings endpoint is fetched independently and becomes the primary
+rating source whenever Goodreads is unavailable.
+
+Successful payloads are shared through SQLite for seven days and remain usable
+as stale fallback for up to 90 days. Cold refreshes are coalesced and run in a
+two-worker bounded queue. The fast stage publishes Open Library and Book Marks
+as soon as they are ready; a slower Goodreads request may upgrade that cached
+payload later through a separate one-worker queue without holding the browser
+skeleton or fast refresh workers open. Goodreads requests are
+spaced, size-limited, timeout-bounded, circuit-broken, and may be disabled with
+`LIBFLIX_GOODREADS_REVIEWS=0`. Failures are negatively cached for ten minutes;
+the browser hides the Reviews section instead of exposing a provider error.
 - A single result page has no pagination controls.
 
 ### Download Search (`GET /search`)
@@ -990,6 +1015,7 @@ and WebKit scrollbar hiding rules.
 | Chinese title resolution | memory + SQLite | `chinese_title:v1:<ol_key>` | 30 days |
 | CN English display title | memory + SQLite | `english_title:v1:<ol_key>` | 30 days |
 | Assembled book detail | memory + SQLite | `book_detail:v6:<lang>:<work>` | 7 days fresh; up to 90 days stale |
+| Reader reviews | memory + SQLite | `book_reception:v1:<lang>:<work>` | 7 days fresh; up to 90 days stale |
 | Similar books | memory + SQLite | `similar:v8:...` | 7 days fresh; complete empty results use a 30-minute negative key |
 | Download search results | memory + SQLite | `download_search:v11:...` | 15 minutes for complete searches; stale fallback; scope is part of the key |
 | Homepage shelves | memory | `shelves_{lang}_{mode}` | 1 hour |
