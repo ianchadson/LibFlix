@@ -721,7 +721,42 @@ class CoverSelectionTests(unittest.TestCase):
 
         book = app.extract_book(record, "en", allow_missing_cover=False)
 
+        self.assertEqual(book["title"], "The Age of A.I.")
         self.assertEqual(book["cover_url"], "/olcover/14757696/M.webp")
+
+    def test_english_edition_title_replaces_strong_foreign_work_title(self):
+        record = {
+            "key": "/works/OL81625W",
+            "title": "A Torre Negra",
+            "author_name": ["Stephen King"],
+            "language": ["eng", "por"],
+            "editions": {"docs": [{
+                "title": "The Waste Lands",
+                "language": ["eng"],
+                "covers": [12345],
+            }]},
+        }
+
+        book = app.extract_book(record, "en", allow_missing_cover=False)
+
+        self.assertEqual(book["title"], "The Waste Lands")
+
+    def test_unrelated_english_edition_title_does_not_replace_canonical_title(self):
+        record = {
+            "key": "/works/OL17924837W",
+            "title": "Crazy Rich Asians",
+            "author_name": ["Kevin Kwan"],
+            "language": ["eng"],
+            "editions": {"docs": [{
+                "title": "Yearbook of some kind",
+                "language": ["eng"],
+                "covers": [12345],
+            }]},
+        }
+
+        book = app.extract_book(record, "en", allow_missing_cover=False)
+
+        self.assertEqual(book["title"], "Crazy Rich Asians")
 
 
 class CoverFailureCacheTests(unittest.TestCase):

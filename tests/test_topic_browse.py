@@ -85,7 +85,7 @@ class TopicBrowsePageTests(unittest.TestCase):
         self.assertEqual(redirect.headers["Location"], "/topics")
         self.assertEqual(client.get("/fiction/topics").status_code, 404)
 
-    def test_home_has_a_compact_topic_entry_point_but_fiction_does_not(self):
+    def test_each_home_has_its_mode_specific_browse_entry_point(self):
         with patch.object(app, "get_shelves", return_value=[]):
             nonfiction = app.app.test_client().get("/")
             fiction = app.app.test_client().get("/fiction")
@@ -105,6 +105,8 @@ class TopicBrowsePageTests(unittest.TestCase):
         self.assertIn(b'href="/topics"', nonfiction.data)
         self.assertNotIn(b'id="homeTopicsTitle">Browse by topic</h2>', fiction.data)
         self.assertNotIn(b'href="/topics"', fiction.data)
+        self.assertIn(b'id="homeGenresTitle">Browse genres</h2>', fiction.data)
+        self.assertIn(b'href="/fiction/genres"', fiction.data)
 
     def test_topic_artwork_uses_cached_shelves_without_changing_catalog(self):
         shelves = [

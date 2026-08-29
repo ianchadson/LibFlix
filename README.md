@@ -134,9 +134,12 @@ current and previous year pages provide the optional NYT number-one signal.
 - **Instant search palette** - the global search opens as a fixed command
   palette, so the navbar and page never reflow. It searches a bounded local
   catalog index while the user types, supports keyboard selection and recent
-  terms, and provides direct shortcuts to Trending, New This Week, Short Reads,
+  terms, and provides direct shortcuts to Trending, New & Notable, Short Reads,
   and Topics. Submitting still routes to `/discover`; it never jumps directly
   to download search.
+- **Focused fiction genres** - fiction browsing includes 40 grouped genres and
+  an instant local genre finder. Genre shelves use exact catalogue subject keys,
+  defer derivative editions and repeated authors, and do not fetch descriptions.
 - **Download search is contextual** - download options are searched from the book
   preview page using the selected title and author.
 - **Locally reranked identity discovery** - identity-search results must retain
@@ -169,10 +172,10 @@ current and previous year pages provide the optional NYT number-one signal.
 - **Trending naming** - the first shelf and first top-nav category are labeled
   `Trending` across fiction and non-fiction. Cached shelf labels are normalized
   at render time so older `New & Popular` cache files do not leak into the UI.
-- **Editorial discovery rails** - both fiction and non-fiction place `New This
-  Week` and `Short Reads` directly after Trending. The former is a weekly
-  refreshed surface of recently published catalog records; the latter is
-  bounded to works with a median length of 220 pages or fewer. Neither rail is
+- **Editorial discovery rails** - both fiction and non-fiction place `New &
+  Notable` and `Short Reads` directly after Trending. The former is limited to
+  current and previous-year books with reader activity; the latter is bounded
+  to works with a median length of 220 pages or fewer. Neither rail is
   personalized.
 - **Top 10 treatment** - the first ten Trending books receive large rank
   numerals without changing the underlying canonical work order.
@@ -495,9 +498,13 @@ requests. They are ignored by git.
 
 Legacy `api_cache.json` data is migrated once into SQLite and removed after a
 successful migration. Shelf files and book hints are loaded before serving;
-stale shelves refresh after a delay without blocking the first page. Expired
-metadata can be served stale while a bounded background refresh runs. Memory
-and SQLite cache pruning continues periodically after startup.
+stale shelves refresh after a delay without blocking the first page. A partial
+provider response is merged shelf by shelf with the last complete cache and
+cannot advance the query revision or erase healthy rows. Expired metadata can
+be served stale while a bounded background refresh runs. A new install with no
+usable shelf file renders the stable page shell immediately and builds shelves
+in the background. Memory and SQLite cache pruning continues periodically after
+startup.
 
 ## Architecture
 

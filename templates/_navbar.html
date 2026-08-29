@@ -228,18 +228,16 @@
       <a class="navbar-brand" href="{{ home_url(nav_mode, book_lang) }}">LibFlix</a>
       <div class="cat-tabs">
       {% if nav_mode == 'fiction' %}
-      <a href="{{ home_url('fiction', book_lang) }}" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">Home</a>
+      <a href="{{ home_url('fiction', book_lang) }}" class="cat-tab {% if active_tab == 'home_fiction' %}active{% endif %}">Home</a>
+      <a href="{{ genres_url(book_lang) }}" class="cat-tab {% if active_tab == 'genres' %}active{% endif %}"{% if active_tab == 'genres' %} aria-current="page"{% endif %}>Genres</a>
       <a href="{{ category_url('trending_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'trending_fiction' %}active{% endif %}">Trending</a>
+      <a href="{{ category_url('dark_fantasy', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'dark_fantasy' %}active{% endif %}">Dark Fantasy</a>
+      <a href="{{ category_url('fiction_classics', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'fiction_classics' %}active{% endif %}">Classics</a>
       <a href="{{ category_url('science_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'science_fiction' %}active{% endif %}">Sci-Fi</a>
       <a href="{{ category_url('fantasy', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'fantasy' %}active{% endif %}">Fantasy</a>
       <a href="{{ category_url('mystery', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'mystery' %}active{% endif %}">Mystery</a>
       <a href="{{ category_url('romance', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'romance' %}active{% endif %}">Romance</a>
       <a href="{{ category_url('horror', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'horror' %}active{% endif %}">Horror</a>
-      <a href="{{ category_url('historical_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'historical_fiction' %}active{% endif %}">Historical</a>
-      <a href="{{ category_url('adventure', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'adventure' %}active{% endif %}">Adventure</a>
-      <a href="{{ category_url('young_adult', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'young_adult' %}active{% endif %}">YA</a>
-      <a href="{{ category_url('graphic_novels', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'graphic_novels' %}active{% endif %}">Graphic</a>
-      <a href="{{ category_url('literary_fiction', 'fiction', book_lang) }}" class="cat-tab {% if active_tab == 'literary_fiction' %}active{% endif %}">Literary</a>
       {% else %}
       <a href="{{ home_url('nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'home' %}active{% endif %}">Home</a>
       <a href="{{ topics_url('nonfiction', book_lang) }}" class="cat-tab {% if active_tab == 'topics' %}active{% endif %}"{% if active_tab == 'topics' %} aria-current="page"{% endif %}>Topics</a>
@@ -338,10 +336,10 @@
     <div class="search-palette-body">
       <div class="search-palette-label">Explore</div>
       <div class="search-shortcuts">
-        <a class="search-shortcut" href="{{ category_url('new_this_week_fiction' if nav_mode == 'fiction' else 'new_this_week', nav_mode, book_lang) }}"><span class="search-shortcut-dot"></span>New this week</a>
+        <a class="search-shortcut" href="{{ category_url('new_this_week_fiction' if nav_mode == 'fiction' else 'new_this_week', nav_mode, book_lang) }}"><span class="search-shortcut-dot"></span>New &amp; notable</a>
         <a class="search-shortcut" href="{{ category_url('short_reads_fiction' if nav_mode == 'fiction' else 'short_reads', nav_mode, book_lang) }}"><span class="search-shortcut-dot"></span>Short reads</a>
         <a class="search-shortcut" href="{{ category_url('trending_fiction' if nav_mode == 'fiction' else 'trending', nav_mode, book_lang) }}">Trending</a>
-        {% if nav_mode != 'fiction' %}<a class="search-shortcut" href="{{ topics_url(nav_mode, book_lang) }}">Browse topics</a>{% endif %}
+        {% if nav_mode == 'fiction' %}<a class="search-shortcut" href="{{ genres_url(book_lang) }}">Genres</a>{% else %}<a class="search-shortcut" href="{{ topics_url(nav_mode, book_lang) }}">Browse topics</a>{% endif %}
       </div>
       <div id="searchRecentSection" hidden>
         <div class="search-palette-label">Recent</div>

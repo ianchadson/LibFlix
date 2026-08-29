@@ -32,15 +32,19 @@
     .book-card .info .a { font-size: .7rem; font-weight: 500; color: rgba(255,255,255,.76); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .book-card .placeholder { width: 150px; height: 225px; background: #2a2a2a; display: flex; align-items: center; justify-content: center; font-size: 2rem; color: #555; border-radius: 8px; position: relative; z-index: 2; }
 
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .inf-loading { text-align: center; padding: 1.5rem; color: #666; display: none; }
-    .inf-loading .spinner-sm { width: 28px; height: 28px; border: 3px solid rgba(229,9,20,.2); border-top-color: #e50914; border-radius: 50%; animation: spin .8s linear infinite; margin: 0 auto; }
+    .category-load-placeholder { height:225px; cursor:default; box-shadow:none; pointer-events:none; }
+    .category-load-placeholder::after { position:absolute; inset:0; background:linear-gradient(110deg, transparent 12%, rgba(255,255,255,.055) 25%, transparent 38%); background-size:220% 100%; content:""; animation:coverShimmer 1.15s linear infinite; }
+    .category-load-feedback { display:none; min-height:42px; align-items:center; justify-content:center; gap:10px; padding:4px 16px 24px; color:#8e8e93; font-size:.82rem; }
+    .category-load-feedback.is-visible { display:flex; }
+    .category-load-feedback button { min-height:32px; padding:0 12px; border:1px solid rgba(255,255,255,.16); border-radius:6px; background:#1b1c20; color:#f0f0f1; font:700 .78rem/1 'Helvetica Neue', Arial, sans-serif; cursor:pointer; }
+    .category-load-feedback button:hover { border-color:rgba(255,255,255,.28); background:#222328; }
     .scroll-sentinel { height: 1px; }
 
     @media (max-width: 768px) {
       .book-card, .book-card img { width: 120px; }
       .book-card img { height: 180px; }
       .book-card .placeholder { width: 120px; height: 180px; }
+      .category-load-placeholder { height:180px; }
       .cat-tab { font-size: .65rem; padding: 2px 6px; }
     }
     @media (max-width: 992px) {
@@ -66,8 +70,9 @@
   {% endif %}
 
   <div id="scrollSentinel" class="scroll-sentinel" aria-hidden="true"></div>
-  <div class="inf-loading" id="infLoading">
-    <div class="spinner-sm"></div>
+  <div class="category-load-feedback" id="loadFeedback" role="status" aria-live="polite">
+    <span>Couldn't load more</span>
+    <button id="retryLoad" type="button">Retry</button>
   </div>
 
   {% include "_footer.html" %}
@@ -86,9 +91,11 @@
     let observer = null;
     let fillTimer = null;
     let meaningfulScroll = false;
+    let loadFailed = false;
     const scrollOrigin = window.scrollY;
     const scrollSentinel = document.getElementById('scrollSentinel');
-    const infLoading = document.getElementById('infLoading');
+    const loadFeedback = document.getElementById('loadFeedback');
+    const retryLoad = document.getElementById('retryLoad');
 
     function esc(s) {
       const d = document.createElement('div');
@@ -132,7 +139,22 @@
     }
 
     function setLoading(on) {
-      infLoading.style.display = on ? 'block' : 'none';
+      const grid = document.getElementById('bookGrid');
+      grid.querySelectorAll('.category-load-placeholder').forEach(node => node.remove());
+      if (!on) return;
+      const fragment = document.createDocumentFragment();
+      for (let index = 0; index < 6; index += 1) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'book-card category-load-placeholder';
+        placeholder.setAttribute('aria-hidden', 'true');
+        fragment.appendChild(placeholder);
+      }
+      grid.appendChild(fragment);
+    }
+
+    function setLoadError(on) {
+      loadFailed = on;
+      loadFeedback.classList.toggle('is-visible', on);
     }
 
     function finishLoading() {
@@ -140,15 +162,16 @@
       if (scrollSentinel) scrollSentinel.style.display = 'none';
     }
 
-    function loadMore() {
-      if (loading || finished) return;
+    function loadMore(allowWithoutScroll = false) {
+      if (loading || finished || loadFailed) return;
       if (renderNextBatch()) return;
-      if (!meaningfulScroll) return;
+      if (!meaningfulScroll && !allowWithoutScroll) return;
       if (currentPage >= totalPages) {
         finishLoading();
         return;
       }
       loading = true;
+      setLoadError(false);
       setLoading(true);
       const nextPage = currentPage + 1;
       fetch('/api/category/' + encodeURIComponent(TOPIC) + '?page=' + nextPage + '&mode=' + encodeURIComponent(MODE) + '&book_lang=' + encodeURIComponent(BOOK_LANG))
@@ -164,11 +187,11 @@
           totalPages = data.total_pages || totalPages;
           renderNextBatch();
         })
-        .catch(() => {})
+        .catch(() => setLoadError(true))
         .finally(() => {
           loading = false;
           setLoading(false);
-          fillViewportIfNeeded();
+          if (!loadFailed) fillViewportIfNeeded();
         });
     }
 
@@ -177,25 +200,32 @@
     }
 
     function maybeLoadMore() {
-      if (Math.abs(window.scrollY - scrollOrigin) >= Math.min(180, window.innerHeight * .22)) meaningfulScroll = true;
+      if (Math.abs(window.scrollY - scrollOrigin) >= Math.min(24, window.innerHeight * .08)) meaningfulScroll = true;
       if (nearPageBottom()) loadMore();
     }
 
     function fillViewportIfNeeded() {
-      if (!finished && pendingBooks.length && document.documentElement.scrollHeight <= window.innerHeight + 120) {
+      if (finished || loadFailed || document.documentElement.scrollHeight > window.innerHeight + 24) return;
+      if (pendingBooks.length) {
         if (renderNextBatch()) fillTimer = window.setTimeout(fillViewportIfNeeded, 60);
+        return;
       }
+      loadMore(true);
     }
 
     if ('IntersectionObserver' in window && scrollSentinel) {
       observer = new IntersectionObserver(entries => {
-        if (entries.some(entry => entry.isIntersecting) && (pendingBooks.length || meaningfulScroll)) loadMore();
+        if (!loadFailed && entries.some(entry => entry.isIntersecting) && (pendingBooks.length || meaningfulScroll)) loadMore();
       }, { rootMargin: '700px 0px' });
       observer.observe(scrollSentinel);
     }
 
     window.addEventListener('scroll', maybeLoadMore, { passive: true });
     window.addEventListener('resize', fillViewportIfNeeded);
+    retryLoad.addEventListener('click', () => {
+      setLoadError(false);
+      loadMore(true);
+    });
     fillTimer = window.setTimeout(fillViewportIfNeeded, 250);
     window.LibFlixPageCleanup = () => {
       observer?.disconnect();

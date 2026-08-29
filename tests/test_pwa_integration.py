@@ -84,7 +84,7 @@ class PwaIntegrationTests(unittest.TestCase):
         self.assertEqual(panel.get("aria-hidden"), "true")
         self.assertTrue(panel.has_attr("inert"))
 
-    def test_topics_are_cloned_into_mobile_browse_and_activate_browse(self):
+    def test_catalog_pages_are_cloned_into_mobile_browse_and_activate_browse(self):
         pwa = (ROOT / "static/libflix-pwa.js").read_text()
         with app.app.test_request_context("/topics"):
             html = app.render_template(
@@ -99,7 +99,7 @@ class PwaIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(topic_link)
         self.assertIn("active", topic_link.get("class", []))
         self.assertIn("document.querySelectorAll('.cat-tabs a')", pwa)
-        self.assertIn(r"/\/topics$/.test(path)", pwa)
+        self.assertIn(r"/\/(?:topics|genres)$/.test(path)", pwa)
         self.assertIn("link.classList.toggle('active', isCurrent)", pwa)
         self.assertIn("link.setAttribute('aria-current', 'page')", pwa)
         self.assertIn("currentMarker.setAttribute('aria-hidden', 'true')", pwa)

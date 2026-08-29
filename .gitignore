@@ -10,6 +10,8 @@ tmp/
 .env
 shelf_cache*.json
 shelf_cache*.json.tmp
+shelf_cache*.json.revision
+shelf_cache*.json.revision.tmp
 api_cache.json
 api_cache.json.tmp
 api_cache.sqlite3

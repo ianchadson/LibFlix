@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="{{ 'zh' if book_lang == 'cn' else 'en' }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Fiction Genres - LibFlix</title>
+  <style data-page-style>
+    * { box-sizing: border-box; }
+    body { background:#0d0e10; color:#fff; font-family:'Helvetica Neue', Arial, sans-serif; }
+    .genre-page { width:100%; max-width:1560px; min-height:calc(100vh - 68px); margin:0 auto; padding:46px 24px 78px; }
+    .genre-page h1 { margin:0 0 24px; color:#f7f7f8; font-size:clamp(2rem, 3.2vw, 3.25rem); font-weight:780; line-height:1; letter-spacing:0; }
+    .genre-finder { position:relative; width:min(420px, 100%); margin-bottom:38px; }
+    .genre-finder svg { position:absolute; top:50%; left:14px; width:18px; height:18px; color:#8e8e93; pointer-events:none; transform:translateY(-50%); }
+    .genre-finder input { width:100%; height:44px; padding:0 14px 0 42px; border:1px solid rgba(255,255,255,.13); border-radius:8px; outline:0; background:#17181c; color:#f7f7f8; font:650 .9rem/1 'Helvetica Neue', Arial, sans-serif; letter-spacing:0; appearance:none; transition:border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+    .genre-finder input::placeholder { color:#777980; font-weight:560; opacity:1; }
+    .genre-finder input:hover { border-color:rgba(255,255,255,.22); background:#1a1b20; }
+    .genre-finder input:focus { border-color:rgba(229,9,20,.72); box-shadow:0 0 0 3px rgba(229,9,20,.12); background:#1a1b20; }
+    .genre-finder input::-webkit-search-cancel-button { filter:invert(1); opacity:.58; cursor:pointer; }
+    .genre-group { margin-top:40px; }
+    .genre-group:first-of-type { margin-top:0; }
+    .genre-group h2 { margin:0 0 13px; color:#efeff1; font-size:1.22rem; font-weight:690; line-height:1.2; letter-spacing:0; }
+    .genre-grid { display:grid; grid-template-columns:repeat(6, minmax(0, 1fr)); gap:10px; }
+    .genre-card { position:relative; isolation:isolate; min-width:0; aspect-ratio:1.62 / 1; display:flex; align-items:flex-end; overflow:hidden; padding:14px; border:1px solid rgba(255,255,255,.09); border-radius:8px; background:#1a1b1f; color:#fff; text-decoration:none; contain:layout paint; transition:transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
+    .genre-card[hidden], .genre-group[hidden] { display:none !important; }
+    .genre-card::after { position:absolute; z-index:-1; inset:0; background:linear-gradient(180deg, rgba(5,6,8,.02) 22%, rgba(5,6,8,.28) 58%, rgba(5,6,8,.92) 100%); content:""; }
+    .genre-card-art { position:absolute; z-index:-2; inset:0; display:flex; background:#202126; }
+    .genre-card-art img { width:50%; min-width:0; height:100%; flex:1 1 0; object-fit:cover; filter:saturate(.88) contrast(1.03); transition:filter .2s ease, transform .28s ease; }
+    .genre-card-art img:first-child { transform-origin:right center; }
+    .genre-card-art img:last-child { transform-origin:left center; }
+    .genre-card-fallback { position:absolute; z-index:-2; inset:0; display:grid; place-items:center; background:#202126; color:rgba(255,255,255,.08); font-size:4.2rem; font-weight:800; }
+    .genre-card-name { position:relative; z-index:1; max-width:100%; overflow:hidden; color:#fff; font-size:.88rem; font-weight:750; line-height:1.14; text-overflow:ellipsis; text-shadow:0 2px 12px rgba(0,0,0,.9); white-space:nowrap; }
+    .genre-empty { display:none; margin:52px 0 0; color:#8e8e93; font-size:.94rem; }
+    .genre-empty.is-visible { display:block; }
+    .genre-card:focus-visible { outline:2px solid #fff; outline-offset:3px; }
+    @media (hover:hover) and (pointer:fine) {
+      .genre-card:hover { z-index:2; border-color:rgba(255,255,255,.24); box-shadow:0 17px 38px rgba(0,0,0,.42); transform:translateY(-3px) scale(1.018); }
+      .genre-card:hover .genre-card-art img { filter:saturate(1.05) contrast(1.04); }
+      .genre-card:hover .genre-card-art img:first-child { transform:scale(1.035) translateX(-1px); }
+      .genre-card:hover .genre-card-art img:last-child { transform:scale(1.035) translateX(1px); }
+    }
+    @media (max-width:1250px) {
+      .genre-grid { grid-template-columns:repeat(4, minmax(0, 1fr)); }
+    }
+    @media (max-width:820px) {
+      .genre-grid { grid-template-columns:repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width:600px) {
+      .genre-page { padding:28px 16px 92px; }
+      .genre-page h1 { margin-bottom:20px; }
+      .genre-finder { margin-bottom:31px; }
+      .genre-group { margin-top:34px; }
+      .genre-group h2 { margin-bottom:10px; font-size:1.08rem; }
+      .genre-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); gap:8px; }
+      .genre-card { aspect-ratio:1.42 / 1; padding:11px; }
+      .genre-card-name { font-size:.8rem; }
+    }
+    @media (prefers-reduced-motion:reduce) {
+      .genre-card, .genre-card-art img { transition:none; }
+    }
+  </style>
+  <link href="{{ url_for('static', filename='libflix.css', v=asset_version) }}" rel="stylesheet">
+</head>
+<body class="page-fiction-genres">
+  {% set active_tab = 'genres' %}
+  {% include "_navbar.html" %}
+
+  <main id="mainContent" class="genre-page">
+    <h1>Genres</h1>
+    <div class="genre-finder" role="search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg>
+      <input id="genreSearch" type="search" autocomplete="off" spellcheck="false" placeholder="Find a genre" aria-label="Find a genre">
+    </div>
+    {% for group in genre_groups %}
+    <section class="genre-group" id="genreGroup{{ loop.index }}" aria-labelledby="genreGroupTitle{{ loop.index }}">
+      <h2 id="genreGroupTitle{{ loop.index }}">{{ group.name }}</h2>
+      <div class="genre-grid">
+        {% for genre in group.genres %}
+        <a class="genre-card" href="{{ category_url(genre.topic, 'fiction', book_lang) }}">
+          {% if genre.artwork %}
+          <span class="genre-card-art" aria-hidden="true">
+            {% for cover_url in genre.artwork %}
+            <img src="{{ cover_url | size_url('S') }}" alt="" loading="lazy" decoding="async" onerror="this.hidden=true">
+            {% endfor %}
+          </span>
+          {% else %}
+          <span class="genre-card-fallback" aria-hidden="true">{{ genre.name[0] }}</span>
+          {% endif %}
+          <span class="genre-card-name">{{ genre.name }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </section>
+    {% endfor %}
+    <p class="genre-empty" id="genreEmpty">No matching genres</p>
+  </main>
+
+  {% include "_footer.html" %}
+  <script data-page-script>
+    (() => {
+      const search = document.getElementById('genreSearch');
+      const groups = Array.from(document.querySelectorAll('.genre-group'));
+      const empty = document.getElementById('genreEmpty');
+      if (!search || !groups.length) return;
+
+      const filterGenres = () => {
+        const query = search.value.trim().toLocaleLowerCase();
+        let visible = 0;
+        groups.forEach(group => {
+          let groupVisible = 0;
+          group.querySelectorAll('.genre-card').forEach(card => {
+            const match = !query || card.textContent.toLocaleLowerCase().includes(query);
+            card.hidden = !match;
+            if (match) groupVisible += 1;
+          });
+          group.hidden = groupVisible === 0;
+          visible += groupVisible;
+        });
+        empty.classList.toggle('is-visible', visible === 0);
+      };
+
+      search.addEventListener('input', filterGenres);
+      search.addEventListener('keydown', event => {
+        if (event.key !== 'Escape' || !search.value) return;
+        search.value = '';
+        filterGenres();
+      });
+    })();
+  </script>
+</body>
+</html>

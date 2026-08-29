@@ -41,8 +41,9 @@ Browser requests /
        -> memory cache
        -> disk shelf cache
        -> normalize shelf labels for current definitions
-       -> shelf-order dedupe and refill
-       -> Open Library search when cache is cold or a shelf needs refill
+       -> return cached shelves immediately after shelf-order dedupe
+       -> schedule a guarded Open Library refresh when cache is stale
+       -> on a true cache miss, return empty shelf frames and build in background
   -> render index.html with fixed-height cycleable hero + shelves
        -> shelf wrappers render as stable skeletons
        -> cached hero descriptions render when already assembled
@@ -64,8 +65,10 @@ Important behavior:
   progressive rendering never exposes an artificially short row.
 - Shelves are deduped in top-to-bottom priority order. A book that appears in
   an earlier shelf is excluded from later shelves.
-- Later shelves try to refill from deeper Open Library pages after duplicates
-  are removed.
+- A refresh requests one provider page per shelf. Only shelves that cannot fill
+  the first visible row after dedupe request a second page.
+- Partial refreshes merge with the last complete shelf set and remain marked
+  stale; they cannot replace healthy cached shelves with empty data.
 - Horizontal scrollbars are hidden.
 - The compact More button is a fallback; normal loading is scroll-triggered.
 - The hero's carousel controls are fixed within the hero and do not shift when
@@ -325,7 +328,8 @@ can be verified.
 | `prefetch_topic_pages(topics, lang, max_pages)` | Fetch bounded candidate pages for homepage shelves in parallel |
 | `select_unique_from_prefetched(topic, candidate_pages, seen_keys, target)` | Select unique shelf books from prefetched candidates without more network calls |
 | `normalize_shelf_labels(shelves, mode)` | Re-map cached shelf names to the current fiction/non-fiction shelf definitions |
-| `dedupe_and_refill_shelves(shelves, mode, lang)` | Apply homepage shelf priority and top up later shelves |
+| `merge_refreshed_shelves(fresh, previous, mode)` | Merge fresh books shelf by shelf while preserving cached coverage and homepage priority |
+| `apply_shelf_refresh(shelves, mode, lang)` | Persist only usable refresh data and advance the query revision only after coverage checks |
 | `seen_keys_before_shelf(topic, mode, lang)` | Build exclusion keys from all earlier homepage shelves |
 | `fetch_shelf_page_books(topic, page, mode, lang)` | Return logical horizontal shelf pages after cross-shelf dedupe |
 | `fetch_discovery_books(q, page, lang)` | Paginated strict Open Library identity-search source |
@@ -435,10 +439,14 @@ Returns:
 ### `GET /api/shelf/<topic>`
 
 Same shape as `/api/category/<topic>`. Used by horizontal homepage shelves.
-`new_this_week` and `new_this_week_fiction` use newest records from the current
-and previous publication year as a weekly refreshed editorial surface.
+`new_this_week` and `new_this_week_fiction` power the New & Notable rail. They
+use rated records from the current and previous publication year with recorded
+reader activity. Trending uses Open Library's current trending score with
+minimum reading-log and rating evidence. Fiction genres use exact subject keys,
+and the first visible batch defers derivative titles and repeated authors.
 `short_reads` and `short_reads_fiction` require a median page count from 1 to
-220. All shelves remain language-scoped and are deduplicated in display order.
+220. Category requests use a smaller provider page than homepage shelf refreshes.
+All shelves remain language-scoped and are deduplicated in display order.
 
 ### `GET /api/suggestions`
 
@@ -1000,9 +1008,13 @@ and periodically on writes. Row count, aggregate payload bytes, individual
 payload size, and process-local memory entry count are independently capped.
 Legacy `api_cache.json` is migrated once when the database does not yet exist.
 
-All four language/mode shelf files are loaded before Flask begins serving.
-Network refresh is not part of startup: a stale requested shelf set schedules a
-single delayed background refresh guarded by `(language, mode)`.
+Usable language/mode shelf files are loaded before Flask begins serving; a
+structurally valid file with zero books is rejected. Network refresh is not part
+of startup: a stale requested shelf set schedules a single delayed background
+refresh guarded by `(language, mode)` and a retry cooldown. A refresh advances
+its query revision only when the three editorial rails and at least 75 percent
+of configured shelves contain useful batches. A true cold miss returns the
+stable shelf frames immediately and starts that build with no delay.
 
 Topic cache keys include normalized query, active language, all four bounded
 filters, expansion version, and ranker version. The cache stores the complete

@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-08-29 - Fiction discovery quality and browse polish
+
+- Added a 40-genre fiction browser with exact Open Library subject-key queries,
+  including Dark Fantasy, Romantasy, Cozy Mystery, Cyberpunk, Gothic, LGBTQ+
+  Fiction, and Romantic Comedy.
+- Changed Trending to use Open Library's current reader-interest signal and
+  renamed the misleading New This Week rail to New & Notable. Recent rails now
+  require a current or previous-year publication plus recorded reader activity.
+- Deferred derivative titles and repeated authors from the first visible row so
+  each shelf opens with more useful variety.
+- Narrowed noisy Mystery, Science Fiction, and Contemporary Fiction queries and
+  prefer a matching English edition title when the canonical work title has
+  strong foreign-language cues.
+- Added instant client-side genre filtering with no provider request.
+- Reduced category search payloads, added revision-aware background shelf
+  refresh, and replaced the detached loading spinner with in-grid cover
+  placeholders and an explicit retry state.
+- Guarded shelf refreshes against empty or partial provider responses, reused
+  healthy cached rows, and reduced routine refreshes to one provider page per
+  shelf with targeted second-page recovery only when the first row is short.
+- Made true cold starts non-blocking: the page shell paints immediately while
+  the first complete shelf cache builds in the background.
+
 ## 2026-08-21 - Cover-contained Quick Look
 
 - Replaced the cursor-following tooltip with a preview that occupies the exact
@@ -25,7 +48,7 @@
   keeps page geometry stable, supports keyboard navigation and recent terms,
   and returns bounded title/author/ISBN suggestions from the local catalog
   without waiting for an upstream provider.
-- Added non-personal `New This Week` and `Short Reads` shelves for fiction and
+- Added non-personal `New & Notable` and `Short Reads` shelves for fiction and
   non-fiction, plus Top 10 numerals on Trending. The new rails use the existing
   near-viewport hydration, infinite horizontal loading, and shelf-order dedupe.
 - Added browser-local Saved, Recent, and Kindle history tabs under `My Library`.

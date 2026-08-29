@@ -1,3 +1,5 @@
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -206,12 +208,179 @@ class QuickLookTests(unittest.TestCase):
 
 
 class EditorialShelfTests(unittest.TestCase):
+    @staticmethod
+    def shelf_fixture(mode="fiction", books_per_shelf=8, prefix="cached"):
+        return [
+            {
+                "name": name,
+                "topic": topic,
+                "books": [
+                    {
+                        "title": f"{prefix} {topic} {index}",
+                        "author": f"Author {topic} {index}",
+                        "ol_key": f"/works/OL{topic.replace('_', '')}{index}W",
+                    }
+                    for index in range(books_per_shelf)
+                ],
+            }
+            for name, topic in app.get_shelves_def(mode)
+        ]
+
+    def test_refresh_invalidates_only_derived_shelf_pages(self):
+        with patch.dict(app.CACHE, {}, clear=True):
+            app.cache_set("shelf_page:v4:en:fiction:fantasy:1", ["old"])
+            app.cache_set("category_page:v5:en:fiction:fantasy:1", ["old"])
+            app.cache_set("shelves_en_fiction", ["current"])
+
+            app.invalidate_editorial_page_cache("fiction", "en")
+
+            self.assertNotIn("shelf_page:v4:en:fiction:fantasy:1", app.CACHE)
+            self.assertNotIn("category_page:v5:en:fiction:fantasy:1", app.CACHE)
+            self.assertIn("shelves_en_fiction", app.CACHE)
+
+    def test_structurally_valid_empty_disk_cache_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base_path = Path(directory) / "shelf_cache.json"
+            empty_path = Path(str(base_path).replace(
+                ".json",
+                "_en_fiction.json",
+            ))
+            empty_path.write_text(json.dumps([{
+                "name": "Trending",
+                "topic": "trending_fiction",
+                "books": [],
+            }]))
+            with patch.object(app, "SHELF_DISK_CACHE", str(base_path)):
+                shelves = app.disk_load_shelves("fiction", "en")
+
+        self.assertIsNone(shelves)
+
+    def test_stale_revision_shelf_response_is_not_browser_cached(self):
+        with (
+            patch.object(app, "shelf_cache_is_fresh", return_value=False),
+            patch.object(
+                app,
+                "fetch_shelf_page_books",
+                return_value=([], 0, 1),
+            ),
+        ):
+            response = app.app.test_client().get(
+                "/api/shelf/trending_fiction?mode=fiction&book_lang=en"
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Cache-Control"], "no-store")
+
+    def test_partial_refresh_keeps_cached_shelves_and_stays_retryable(self):
+        previous = self.shelf_fixture(prefix="previous")
+        fresh = [
+            {
+                "name": "Trending",
+                "topic": "trending_fiction",
+                "books": [{
+                    "title": "Fresh current title",
+                    "author": "Current Author",
+                    "ol_key": "/works/OLFRESH1W",
+                }],
+            }
+        ]
+        with (
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_load_shelves", return_value=previous),
+            patch.object(app, "cache_set") as memory_save,
+            patch.object(app, "disk_save_shelves") as disk_save,
+            patch.object(app, "invalidate_editorial_page_cache"),
+            patch.object(app, "schedule_cover_warm"),
+        ):
+            publishable = app.apply_shelf_refresh(fresh, "fiction", "en")
+
+        self.assertFalse(publishable)
+        merged = memory_save.call_args.args[1]
+        by_topic = {shelf["topic"]: shelf["books"] for shelf in merged}
+        self.assertEqual(
+            by_topic["trending_fiction"][0]["title"],
+            "Fresh current title",
+        )
+        self.assertTrue(by_topic["new_this_week_fiction"])
+        self.assertFalse(disk_save.call_args.kwargs["mark_revision"])
+
+    def test_complete_refresh_advances_revision(self):
+        fresh = self.shelf_fixture(prefix="fresh")
+        with (
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_load_shelves", return_value=[]),
+            patch.object(app, "cache_set"),
+            patch.object(app, "disk_save_shelves") as disk_save,
+            patch.object(app, "invalidate_editorial_page_cache"),
+            patch.object(app, "schedule_cover_warm"),
+        ):
+            publishable = app.apply_shelf_refresh(fresh, "fiction", "en")
+
+        self.assertTrue(publishable)
+        self.assertTrue(disk_save.call_args.kwargs["mark_revision"])
+
+    def test_disk_shelves_render_without_blocking_refill(self):
+        previous = self.shelf_fixture(books_per_shelf=2)
+        with (
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_load_shelves", return_value=previous),
+            patch.object(app, "cache_set"),
+            patch.object(app, "schedule_shelf_refresh"),
+            patch.object(app, "prefetch_topic_pages") as prefetch,
+        ):
+            shelves = app.get_shelves("fiction", "en")
+
+        self.assertTrue(shelves[0]["books"])
+        prefetch.assert_not_called()
+
+    def test_cold_shelf_cache_returns_shell_and_builds_in_background(self):
+        with (
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_load_shelves", return_value=None),
+            patch.object(app, "cache_set") as memory_save,
+            patch.object(app, "schedule_shelf_refresh") as refresh,
+            patch.object(app, "fetch_shelves") as fetch,
+        ):
+            shelves = app.get_shelves("fiction", "en")
+
+        self.assertEqual(len(shelves), len(app.FICTION_SHELVES_DEF))
+        self.assertFalse(any(shelf["books"] for shelf in shelves))
+        memory_save.assert_called_once()
+        refresh.assert_called_once_with("fiction", "en", delay=0)
+        fetch.assert_not_called()
+
+    def test_shelf_refresh_uses_one_provider_page_when_first_row_is_full(self):
+        topics = [topic for _name, topic in app.FICTION_SHELVES_DEF]
+        pages = {
+            (topic, 1): ([
+                {
+                    "title": f"{topic} {index}",
+                    "author": f"Author {topic} {index}",
+                    "ol_key": f"/works/OL{topic.replace('_', '')}{index}W",
+                }
+                for index in range(app.SHELF_INITIAL_BATCH_SIZE)
+            ], 100, 1)
+            for topic in topics
+        }
+        with patch.object(
+            app,
+            "prefetch_topic_pages",
+            return_value=pages,
+        ) as prefetch:
+            shelves = app.fetch_shelves("fiction", "en")
+
+        self.assertTrue(all(
+            len(shelf["books"]) == app.SHELF_INITIAL_BATCH_SIZE
+            for shelf in shelves
+        ))
+        prefetch.assert_called_once_with(topics, "en", max_pages=1)
+
     def test_new_and_short_shelves_follow_trending_in_both_modes(self):
         self.assertEqual(
             app.SHELVES_DEF[:3],
             [
                 ("Trending", "trending"),
-                ("New This Week", "new_this_week"),
+                ("New & Notable", "new_this_week"),
                 ("Short Reads", "short_reads"),
             ],
         )
@@ -219,12 +388,12 @@ class EditorialShelfTests(unittest.TestCase):
             app.FICTION_SHELVES_DEF[:3],
             [
                 ("Trending", "trending_fiction"),
-                ("New This Week", "new_this_week_fiction"),
+                ("New & Notable", "new_this_week_fiction"),
                 ("Short Reads", "short_reads_fiction"),
             ],
         )
         homepage = (Path(app.APP_DIR) / "templates" / "index.html").read_text()
-        self.assertIn("const SHELF_API_VERSION = 3", homepage)
+        self.assertIn("const SHELF_API_VERSION = 6", homepage)
         self.assertIn("'&v=' + SHELF_API_VERSION", homepage)
 
     def test_editorial_shelf_queries_are_language_scoped_and_bounded(self):
@@ -237,8 +406,10 @@ class EditorialShelfTests(unittest.TestCase):
             new_query,
         )
         self.assertIn("cover_i:*", new_query)
+        self.assertIn("subject_key:nonfiction", new_query)
+        self.assertIn("readinglog_count:[1 TO *]", new_query)
         self.assertIn("language:eng", new_query)
-        self.assertEqual(new_sort, "new")
+        self.assertEqual(new_sort, "rating")
         self.assertIn("number_of_pages_median:[1 TO 220]", short_query)
         self.assertIn("language:eng", short_query)
         self.assertEqual(short_sort, "rating")
@@ -252,7 +423,7 @@ class EditorialShelfTests(unittest.TestCase):
             {"title": f"Fresh {index}", "author": "Author", "ol_key": f"/works/F{index}W"}
             for index in range(app.SHELF_INITIAL_BATCH_SIZE)
         ]
-        shelves = [{"name": "New This Week", "topic": "new_this_week", "books": cached}]
+        shelves = [{"name": "New & Notable", "topic": "new_this_week", "books": cached}]
         with (
             patch.object(app, "cache_get", return_value=None),
             patch.object(app, "cache_set"),

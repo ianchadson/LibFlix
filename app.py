@@ -136,6 +136,8 @@ KINDLE_RELAY_MAX_ATTACHMENT_BYTES = max(
     int(os.environ.get("KINDLE_RELAY_MAX_ATTACHMENT_MB", "28")) * 1024 * 1024,
 )
 SHELF_REFRESH_TTL = 21600
+SHELF_REFRESH_RETRY_TTL = 60
+SHELF_QUERY_REVISION = 3
 OL_LIST_FIELDS = (
     "key,title,author_name,cover_i,cover_id,language,ia,"
     "first_publish_year,number_of_pages_median,ratings_count,"
@@ -151,9 +153,11 @@ OL_COVER_IDENTIFIER_FIELDS = f"{OL_COVER_FIELDS},isbn"
 OL_SIMILAR_FIELDS = f"{OL_LIST_FIELDS},subject"
 SHELF_BOOK_TARGET = 40
 SHELF_INITIAL_BATCH_SIZE = 12
+CATEGORY_PAGE_SIZE = 12
+CATEGORY_SEARCH_LIMIT = 48
 SHELF_SEARCH_LIMIT = 100
 SHELF_MAX_OPEN_LIBRARY_PAGES = 25
-SHELF_REFILL_OPEN_LIBRARY_PAGES = 4
+SHELF_REFILL_OPEN_LIBRARY_PAGES = 2
 DISCOVERY_PAGE_SIZE = 30
 DISCOVERY_SEARCH_LIMIT = DISCOVERY_PAGE_SIZE
 DISCOVERY_RAW_PREFIX_LIMIT = 5
@@ -340,6 +344,9 @@ def clean_category_url(topic, mode=None, lang=None):
 def clean_topics_url(mode=None, lang=None):
     return f"{clean_prefix('nonfiction', lang)}/topics"
 
+def clean_fiction_genres_url(lang=None):
+    return f"{clean_prefix('fiction', lang)}/genres"
+
 def clean_discover_url(mode=None, lang=None):
     return f"{clean_prefix(mode, lang)}/discover"
 
@@ -393,6 +400,8 @@ def lang_url(lang):
         return clean_category_url(topic, mode, lang)
     if endpoint == "topics_page":
         return clean_topics_url(mode, lang)
+    if endpoint == "fiction_genres_page":
+        return clean_fiction_genres_url(lang)
     if endpoint == "discover":
         path = clean_discover_url(mode, lang)
         args = request.args.to_dict(flat=True)
@@ -415,6 +424,7 @@ DISK_CACHE_LOCK = threading.Lock()
 CHINESE_TITLE_LOOKUP_SEMAPHORE = threading.BoundedSemaphore(4)
 SHELF_REFRESH_LOCK = threading.Lock()
 SHELF_REFRESHING = set()
+SHELF_REFRESH_LAST_ATTEMPT = {}
 SQLITE_CACHE_READY = False
 BOOK_HINTS = {}
 BOOK_HINTS_LOCK = threading.Lock()
@@ -1262,7 +1272,7 @@ def nyt_status():
 
 SHELVES_DEF = [
     ("Trending", "trending"),
-    ("New This Week", "new_this_week"),
+    ("New & Notable", "new_this_week"),
     ("Short Reads", "short_reads"),
     ("Personal Development", "self_help"),
     ("Business & Finance", "business"),
@@ -1279,13 +1289,16 @@ SHELVES_DEF = [
 
 FICTION_SHELVES_DEF = [
     ("Trending", "trending_fiction"),
-    ("New This Week", "new_this_week_fiction"),
+    ("New & Notable", "new_this_week_fiction"),
     ("Short Reads", "short_reads_fiction"),
+    ("Dark Fantasy", "dark_fantasy"),
+    ("Fiction Classics", "fiction_classics"),
     ("Science Fiction", "science_fiction"),
     ("Fantasy", "fantasy"),
     ("Mystery & Thriller", "mystery"),
     ("Romance", "romance"),
     ("Horror", "horror"),
+    ("Dystopian", "dystopian"),
     ("Historical Fiction", "historical_fiction"),
     ("Adventure", "adventure"),
     ("Young Adult", "young_adult"),
@@ -1293,6 +1306,105 @@ FICTION_SHELVES_DEF = [
     ("Literary Fiction", "literary_fiction"),
     ("Contemporary Fiction", "contemporary_fiction"),
 ]
+
+FICTION_GENRE_GROUPS = (
+    {
+        "name": "Fantasy & Magic",
+        "genres": (
+            {"name": "Fantasy", "topic": "fantasy", "query": "subject_key:fantasy", "source": "fantasy"},
+            {"name": "Dark Fantasy", "topic": "dark_fantasy", "query": "subject_key:dark_fantasy", "source": "dark_fantasy"},
+            {"name": "Epic Fantasy", "topic": "epic_fantasy", "query": "subject_key:epic_fantasy", "source": "fantasy"},
+            {"name": "Urban Fantasy", "topic": "urban_fantasy", "query": "subject_key:urban_fantasy", "source": "fantasy"},
+            {"name": "Romantasy", "topic": "romantasy", "query": "subject_key:romantasy", "source": "romance"},
+            {"name": "Magical Realism", "topic": "magical_realism", "query": "(subject_key:magical_realism OR subject_key:magic_realism)", "source": "literary_fiction"},
+        ),
+    },
+    {
+        "name": "Science Fiction",
+        "genres": (
+            {"name": "Science Fiction", "topic": "science_fiction", "query": "subject_key:science_fiction -subject_key:fantasy", "source": "science_fiction"},
+            {"name": "Dystopian", "topic": "dystopian", "query": "subject_key:dystopian", "source": "dystopian"},
+            {"name": "Space Opera", "topic": "space_opera", "query": "subject_key:space_opera", "source": "science_fiction"},
+            {"name": "Cyberpunk", "topic": "cyberpunk", "query": "(subject_key:cyberpunk OR subject_key:cyberpunk_fiction)", "source": "science_fiction"},
+            {"name": "Time Travel", "topic": "time_travel", "query": "subject_key:time_travel", "source": "science_fiction"},
+            {"name": "Alternate History", "topic": "alternate_history", "query": "(subject_key:alternative_histories OR subject_key:alternate_history)", "source": "historical_fiction"},
+        ),
+    },
+    {
+        "name": "Mystery & Suspense",
+        "genres": (
+            {"name": "Mystery", "topic": "mystery", "query": "subject_key:mystery_fiction", "source": "mystery"},
+            {"name": "Thriller", "topic": "thriller", "query": "subject_key:thriller", "source": "mystery"},
+            {"name": "Crime", "topic": "crime", "query": "subject_key:crime_fiction", "source": "mystery"},
+            {"name": "Detective", "topic": "detective", "query": "subject_key:detective_and_mystery_stories", "source": "mystery"},
+            {"name": "Cozy Mystery", "topic": "cozy_mystery", "query": "subject_key:cozy_mystery", "source": "mystery"},
+            {"name": "Spy Fiction", "topic": "spy_fiction", "query": "subject_key:spy_stories", "source": "mystery"},
+        ),
+    },
+    {
+        "name": "Romance & Drama",
+        "genres": (
+            {"name": "Romance", "topic": "romance", "query": "subject_key:love_stories", "source": "romance"},
+            {"name": "Romantic Comedy", "topic": "romantic_comedy", "query": "subject_key:romantic_comedy", "source": "romance"},
+            {"name": "Historical Romance", "topic": "historical_romance", "query": "subject_key:historical_romance", "source": "romance"},
+            {"name": "Paranormal Romance", "topic": "paranormal_romance", "query": "subject_key:paranormal_romance_stories", "source": "romance"},
+            {"name": "LGBTQ+ Fiction", "topic": "lgbtq_fiction", "query": "subject_key:lgbtq", "source": "contemporary_fiction"},
+            {"name": "Family Sagas", "topic": "family_sagas", "query": "subject_key:domestic_fiction", "source": "contemporary_fiction"},
+        ),
+    },
+    {
+        "name": "Horror & Supernatural",
+        "genres": (
+            {"name": "Horror", "topic": "horror", "query": "subject_key:horror_tales", "source": "horror"},
+            {"name": "Gothic", "topic": "gothic", "query": "subject_key:gothic_fiction", "source": "horror"},
+            {"name": "Supernatural", "topic": "supernatural", "query": "subject_key:supernatural_fiction", "source": "horror"},
+            {"name": "Ghost Stories", "topic": "ghost_stories", "query": "subject_key:ghost_stories", "source": "horror"},
+            {"name": "Psychological Horror", "topic": "psychological_horror", "query": "(subject_key:psychological_horror OR (subject_key:horror AND subject_key:psychology))", "source": "horror"},
+            {"name": "Myth & Folklore", "topic": "myth_folklore", "query": "subject_key:folklore", "source": "fantasy"},
+        ),
+    },
+    {
+        "name": "More Fiction",
+        "genres": (
+            {"name": "Classics", "topic": "fiction_classics", "query": "subject_key:classic_fiction", "source": "fiction_classics"},
+            {"name": "Literary Fiction", "topic": "literary_fiction", "query": "subject_key:literary_fiction", "source": "literary_fiction"},
+            {"name": "Contemporary Fiction", "topic": "contemporary_fiction", "query": "(subject_key:contemporary_fiction OR subject_key:domestic_fiction) first_publish_year:[1980 TO *]", "source": "contemporary_fiction"},
+            {"name": "Historical Fiction", "topic": "historical_fiction", "query": "subject_key:historical_fiction", "source": "historical_fiction"},
+            {"name": "Adventure", "topic": "adventure", "query": "subject_key:adventure_stories", "source": "adventure"},
+            {"name": "Young Adult", "topic": "young_adult", "query": "subject_key:young_adult_fiction", "source": "young_adult"},
+            {"name": "Children's", "topic": "childrens_fiction", "query": 'subject_key:"children\'s_fiction"', "source": "young_adult"},
+            {"name": "Graphic Novels", "topic": "graphic_novels", "query": "subject_key:graphic_novels", "source": "graphic_novels"},
+            {"name": "Short Stories", "topic": "short_stories", "query": "subject_key:short_stories", "source": "literary_fiction"},
+            {"name": "Humour & Satire", "topic": "humour_satire", "query": "subject_key:satire", "source": "contemporary_fiction"},
+        ),
+    },
+)
+
+FICTION_GENRE_INDEX = {
+    genre["topic"]: genre
+    for group in FICTION_GENRE_GROUPS
+    for genre in group["genres"]
+}
+FICTION_CATEGORY_DEF = tuple(
+    {
+        topic: (name, topic)
+        for name, topic in (
+            tuple((genre["name"], genre["topic"]) for genre in FICTION_GENRE_INDEX.values())
+            + tuple(FICTION_SHELVES_DEF)
+        )
+    }.values()
+)
+FICTION_QUERY_BY_TOPIC = {
+    topic: genre["query"] for topic, genre in FICTION_GENRE_INDEX.items()
+}
+FICTION_FEATURED_TOPICS = (
+    "dark_fantasy",
+    "fiction_classics",
+    "science_fiction",
+    "romantasy",
+    "cozy_mystery",
+    "dystopian",
+)
 
 TOPIC_BROWSE_INDEX = {
     topic["query"]: topic
@@ -1379,10 +1491,81 @@ def featured_topics_with_artwork(topic_groups):
         )
     return tuple(featured)
 
+
+def fiction_genre_groups_with_artwork(shelves):
+    shelves_by_topic = {
+        shelf.get("topic"): shelf.get("books", [])
+        for shelf in shelves or []
+    }
+    all_covers = []
+    for shelf in shelves or []:
+        for book in shelf.get("books", []):
+            cover_url = book.get("cover_url") or book.get("cover")
+            if cover_url and cover_url not in all_covers:
+                all_covers.append(cover_url)
+
+    decorated = []
+    claimed = set()
+    source_offsets = {}
+    for group in FICTION_GENRE_GROUPS:
+        genres = []
+        for genre in group["genres"]:
+            source = genre["source"]
+            source_covers = [
+                book.get("cover_url") or book.get("cover")
+                for book in shelves_by_topic.get(source, [])
+                if book.get("cover_url") or book.get("cover")
+            ]
+            pool = list(dict.fromkeys(source_covers + all_covers))
+            offset = source_offsets.get(source, 0)
+            ordered = pool[offset:] + pool[:offset]
+            artwork = [cover for cover in ordered if cover not in claimed][:2]
+            if len(artwork) < 2:
+                artwork.extend(
+                    cover for cover in ordered
+                    if cover not in artwork
+                )
+            artwork = artwork[:2]
+            claimed.update(artwork)
+            source_offsets[source] = offset + 2
+            genres.append(dict(genre, artwork=tuple(artwork)))
+        decorated.append({"name": group["name"], "genres": tuple(genres)})
+    return tuple(decorated)
+
+
+def featured_fiction_genres_with_artwork(genre_groups):
+    genres_by_topic = {
+        genre["topic"]: genre
+        for group in genre_groups
+        for genre in group["genres"]
+    }
+    return tuple(
+        genres_by_topic[topic]
+        for topic in FICTION_FEATURED_TOPICS
+        if topic in genres_by_topic
+    )
+
 def get_shelves_def(mode="nonfiction"):
     return FICTION_SHELVES_DEF if mode == "fiction" else SHELVES_DEF
 
-FICTION_TOPICS = {topic for _, topic in FICTION_SHELVES_DEF}
+def get_category_def(mode="nonfiction"):
+    return FICTION_CATEGORY_DEF if mode == "fiction" else SHELVES_DEF
+
+FICTION_TOPICS = set(FICTION_QUERY_BY_TOPIC)
+
+EDITORIAL_DERIVATIVE_MARKERS = (
+    "adaptation",
+    "adapted",
+    "analysis",
+    "book review",
+    "companion",
+    "key takeaways",
+    "study guide",
+    "summary",
+    "summaries",
+    "unofficial",
+    "workbook",
+)
 
 def shelf_query(topic, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
@@ -1390,16 +1573,32 @@ def shelf_query(topic, lang=None):
     current_year = time.localtime().tm_year
     recent_years = f"[{current_year - 1} TO {current_year}]"
     if topic == "trending":
-        return f"subject:Nonfiction -subject:Fiction{lang_filter}", "rating"
+        return (
+            "subject_key:nonfiction -subject_key:fiction "
+            "trending_score_hourly_sum:[1 TO *] "
+            f"readinglog_count:[4 TO *] ratings_count:[1 TO *]{lang_filter}",
+            "trending",
+        )
     if topic == "trending_fiction":
-        return f"subject:Fiction{lang_filter}", "rating"
+        return (
+            "subject_key:fiction trending_score_hourly_sum:[1 TO *] "
+            f"readinglog_count:[4 TO *] ratings_count:[1 TO *]{lang_filter}",
+            "trending",
+        )
     if topic == "new_this_week":
         return (
-            f"subject:Nonfiction -subject:Fiction first_publish_year:{recent_years} cover_i:*{lang_filter}",
-            "new",
+            "subject_key:nonfiction -subject_key:fiction "
+            f"first_publish_year:{recent_years} cover_i:* "
+            f"readinglog_count:[1 TO *]{lang_filter}",
+            "rating",
         )
     if topic == "new_this_week_fiction":
-        return f"subject:Fiction first_publish_year:{recent_years} cover_i:*{lang_filter}", "new"
+        return (
+            "subject_key:fiction "
+            f"first_publish_year:{recent_years} cover_i:* "
+            f"readinglog_count:[1 TO *]{lang_filter}",
+            "rating",
+        )
     if topic == "short_reads":
         return (
             f"subject:Nonfiction -subject:Fiction number_of_pages_median:[1 TO 220]{lang_filter}",
@@ -1407,11 +1606,11 @@ def shelf_query(topic, lang=None):
         )
     if topic == "short_reads_fiction":
         return (
-            f"subject:Fiction number_of_pages_median:[1 TO 220]{lang_filter}",
+            f"subject_key:fiction number_of_pages_median:[1 TO 220]{lang_filter}",
             "rating",
         )
     if topic in FICTION_TOPICS:
-        return f"subject:{topic.replace('_', ' ')} subject:Fiction{lang_filter}", "rating"
+        return f"{FICTION_QUERY_BY_TOPIC[topic]} subject_key:fiction{lang_filter}", "rating"
     return f"subject:{topic.replace('_', ' ')} -subject:Fiction{lang_filter}", "rating"
 
 def is_english_title(title):
@@ -1425,6 +1624,25 @@ def title_matches_lang(title, lang=None):
     if lang == "cn":
         return is_chinese_title(title)
     return is_english_title(title)
+
+_FOREIGN_TITLE_LEAD_WORDS = frozenset({
+    "das", "der", "die", "el", "gli", "het", "il", "la", "las", "le",
+    "les", "lo", "los", "sulla", "sulle", "un", "una", "une",
+})
+_FOREIGN_TITLE_MARKERS = frozenset({
+    "amour", "amor", "casa", "della", "delle", "diner", "negra", "nero",
+    "noir", "parfum", "sombra", "tracce", "torre", "viento",
+})
+
+def likely_foreign_ascii_title(title):
+    """Identify only strong foreign-title cues before using an English edition."""
+    words = re.findall(r"[a-z]+", str(title or "").casefold())
+    if not words:
+        return False
+    return (
+        words[0] in _FOREIGN_TITLE_LEAD_WORDS
+        or len(set(words) & _FOREIGN_TITLE_MARKERS) >= 2
+    )
 
 _ENGLISH_WORDS = frozenset(
     "the is a an of to in and that this with for on as by from or but not was has "
@@ -1987,7 +2205,19 @@ def resolve_english_title(ol_key):
 def extract_book(w, lang=None, allow_missing_cover=False):
     lang = lang or DEFAULT_BOOK_LANG
     edition = first_matching_edition(w, lang)
-    title = (edition or {}).get("title") or w.get("title", "")
+    work_title = str(w.get("title") or "").strip()
+    edition_title = str((edition or {}).get("title") or "").strip()
+    if lang == "cn":
+        title = edition_title or work_title
+    else:
+        title = work_title if title_matches_lang(work_title, lang) else edition_title
+        if (
+            edition_title
+            and likely_foreign_ascii_title(work_title)
+            and normalize_title(edition_title) != normalize_title(work_title)
+        ):
+            title = edition_title
+        title = title or work_title
     if not title:
         return None
     if lang == "en" and not title_matches_lang(title, lang):
@@ -2127,6 +2357,64 @@ def select_unique_books(books, seen_keys=None, target=SHELF_BOOK_TARGET):
             break
     return selected
 
+def rank_shelf_records(topic, records):
+    """Keep provider relevance while removing obvious filler and repetition."""
+    records = list(records or [])
+    clean = []
+    derivatives = []
+    for index, record in enumerate(records):
+        title = normalize_match_text(record.get("title", ""))
+        target = derivatives if any(
+            marker in title for marker in EDITORIAL_DERIVATIVE_MARKERS
+        ) else clean
+        target.append((index, record))
+    if topic in {
+        "trending", "trending_fiction", "new_this_week",
+        "new_this_week_fiction",
+    }:
+        def engagement_order(items):
+            engaged = []
+            quiet = []
+            for item in items:
+                record = item[1]
+                has_engagement = any(
+                    float(record.get(field) or 0) > 0
+                    for field in ("readinglog_count", "ratings_count")
+                )
+                (engaged if has_engagement else quiet).append(item)
+            return engaged + quiet
+
+        clean = engagement_order(clean)
+        derivatives = engagement_order(derivatives)
+    ranked = clean + derivatives
+
+    def diversify_authors(items):
+        ordered = []
+        pending = list(items)
+        while pending:
+            seen_authors = set()
+            deferred = []
+            for item in pending:
+                record = item[1]
+                author_names = record.get("author_name") or []
+                author_name = (
+                    author_names[0]
+                    if isinstance(author_names, (list, tuple)) and author_names
+                    else author_names
+                )
+                author = normalize_author(str(author_name or ""))
+                if author and author in seen_authors:
+                    deferred.append(item)
+                    continue
+                ordered.append(item)
+                if author:
+                    seen_authors.add(author)
+            pending = deferred
+        return ordered
+
+    ranked = diversify_authors(clean) + diversify_authors(derivatives)
+    return [record for _index, record in ranked]
+
 def fetch_topic_page_books(topic, page=1, lang=None, limit=SHELF_SEARCH_LIMIT):
     lang = lang or DEFAULT_BOOK_LANG
     q, sort = shelf_query(topic, lang)
@@ -2134,20 +2422,30 @@ def fetch_topic_page_books(topic, page=1, lang=None, limit=SHELF_SEARCH_LIMIT):
     data = ol_get("/search.json", params)
     total = data.get("numFound", 0) if data else 0
     books = []
-    for w in (data or {}).get("docs", [])[:limit]:
+    records = rank_shelf_records(topic, (data or {}).get("docs", [])[:limit])
+    for w in records:
         b = extract_book(w, lang)
         if b:
             books.append(b)
     total_pages = min(SHELF_MAX_OPEN_LIBRARY_PAGES, max(1, (total + limit - 1) // limit))
     return books, total, total_pages
 
-def collect_unique_topic_books(topic, lang=None, seen_keys=None, target=SHELF_BOOK_TARGET, max_pages=SHELF_REFILL_OPEN_LIBRARY_PAGES):
+def collect_unique_topic_books(
+    topic,
+    lang=None,
+    seen_keys=None,
+    target=SHELF_BOOK_TARGET,
+    max_pages=SHELF_REFILL_OPEN_LIBRARY_PAGES,
+    search_limit=SHELF_SEARCH_LIMIT,
+):
     seen_keys = seen_keys if seen_keys is not None else set()
     selected = []
     total = 0
     total_pages = 1
     for page in range(1, max_pages + 1):
-        page_books, total, total_pages = fetch_topic_page_books(topic, page, lang)
+        page_books, total, total_pages = fetch_topic_page_books(
+            topic, page, lang, search_limit
+        )
         for book in page_books:
             if book_seen(book, seen_keys):
                 continue
@@ -2159,10 +2457,19 @@ def collect_unique_topic_books(topic, lang=None, seen_keys=None, target=SHELF_BO
             break
     return selected, total, total_pages
 
-def prefetch_topic_pages(topics, lang=None, max_pages=SHELF_REFILL_OPEN_LIBRARY_PAGES):
+def prefetch_topic_pages(
+    topics,
+    lang=None,
+    max_pages=SHELF_REFILL_OPEN_LIBRARY_PAGES,
+    start_page=1,
+):
     lang = lang or DEFAULT_BOOK_LANG
     candidate_pages = {}
-    jobs = [(topic, page) for topic in topics for page in range(1, max_pages + 1)]
+    jobs = [
+        (topic, page)
+        for topic in topics
+        for page in range(start_page, max_pages + 1)
+    ]
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = {pool.submit(fetch_topic_page_books, topic, page, lang): (topic, page) for topic, page in jobs}
         for future in as_completed(futures):
@@ -2197,25 +2504,41 @@ def fetch_one_shelf(name, topic, lang=None, mode="nonfiction"):
 def fetch_category_page_books(topic, page=1, mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     page = max(1, page)
-    ckey = f"category_page:v3:{lang}:{mode}:{topic}:{page}"
+    ckey = f"category_page:v5:{lang}:{mode}:{topic}:{page}"
     cached = cache_get(ckey, 900)
     if cached and (cached[0] or page > 1):
         return cached
-    if page == 1:
+    shelf_topics = {shelf_topic for _, shelf_topic in get_shelves_def(mode)}
+    if page == 1 and topic in shelf_topics:
         shelf = next(
             (item for item in get_shelves(mode, lang) if item.get("topic") == topic),
             None,
         )
         if shelf and shelf.get("books"):
-            result = (shelf["books"][:SHELF_BOOK_TARGET], len(shelf["books"]), SHELF_MAX_OPEN_LIBRARY_PAGES)
+            result = (
+                shelf["books"][:CATEGORY_PAGE_SIZE],
+                len(shelf["books"]),
+                SHELF_MAX_OPEN_LIBRARY_PAGES,
+            )
             cache_set(ckey, result)
             return result
-    target = SHELF_BOOK_TARGET * page
+    target = CATEGORY_PAGE_SIZE * page
     seen_keys = seen_keys_before_shelf(topic, mode, lang)
     max_pages = min(SHELF_MAX_OPEN_LIBRARY_PAGES, max(SHELF_REFILL_OPEN_LIBRARY_PAGES, page + 2))
-    books, total, total_pages = collect_unique_topic_books(topic, lang, seen_keys, target, max_pages)
-    start = SHELF_BOOK_TARGET * (page - 1)
-    result = (books[start:target], total, total_pages)
+    books, total, total_pages = collect_unique_topic_books(
+        topic,
+        lang,
+        seen_keys,
+        target,
+        max_pages,
+        search_limit=CATEGORY_SEARCH_LIMIT,
+    )
+    start = CATEGORY_PAGE_SIZE * (page - 1)
+    category_pages = min(
+        SHELF_MAX_OPEN_LIBRARY_PAGES,
+        max(1, (total + CATEGORY_PAGE_SIZE - 1) // CATEGORY_PAGE_SIZE),
+    )
+    result = (books[start:target], total, category_pages)
     if result[0]:
         cache_set(ckey, result)
     elif page == 1:
@@ -2224,7 +2547,7 @@ def fetch_category_page_books(topic, page=1, mode="nonfiction", lang=None):
             None,
         )
         if shelf and shelf.get("books"):
-            result = (shelf["books"][:SHELF_BOOK_TARGET], len(shelf["books"]), 1)
+            result = (shelf["books"][:CATEGORY_PAGE_SIZE], len(shelf["books"]), 1)
     return result
 
 def fetch_category_books(topic, page=1, lang=None, mode="nonfiction"):
@@ -2233,7 +2556,7 @@ def fetch_category_books(topic, page=1, lang=None, mode="nonfiction"):
 def fetch_shelf_page_books(topic, page=1, mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     page = max(1, page)
-    ckey = f"shelf_page:v3:{lang}:{mode}:{topic}:{page}"
+    ckey = f"shelf_page:v4:{lang}:{mode}:{topic}:{page}"
     cached = cache_get(ckey, 900)
     if cached:
         return cached
@@ -2262,19 +2585,7 @@ DISCOVERY_STOP_WORDS = frozenset({
     "a", "about", "an", "and", "at", "book", "books", "by", "for", "from",
     "in", "of", "on", "or", "the", "to", "with",
 })
-DISCOVERY_DERIVATIVE_MARKERS = (
-    "adaptation",
-    "adapted",
-    "analysis",
-    "book review",
-    "companion",
-    "key takeaways",
-    "study guide",
-    "summary",
-    "summaries",
-    "unofficial",
-    "workbook",
-)
+DISCOVERY_DERIVATIVE_MARKERS = EDITORIAL_DERIVATIVE_MARKERS
 
 def normalize_relevance_text(value):
     value = normalize_match_text(value)
@@ -3786,12 +4097,47 @@ def fetch_discovery_books(q, page=1, lang=None):
 def fetch_shelves(mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     sd = get_shelves_def(mode)
-    candidate_pages = prefetch_topic_pages([topic for _, topic in sd], lang)
+    candidate_pages = prefetch_topic_pages(
+        [topic for _, topic in sd],
+        lang,
+        max_pages=1,
+    )
     shelves = []
     seen_keys = set()
     for name, topic in sd:
-        books = select_unique_from_prefetched(topic, candidate_pages, seen_keys, SHELF_BOOK_TARGET)
+        books = select_unique_from_prefetched(
+            topic,
+            candidate_pages,
+            seen_keys,
+            SHELF_BOOK_TARGET,
+            max_pages=1,
+        )
         shelves.append({"name": name, "topic": topic, "books": books})
+
+    # One 100-result page normally fills a shelf. Fetch page two only for a
+    # shelf that could not supply the first visible row after global dedupe.
+    underfilled = [
+        shelf["topic"]
+        for shelf in shelves
+        if len(shelf["books"]) < SHELF_INITIAL_BATCH_SIZE
+    ]
+    if underfilled and SHELF_REFILL_OPEN_LIBRARY_PAGES > 1:
+        refill_pages = prefetch_topic_pages(
+            underfilled,
+            lang,
+            max_pages=2,
+            start_page=2,
+        )
+        for shelf in shelves:
+            if shelf["topic"] not in underfilled:
+                continue
+            shelf["books"].extend(select_unique_from_prefetched(
+                shelf["topic"],
+                refill_pages,
+                seen_keys,
+                SHELF_INITIAL_BATCH_SIZE - len(shelf["books"]),
+                max_pages=2,
+            ))
     return shelves
 
 # ---------------------------------------------------------------------------
@@ -5045,6 +5391,7 @@ def inject_book_context():
         "home_url": clean_home_url,
         "category_url": clean_category_url,
         "topics_url": clean_topics_url,
+        "genres_url": clean_fiction_genres_url,
         "topic_url": topic_discover_url,
         "discover_url": clean_discover_url,
         "book_url": book_url,
@@ -5096,52 +5443,173 @@ def shelf_cache_path(mode="nonfiction", lang=None):
     lang = lang or DEFAULT_BOOK_LANG
     return SHELF_DISK_CACHE.replace(".json", f"_{lang}_{mode}.json")
 
+def shelf_cache_revision_path(mode="nonfiction", lang=None):
+    return f"{shelf_cache_path(mode, lang)}.revision"
+
 def disk_load_shelves(mode="nonfiction", lang=None):
     path = shelf_cache_path(mode, lang)
     try:
         with open(path, "r") as f:
             data = json.load(f)
-        if data and isinstance(data, list) and len(data) > 0:
+        if (
+            data
+            and isinstance(data, list)
+            and any(shelf.get("books") for shelf in data if isinstance(shelf, dict))
+        ):
             return data
     except:
         pass
     return None
 
-def disk_save_shelves(shelves, mode="nonfiction", lang=None):
+def shelf_book_count(shelves):
+    return sum(len(shelf.get("books") or []) for shelf in shelves or [])
+
+def shelf_refresh_publishable(shelves, mode="nonfiction"):
+    """Return whether a refresh is complete enough to become the fresh cache."""
+    expected = get_shelves_def(mode)
+    by_topic = {
+        shelf.get("topic"): shelf.get("books") or []
+        for shelf in shelves or []
+    }
+    minimum_covered = max(1, (len(expected) * 3 + 3) // 4)
+    covered = sum(
+        len(by_topic.get(topic, [])) >= 4
+        for _name, topic in expected
+    )
+    critical = [topic for _name, topic in expected[:3]]
+    return (
+        covered >= minimum_covered
+        and all(
+            len(by_topic.get(topic, [])) >= 6
+            for topic in critical
+        )
+    )
+
+def merge_refreshed_shelves(fresh, previous, mode="nonfiction"):
+    """Prefer refreshed books while retaining healthy cached shelf fallbacks."""
+    fresh_by_topic = {
+        shelf.get("topic"): shelf for shelf in fresh or []
+    }
+    previous_by_topic = {
+        shelf.get("topic"): shelf for shelf in previous or []
+    }
+    seen_keys = set()
+    merged = []
+    for name, topic in get_shelves_def(mode):
+        fresh_books = fresh_by_topic.get(topic, {}).get("books") or []
+        previous_books = previous_by_topic.get(topic, {}).get("books") or []
+        books = select_unique_books(fresh_books, seen_keys, SHELF_BOOK_TARGET)
+        remaining = SHELF_BOOK_TARGET - len(books)
+        if remaining > 0:
+            books.extend(select_unique_books(
+                previous_books,
+                seen_keys,
+                remaining,
+            ))
+        merged.append({"name": name, "topic": topic, "books": books})
+    return merged
+
+def disk_save_shelves(
+    shelves,
+    mode="nonfiction",
+    lang=None,
+    mark_revision=True,
+):
     path = shelf_cache_path(mode, lang)
     try:
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(shelves, f)
         os.replace(tmp, path)
+        revision_path = shelf_cache_revision_path(mode, lang)
+        if not mark_revision:
+            try:
+                os.unlink(revision_path)
+            except OSError:
+                pass
+            return
+        revision_tmp = revision_path + ".tmp"
+        with open(revision_tmp, "w") as f:
+            f.write(str(SHELF_QUERY_REVISION))
+        os.replace(revision_tmp, revision_path)
     except:
         pass
 
 def shelf_cache_is_fresh(mode="nonfiction", lang=None):
     try:
-        return time.time() - os.path.getmtime(shelf_cache_path(mode, lang)) < SHELF_REFRESH_TTL
+        with open(shelf_cache_revision_path(mode, lang), "r") as f:
+            revision = int(f.read().strip())
+        return (
+            revision == SHELF_QUERY_REVISION
+            and time.time() - os.path.getmtime(shelf_cache_path(mode, lang))
+            < SHELF_REFRESH_TTL
+            and shelf_refresh_publishable(
+                disk_load_shelves(mode, lang),
+                mode,
+            )
+        )
     except OSError:
         return False
+    except (TypeError, ValueError):
+        return False
+
+def invalidate_editorial_page_cache(mode="nonfiction", lang=None):
+    lang = lang or DEFAULT_BOOK_LANG
+    prefixes = (
+        f"shelf_page:v4:{lang}:{mode}:",
+        f"category_page:v5:{lang}:{mode}:",
+    )
+    for key in list(CACHE):
+        if key.startswith(prefixes):
+            CACHE.pop(key, None)
+
+def apply_shelf_refresh(shelves, mode="nonfiction", lang=None):
+    """Atomically apply a usable refresh without discarding stale coverage."""
+    lang = lang or DEFAULT_BOOK_LANG
+    fresh = normalize_shelf_labels(shelves, mode)
+    if not shelf_book_count(fresh):
+        return False
+    ckey = f"shelves_{lang}_{mode}"
+    candidates = [
+        normalize_shelf_labels(cache_get(ckey, CACHE_TTL_OL) or [], mode),
+        normalize_shelf_labels(disk_load_shelves(mode, lang) or [], mode),
+    ]
+    previous = max(candidates, key=shelf_book_count)
+    merged = merge_refreshed_shelves(fresh, previous, mode)
+    publishable = shelf_refresh_publishable(fresh, mode)
+    cache_set(ckey, merged)
+    disk_save_shelves(
+        merged,
+        mode,
+        lang,
+        mark_revision=publishable,
+    )
+    invalidate_editorial_page_cache(mode, lang)
+    schedule_cover_warm(cover_warm_jobs_for_shelves(merged), force=True)
+    return publishable
 
 def schedule_shelf_refresh(mode="nonfiction", lang=None, delay=3):
     lang = lang or DEFAULT_BOOK_LANG
     refresh_key = (lang, mode)
     if shelf_cache_is_fresh(mode, lang):
         return
+    now = time.monotonic()
     with SHELF_REFRESH_LOCK:
-        if refresh_key in SHELF_REFRESHING:
+        last_attempt = SHELF_REFRESH_LAST_ATTEMPT.get(refresh_key, 0)
+        if (
+            refresh_key in SHELF_REFRESHING
+            or now - last_attempt < SHELF_REFRESH_RETRY_TTL
+        ):
             return
         SHELF_REFRESHING.add(refresh_key)
+        SHELF_REFRESH_LAST_ATTEMPT[refresh_key] = now
 
     def refresh():
         try:
             if delay:
                 time.sleep(delay)
             shelves = normalize_shelf_labels(fetch_shelves(mode, lang), mode)
-            if shelves:
-                cache_set(f"shelves_{lang}_{mode}", shelves)
-                disk_save_shelves(shelves, mode, lang)
-                schedule_cover_warm(cover_warm_jobs_for_shelves(shelves), force=True)
+            apply_shelf_refresh(shelves, mode, lang)
         finally:
             with SHELF_REFRESH_LOCK:
                 SHELF_REFRESHING.discard(refresh_key)
@@ -5183,19 +5651,26 @@ def get_shelves(mode="nonfiction", lang=None):
     cached = cache_get(ckey, CACHE_TTL_OL)
     if cached:
         schedule_shelf_refresh(mode, lang)
-        return normalize_shelf_labels(cached, mode)
+        return merge_refreshed_shelves(
+            [],
+            normalize_shelf_labels(cached, mode),
+            mode,
+        )
     disk = disk_load_shelves(mode, lang)
     if disk:
-        shelves = dedupe_and_refill_shelves(disk, mode, lang)
-        shelves = normalize_shelf_labels(shelves, mode)
+        shelves = merge_refreshed_shelves(
+            [],
+            normalize_shelf_labels(disk, mode),
+            mode,
+        )
         cache_set(ckey, shelves)
         schedule_shelf_refresh(mode, lang)
         return shelves
-    shelves = fetch_shelves(mode, lang)
-    shelves = normalize_shelf_labels(shelves, mode)
+    # A new install should still paint the app shell immediately. The visible
+    # shelf endpoint can hydrate independently while the complete set builds.
+    shelves = normalize_shelf_labels([], mode)
     cache_set(ckey, shelves)
-    disk_save_shelves(shelves, mode, lang)
-    schedule_cover_warm(cover_warm_jobs_for_shelves(shelves), force=True)
+    schedule_shelf_refresh(mode, lang, delay=0)
     return shelves
 
 
@@ -5426,30 +5901,14 @@ def api_covers():
     add_server_timing("covers", duration=0, description="local")
     return jsonify({"success": True, "covers": covers, "refreshing": refreshing})
 
-def dedupe_and_refill_shelves(shelves, mode="nonfiction", lang=None):
-    lang = lang or DEFAULT_BOOK_LANG
-    by_topic = {shelf.get("topic"): shelf for shelf in shelves}
-    by_name = {shelf.get("name"): shelf for shelf in shelves}
-    sd = get_shelves_def(mode)
-    candidate_pages = None
-    seen_keys = set()
-    output = []
-    for name, topic in sd:
-        shelf = by_topic.get(topic) or by_name.get(name) or {"name": name, "topic": topic, "books": []}
-        books = select_unique_books(shelf.get("books", []), seen_keys, SHELF_BOOK_TARGET)
-        if len(books) < SHELF_BOOK_TARGET:
-            if candidate_pages is None:
-                candidate_pages = prefetch_topic_pages([shelf_topic for _, shelf_topic in sd], lang)
-            extra = select_unique_from_prefetched(topic, candidate_pages, seen_keys, SHELF_BOOK_TARGET - len(books))
-            books.extend(extra)
-        output.append({"name": name, "topic": topic, "books": books})
-    return output
-
 def seen_keys_before_shelf(topic, mode="nonfiction", lang=None):
+    shelf_topics = [shelf_topic for _, shelf_topic in get_shelves_def(mode)]
+    if topic not in shelf_topics:
+        return set()
     seen_keys = set()
     shelves = get_shelves(mode, lang)
     by_topic = {shelf.get("topic"): shelf for shelf in shelves}
-    for _, shelf_topic in get_shelves_def(mode):
+    for shelf_topic in shelf_topics:
         if shelf_topic == topic:
             break
         for book in by_topic.get(shelf_topic, {}).get("books", []):
@@ -5466,7 +5925,11 @@ def dedup_across_shelves(shelves):
                 deduped.append(book)
         shelf["books"] = deduped
         if "topic" not in shelf:
-            shelf["topic"] = next((topic for name, topic in SHELVES_DEF + FICTION_SHELVES_DEF if name == shelf.get("name")), "")
+            shelf["topic"] = next((
+                topic
+                for name, topic in tuple(SHELVES_DEF) + FICTION_CATEGORY_DEF
+                if name == shelf.get("name")
+            ), "")
     return shelves
 
 def render_home(mode="nonfiction", lang=None, error=None):
@@ -5496,7 +5959,12 @@ def render_home(mode="nonfiction", lang=None, error=None):
                     detail, _ = cached_book_detail(work_id, lang) if work_id else (None, "miss")
                     hero_items.append(dict(book, description=(detail or {}).get("description", "")))
                 hero = hero_items[0]
-    visual_topic_groups = topic_groups_with_artwork(shelves)
+    visual_topic_groups = (
+        topic_groups_with_artwork(shelves) if mode != "fiction" else ()
+    )
+    visual_genre_groups = (
+        fiction_genre_groups_with_artwork(shelves) if mode == "fiction" else ()
+    )
     return render_template(
         "index.html",
         shelves=shelves,
@@ -5504,6 +5972,9 @@ def render_home(mode="nonfiction", lang=None, error=None):
         hero_books=hero_books,
         hero_items=hero_items,
         topic_groups=visual_topic_groups,
+        featured_fiction_genres=featured_fiction_genres_with_artwork(
+            visual_genre_groups
+        ),
         mode=mode,
         error=error,
     )
@@ -5542,6 +6013,25 @@ def topics_page(clean_mode, clean_lang):
         mode=mode,
     )
 
+@app.route("/fiction/genres", defaults={"clean_lang": None})
+@app.route("/fiction/cn/genres", defaults={"clean_lang": "cn"})
+def fiction_genres_page(clean_lang):
+    mode = "fiction"
+    lang = clean_lang or get_book_lang()
+    g.mode_override = mode
+    g.book_lang_override = lang
+    if "book_lang" in request.args:
+        return preserve_query_redirect(clean_fiction_genres_url(lang))
+    shelf_artwork = cache_get(f"shelves_{lang}_fiction", CACHE_TTL_OL)
+    if not shelf_artwork:
+        shelf_artwork = disk_load_shelves("fiction", lang) or []
+    shelf_artwork = normalize_shelf_labels(shelf_artwork, "fiction")
+    return render_template(
+        "fiction_genres.html",
+        genre_groups=fiction_genre_groups_with_artwork(shelf_artwork),
+        mode=mode,
+    )
+
 @app.route("/category/<topic>", defaults={"clean_mode": None, "clean_lang": None})
 @app.route("/fiction/category/<topic>", defaults={"clean_mode": "fiction", "clean_lang": None})
 @app.route("/cn/category/<topic>", defaults={"clean_mode": "nonfiction", "clean_lang": "cn"})
@@ -5555,7 +6045,7 @@ def category_page(topic, clean_mode, clean_lang):
     g.book_lang_override = lang
     if clean_mode is None and ("mode" in request.args or "book_lang" in request.args):
         return preserve_query_redirect(clean_category_url(topic, mode, lang))
-    sd = get_shelves_def(mode)
+    sd = get_category_def(mode)
     valid_topics = {t for _, t in sd}
     if topic not in valid_topics:
         return render_template("category.html", shelf={"name": topic.capitalize(), "books": []}, topic=topic, mode=mode)
@@ -5568,7 +6058,7 @@ def api_category(topic):
     page = int(request.args.get("page", 1))
     mode = request.args.get("mode", "nonfiction")
     lang = get_book_lang()
-    sd = get_shelves_def(mode)
+    sd = get_category_def(mode)
     valid_topics = {t for _, t in sd}
     if topic not in valid_topics:
         return jsonify({"success": False, "error": "Invalid topic"})
@@ -5588,6 +6078,8 @@ def api_shelf(topic):
     valid_topics = {t for _, t in sd}
     if topic not in valid_topics:
         return jsonify({"success": False, "error": "Invalid topic"})
+    if not shelf_cache_is_fresh(mode, lang):
+        g.cache_control_override = "no-store"
     books, total, total_pages = fetch_shelf_page_books(topic, page, mode, lang)
     return jsonify({"success": True, "books": books, "page": page, "total_pages": total_pages, "total": total})
 
@@ -8538,7 +9030,11 @@ def load_cached_shelves():
             disk = disk_load_shelves(mode, lang)
             if not disk:
                 continue
-            shelves = normalize_shelf_labels(disk, mode)
+            shelves = merge_refreshed_shelves(
+                [],
+                normalize_shelf_labels(disk, mode),
+                mode,
+            )
             for shelf in shelves:
                 for book in shelf.get("books", []):
                     remember_book_hint(book, lang)

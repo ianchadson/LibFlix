@@ -205,7 +205,7 @@
   <link href="{{ url_for('static', filename='libflix.css', v=asset_version) }}" rel="stylesheet">
 </head>
 <body class="page-home">
-  {% set active_tab = 'home' if mode != 'fiction' else 'trending_fiction' %}
+  {% set active_tab = 'home' if mode != 'fiction' else 'home_fiction' %}
   {% include "_navbar.html" %}
 
   <main id="mainContent">
@@ -304,6 +304,33 @@
   </section>
   {% endif %}
 
+  {% if mode == 'fiction' and featured_fiction_genres %}
+  <section class="home-topics home-fiction-genres" aria-labelledby="homeGenresTitle">
+    <div class="home-topic-map">
+      <div class="home-topics-head">
+        <h2 class="home-topics-title" id="homeGenresTitle">Browse genres</h2>
+        <a class="home-topics-all" href="{{ genres_url(book_lang) }}" aria-label="View all fiction genres">See all <span aria-hidden="true">→</span></a>
+      </div>
+      <div class="home-topic-rail">
+        <div class="home-topic-row">
+          {% for genre in featured_fiction_genres %}
+          <a class="home-topic-card fiction-genre-card" href="{{ category_url(genre.topic, 'fiction', book_lang) }}">
+            {% if genre.artwork %}
+            <span class="home-topic-art" aria-hidden="true">
+              {% for cover_url in genre.artwork %}
+              <img src="{{ cover_url }}" alt="" loading="lazy" decoding="async" onerror="this.hidden=true">
+              {% endfor %}
+            </span>
+            {% endif %}
+            <span class="home-topic-name">{{ genre.name }}</span>
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
   <div class="home-shelves">
     {% if error %}
     <div class="error-banner">{{ error }}</div>
@@ -333,7 +360,7 @@
   <script data-page-script>
     const MODE = {{ mode | tojson }};
     const BOOK_LANG = {{ book_lang | tojson }};
-    const SHELF_API_VERSION = 3;
+const SHELF_API_VERSION = 6;
     const HERO_BOOKS = {{ (hero_items | default([])) | tojson }};
     let heroIndex = 0;
     let heroCycleTimer = null;
