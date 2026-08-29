@@ -16,7 +16,7 @@
     {% set reason_payload = [book.reason] %}
   {% endif %}
   <a href="{{ book_url(book, mode | default('nonfiction'), book_lang) }}" class="book-card-link topic-book-item" data-topic-book="true" aria-label="{{ book.title | default('Untitled') }}{% if book.author %} by {{ book.author }}{% endif %}. Find an edition.">
-    <div class="book-card{% if not book.cover_url %} no-cover{% endif %}" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}" data-quick-peek-action="Find an edition">
+    <div class="book-card{% if not book.cover_url %} no-cover{% endif %}" data-ol-key="{{ book.ol_key | default('') | e }}" data-title="{{ book.title | default('') | e }}" data-author="{{ book.author | default('') | e }}" data-rating-average="{{ book.rating_average | default(0, true) }}" data-ratings-count="{{ book.ratings_count | default(0, true) }}" data-rating-source="{{ book.rating_source | default('') | e }}" data-rating-url="{{ book.rating_url | default('') | e }}" data-quick-peek-action="Find an edition">
       {% if book.cover_url %}
       <div class="cover-skeleton"></div>
       <img data-cover-src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';this.parentNode.classList.add('no-cover');">
@@ -387,6 +387,10 @@
       bookCard.dataset.olKey = canonicalWorkKey(olKey);
       bookCard.dataset.title = title;
       bookCard.dataset.author = author;
+      bookCard.dataset.ratingAverage = String(book?.rating_average || 0);
+      bookCard.dataset.ratingsCount = String(book?.ratings_count || 0);
+      bookCard.dataset.ratingSource = String(book?.rating_source || '');
+      bookCard.dataset.ratingUrl = String(book?.rating_url || '');
       if (withTopicCopy) bookCard.dataset.quickPeekAction = 'Find an edition';
       if (coverUrl) {
         const skeleton = document.createElement('div');

@@ -640,6 +640,21 @@ body:has(.kindle-global-tray:not([hidden])) .app-toast {
   margin-bottom: 12px !important;
 }
 
+.shelf-source-link {
+  margin-left: auto;
+  color: var(--app-faint);
+  font-size: .7rem;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color .15s ease;
+}
+
+.shelf-source-link:hover,
+.shelf-source-link:focus-visible {
+  color: var(--app-text);
+}
+
 .shelf-title,
 .page-title,
 .discover-title {
@@ -695,6 +710,53 @@ body:has(.kindle-global-tray:not([hidden])) .app-toast {
 .book-card:hover {
   transform: translateY(-4px) scale(1.025) !important;
   box-shadow: 0 22px 48px rgba(0, 0, 0, .48) !important;
+}
+
+.book-rating-badge {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 5;
+  min-width: 40px;
+  height: 21px;
+  padding: 0 7px;
+  border: 1px solid rgba(255, 255, 255, .12);
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: rgba(7, 8, 10, .84);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, .28);
+  color: #f3f3f4;
+  font-size: .66rem;
+  font-weight: 760;
+  line-height: 1;
+  pointer-events: none;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.book-rating-star {
+  color: #ffb34d;
+  font-size: .72rem;
+  line-height: 1;
+}
+
+.quick-peek-rating {
+  width: fit-content;
+  margin-top: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: rgba(255, 255, 255, .78);
+  font-size: .64rem;
+  font-weight: 680;
+  line-height: 1.15;
+}
+
+.quick-peek-rating .book-rating-star {
+  font-size: .7rem;
 }
 
 .book-card img,
@@ -2071,8 +2133,40 @@ button.edition-recommended {
 
 .review-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: clamp(340px, 38vw, 430px);
+  grid-template-columns: none;
   gap: 10px;
+  padding: 1px 0 10px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scroll-padding-inline: 1px;
+  scroll-snap-type: inline proximity;
+  scrollbar-color: #3a3d43 transparent;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+}
+
+.review-grid:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, .42);
+  outline-offset: 4px;
+}
+
+.review-grid::-webkit-scrollbar {
+  height: 6px;
+}
+
+.review-grid::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.review-grid::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: #3a3d43;
+}
+
+.review-grid::-webkit-scrollbar-thumb:hover {
+  background: #555860;
 }
 
 .review-card {
@@ -2085,6 +2179,7 @@ button.edition-recommended {
   border: 1px solid rgba(255, 255, 255, .065);
   border-radius: var(--app-radius);
   background: #131519;
+  scroll-snap-align: start;
 }
 
 .review-card blockquote {
@@ -2096,14 +2191,52 @@ button.edition-recommended {
 
 .review-sentiment {
   width: fit-content;
-  padding: 3px 6px;
-  border: 1px solid rgba(255, 255, 255, .1);
-  border-radius: 3px;
-  color: #c9cbd0;
+  min-height: 22px;
+  padding: 3px 7px 3px 6px;
+  border: 1px solid rgba(255, 179, 77, .22);
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 179, 77, .07);
+  color: #d7d8dc;
   font-size: .65rem;
   font-weight: 760;
   line-height: 1;
   text-transform: uppercase;
+}
+
+.review-sentiment-icon {
+  color: #ffb34d;
+  font-size: .8rem;
+  line-height: 1;
+}
+
+.review-sentiment.is-positive {
+  border-color: rgba(105, 190, 132, .22);
+  background: rgba(105, 190, 132, .07);
+}
+
+.review-sentiment.is-positive .review-sentiment-icon {
+  color: #72c98e;
+}
+
+.review-sentiment.is-mixed {
+  border-color: rgba(173, 176, 184, .18);
+  background: rgba(173, 176, 184, .055);
+}
+
+.review-sentiment.is-mixed .review-sentiment-icon {
+  color: #aeb1b8;
+}
+
+.review-sentiment.is-pan {
+  border-color: rgba(239, 86, 96, .2);
+  background: rgba(239, 86, 96, .065);
+}
+
+.review-sentiment.is-pan .review-sentiment-icon {
+  color: #ef626b;
 }
 
 .review-card footer {
@@ -2482,22 +2615,14 @@ button.edition-recommended {
   }
 
   .review-grid {
-    grid-auto-flow: column;
     grid-auto-columns: minmax(250px, 82vw);
-    grid-template-columns: none;
     gap: 8px;
-    overflow-x: auto;
-    overscroll-behavior-inline: contain;
+    padding-bottom: 2px;
     scrollbar-width: none;
-    scroll-snap-type: inline proximity;
   }
 
   .review-grid::-webkit-scrollbar {
     display: none;
-  }
-
-  .review-card {
-    scroll-snap-align: start;
   }
 
   .similar-section .book-card,

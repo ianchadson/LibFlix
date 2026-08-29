@@ -39,6 +39,7 @@ from nyt_bestsellers import (
     nyt_index_valid,
     parse_nyt_number_one_pages,
 )
+from goodreads_discovery import parse_most_read_books
 from topic_discovery import (
     BROWSE_TOPIC_GROUPS as TOPIC_BROWSE_GROUPS,
     EXPANSION_VERSION as TOPIC_EXPANSION_VERSION,
@@ -114,6 +115,7 @@ KINDLE_DELIVERY_LOCK_FILE = os.path.join(DATA_DIR, "kindle-delivery.lock")
 RATE_LIMIT_SQLITE = os.path.join(DATA_DIR, "rate_limits.sqlite3")
 METRICS_SQLITE = os.path.join(DATA_DIR, "metrics.sqlite3")
 NYT_REFRESH_LOCK_FILE = os.path.join(DATA_DIR, "nyt-bestsellers.lock")
+GOODREADS_DISCOVERY_LOCK_FILE = os.path.join(DATA_DIR, "goodreads-discovery.lock")
 KINDLE_SOURCE_CACHE_TTL = max(0, int(os.environ.get("KINDLE_SOURCE_CACHE_TTL", "86400")))
 KINDLE_SOURCE_CACHE_MAX_BYTES = max(
     0,
@@ -137,7 +139,7 @@ KINDLE_RELAY_MAX_ATTACHMENT_BYTES = max(
 )
 SHELF_REFRESH_TTL = 21600
 SHELF_REFRESH_RETRY_TTL = 60
-SHELF_QUERY_REVISION = 3
+SHELF_QUERY_REVISION = 4
 OL_LIST_FIELDS = (
     "key,title,author_name,cover_i,cover_id,language,ia,"
     "first_publish_year,number_of_pages_median,ratings_count,"
@@ -200,6 +202,7 @@ NYT_READ_TIMEOUT = max(
 GOODREADS = "https://www.goodreads.com"
 BOOKMARKS_REVIEWS = "https://bookmarks.reviews"
 BOOK_RECEPTION_CACHE_VERSION = 1
+GOODREADS_DISCOVERY_CACHE_VERSION = 1
 BOOK_RECEPTION_FRESH_TTL = max(
     3600,
     int(os.environ.get("LIBFLIX_BOOK_RECEPTION_TTL", "604800")),
@@ -216,6 +219,25 @@ GOODREADS_REVIEWS_ENABLED = os.environ.get(
     "LIBFLIX_GOODREADS_REVIEWS",
     "1",
 ).strip().casefold() not in {"0", "false", "no", "off"}
+GOODREADS_DISCOVERY_ENABLED = os.environ.get(
+    "LIBFLIX_GOODREADS_DISCOVERY",
+    "1",
+).strip().casefold() not in {"0", "false", "no", "off"}
+GOODREADS_DISCOVERY_FRESH_TTL = max(
+    3600,
+    int(os.environ.get("LIBFLIX_GOODREADS_DISCOVERY_TTL", "21600")),
+)
+GOODREADS_DISCOVERY_STALE_TTL = max(
+    GOODREADS_DISCOVERY_FRESH_TTL,
+    int(os.environ.get("LIBFLIX_GOODREADS_DISCOVERY_STALE_TTL", "2592000")),
+)
+GOODREADS_DISCOVERY_FAILURE_TTL = max(
+    60,
+    int(os.environ.get("LIBFLIX_GOODREADS_DISCOVERY_FAILURE_TTL", "900")),
+)
+GOODREADS_DISCOVERY_SOURCE_LIMIT = 36
+GOODREADS_DISCOVERY_BOOK_LIMIT = 12
+GOODREADS_DISCOVERY_BATCH_SIZE = 6
 GOODREADS_HTML_MAX_BYTES = max(
     512 * 1024,
     min(
@@ -505,6 +527,12 @@ GOODREADS_FAILURES = 0
 GOODREADS_CIRCUIT_OPEN_UNTIL = 0.0
 GOODREADS_CIRCUIT_FAILURE_THRESHOLD = 2
 GOODREADS_CIRCUIT_COOLDOWN = 300
+GOODREADS_DISCOVERY_REFRESH_LOCK = threading.Lock()
+GOODREADS_DISCOVERY_REFRESHING = set()
+GOODREADS_DISCOVERY_EXECUTOR = ThreadPoolExecutor(
+    max_workers=1,
+    thread_name_prefix="goodreads-discovery",
+)
 BOOKMARKS_GATEWAY_LOCK = threading.Lock()
 BOOKMARKS_LAST_REQUEST_AT = 0.0
 BOOK_RECEPTION_REFRESH_LOCK = threading.Lock()
@@ -720,6 +748,42 @@ def disk_cache_entry(key):
     except (sqlite3.Error, ValueError):
         pass
     return None
+
+
+def disk_cache_entries(keys):
+    """Read a bounded group of durable cache values with one SQLite query."""
+
+    requested = list(dict.fromkeys(str(key) for key in (keys or []) if key))[:100]
+    if not requested:
+        return {}
+    hashes = {disk_cache_key(key): key for key in requested}
+    placeholders = ",".join("?" for _ in hashes)
+    initialize_disk_cache()
+    try:
+        with disk_cache_connection(timeout=5) as connection:
+            rows = connection.execute(
+                "SELECT cache_key, created_at, payload FROM api_cache "
+                f"WHERE cache_key IN ({placeholders})",
+                tuple(hashes),
+            ).fetchall()
+    except sqlite3.Error:
+        return {}
+    now = time.time()
+    entries = {}
+    for cache_key, created_at, payload in rows:
+        original_key = hashes.get(cache_key)
+        if not original_key:
+            continue
+        try:
+            data = json.loads(payload)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        entries[original_key] = {
+            "created_at": created_at,
+            "age": max(0, now - created_at),
+            "data": data,
+        }
+    return entries
 
 def disk_cache_get(key, ttl=API_DISK_CACHE_TTL):
     entry = disk_cache_entry(key)
@@ -2329,6 +2393,15 @@ def extract_book(w, lang=None, allow_missing_cover=False):
         "published_year": w.get("first_publish_year"),
         "pages": w.get("number_of_pages_median"),
     }
+    rating_average = _goodreads_number(w.get("ratings_average"))
+    ratings_count = _goodreads_number(w.get("ratings_count"), integer=True)
+    if 1 <= rating_average <= 5 and ratings_count > 0:
+        book.update({
+            "rating_average": round(rating_average, 2),
+            "ratings_count": ratings_count,
+            "rating_source": "Open Library",
+            "rating_url": f"{OL}{ol_key}" if ol_key else "",
+        })
     remember_book_hint(book, lang)
     return book
 
@@ -2347,6 +2420,10 @@ def remember_book_hint(book, lang=None):
         "description": re.sub(r"\s+", " ", str(description)).strip()[:2000],
         "subjects": bounded_identity_values(book.get("subjects"), limit=20),
         "ol_key": ol_key,
+        "rating_average": book.get("rating_average") or 0,
+        "ratings_count": book.get("ratings_count") or 0,
+        "rating_source": str(book.get("rating_source") or "").strip(),
+        "rating_url": str(book.get("rating_url") or "").strip(),
     }
     with BOOK_HINTS_LOCK:
         current = BOOK_HINTS.get((lang, ol_key), {})
@@ -4526,11 +4603,17 @@ def _goodreads_failure():
             )
 
 
-def goodreads_fetch_html(path, params=None):
+def goodreads_fetch_html(
+    path,
+    params=None,
+    allowed_paths=("/search", "/book/show/"),
+):
     global GOODREADS_LAST_REQUEST_AT
-    if not GOODREADS_REVIEWS_ENABLED or goodreads_status()["circuit_open"]:
+    if not (GOODREADS_REVIEWS_ENABLED or GOODREADS_DISCOVERY_ENABLED):
         return None
-    url = safe_goodreads_url(path, allowed_paths=("/search", "/book/show/"))
+    if goodreads_status()["circuit_open"]:
+        return None
+    url = safe_goodreads_url(path, allowed_paths=allowed_paths)
     if not url:
         return None
     try:
@@ -4559,7 +4642,7 @@ def goodreads_fetch_html(path, params=None):
                 raise ValueError("Goodreads returned a challenge response")
             final_url = safe_goodreads_url(
                 getattr(response, "url", url),
-                allowed_paths=("/search", "/book/show/"),
+                allowed_paths=allowed_paths,
             )
             content_type = response.headers.get("Content-Type", "text/html")
             if not final_url or "html" not in content_type.casefold():
@@ -4602,6 +4685,272 @@ def fetch_goodreads_reception(title, author):
         expected_author=author,
         page_url=candidate["url"],
     )
+
+
+def goodreads_discovery_cache_key(mode):
+    return f"goodreads_discovery:v{GOODREADS_DISCOVERY_CACHE_VERSION}:{mode}:en"
+
+
+def goodreads_discovery_failure_key(mode):
+    return f"goodreads_discovery_failure:v{GOODREADS_DISCOVERY_CACHE_VERSION}:{mode}"
+
+
+def _goodreads_discovery_payload_valid(payload, mode):
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("version") != GOODREADS_DISCOVERY_CACHE_VERSION:
+        return False
+    if payload.get("mode") != mode or not isinstance(payload.get("shelves"), list):
+        return False
+    try:
+        fetched_at = float(payload.get("fetched_at") or 0)
+    except (TypeError, ValueError):
+        return False
+    return bool(fetched_at and fetched_at <= time.time() + 60)
+
+
+def _goodreads_discovery_payload_age(payload, now=None):
+    now = time.time() if now is None else float(now)
+    try:
+        fetched_at = float((payload or {}).get("fetched_at") or 0)
+    except (AttributeError, TypeError, ValueError):
+        return float("inf")
+    return max(0, now - fetched_at) if fetched_at else float("inf")
+
+
+def _goodreads_discovery_cached_entry(mode):
+    cache_key = goodreads_discovery_cache_key(mode)
+    entries = []
+    now = time.time()
+    memory = CACHE.get(cache_key)
+    if isinstance(memory, dict):
+        payload = memory.get("d")
+        age = _goodreads_discovery_payload_age(payload, now)
+        if (
+            age < GOODREADS_DISCOVERY_STALE_TTL
+            and _goodreads_discovery_payload_valid(payload, mode)
+        ):
+            entries.append({"age": age, "data": payload, "source": "memory"})
+    disk = disk_cache_entry(cache_key)
+    disk_age = _goodreads_discovery_payload_age(
+        disk.get("data") if disk else None,
+        now,
+    )
+    if (
+        disk
+        and disk_age < GOODREADS_DISCOVERY_STALE_TTL
+        and _goodreads_discovery_payload_valid(disk.get("data"), mode)
+    ):
+        entries.append({
+            **disk,
+            "age": disk_age,
+            "source": "disk",
+        })
+    return min(entries, key=lambda item: item["age"]) if entries else None
+
+
+def _openlibrary_query_phrase(value):
+    return re.sub(r"\s+", " ", str(value or "")).strip().replace("\\", "\\\\").replace('"', '\\"')[:160]
+
+
+def _map_goodreads_books_to_openlibrary(source_books, lang="en"):
+    """Resolve Goodreads identities in bounded Open Library query batches."""
+
+    source_books = [
+        dict(book)
+        for book in (source_books or [])
+        if book.get("title") and book.get("author")
+    ][: GOODREADS_DISCOVERY_SOURCE_LIMIT * 2]
+    mapped = {}
+    fields = f"{OL_COVER_FIELDS},subject"
+    for start in range(0, len(source_books), GOODREADS_DISCOVERY_BATCH_SIZE):
+        chunk = source_books[start:start + GOODREADS_DISCOVERY_BATCH_SIZE]
+        clauses = [
+            '(title:"{}" author:"{}")'.format(
+                _openlibrary_query_phrase(book["title"]),
+                _openlibrary_query_phrase(book["author"]),
+            )
+            for book in chunk
+        ]
+        data = ol_get("/search.json", {
+            "q": " OR ".join(clauses),
+            "limit": GOODREADS_DISCOVERY_BATCH_SIZE * 6,
+            "fields": fields,
+        }) or {}
+        records = data.get("docs") if isinstance(data.get("docs"), list) else []
+        for source in chunk:
+            candidates = []
+            for record in records:
+                title_score = title_match_score(record.get("title", ""), source["title"])
+                authors = record.get("author_name") or []
+                candidate_author = authors[0] if isinstance(authors, list) and authors else authors
+                author_score = author_match_score(candidate_author, source["author"])
+                if title_score < 850 or author_score < 70:
+                    continue
+                candidates.append((
+                    title_score
+                    + author_score
+                    + _goodreads_derivative_penalty(record.get("title", ""), source["title"])
+                    + (80 if valid_cover_id(record.get("cover_i")) else 0)
+                    + min(40, int(math.log10(max(1, _goodreads_number(record.get("ratings_count"), integer=True)))) * 8),
+                    record,
+                ))
+            if not candidates:
+                continue
+            _score, record = max(candidates, key=lambda item: item[0])
+            book = extract_book(record, lang)
+            if not book:
+                continue
+            book.update({
+                "rating_average": source.get("average") or book.get("rating_average") or 0,
+                "ratings_count": source.get("ratings_count") or book.get("ratings_count") or 0,
+                "rating_source": "Goodreads",
+                "rating_url": safe_goodreads_url(source.get("url")),
+                "goodreads_rank": source.get("rank") or 0,
+                "goodreads_activity": source.get("activity_count") or 0,
+            })
+            mapped[(source["title"].casefold(), source["author"].casefold())] = book
+    return mapped
+
+
+def build_goodreads_discovery(mode):
+    """Build mode-specific Goodreads rails outside the request path."""
+
+    mode = mode if mode in {"fiction", "nonfiction"} else "nonfiction"
+    category = "fiction" if mode == "fiction" else "non-fiction"
+    source_specs = (
+        ("Trending on Goodreads", "w"),
+        ("Popular on Goodreads", "m"),
+    )
+    source_rows = []
+    for name, duration in source_specs:
+        params = {"category": category, "country": "all", "duration": duration}
+        html = goodreads_fetch_html(
+            "/book/most_read",
+            params=params,
+            allowed_paths=("/book/most_read",),
+        )
+        books = parse_most_read_books(
+            html or "",
+            limit=GOODREADS_DISCOVERY_SOURCE_LIMIT,
+        )
+        source_rows.append({
+            "name": name,
+            "duration": duration,
+            "source_url": f"{GOODREADS}/book/most_read?{urlencode(params)}",
+            "books": books,
+        })
+
+    combined = []
+    seen_identities = set()
+    for row in source_rows:
+        for source in row["books"]:
+            identity = (source["title"].casefold(), source["author"].casefold())
+            if identity in seen_identities:
+                continue
+            seen_identities.add(identity)
+            combined.append(source)
+    mapped = _map_goodreads_books_to_openlibrary(combined)
+
+    shelves = []
+    used_work_keys = set()
+    for row in source_rows:
+        books = []
+        for source in row["books"]:
+            identity = (source["title"].casefold(), source["author"].casefold())
+            book = mapped.get(identity)
+            work_key = (book or {}).get("ol_key", "")
+            if not book or not work_key or work_key in used_work_keys:
+                continue
+            used_work_keys.add(work_key)
+            books.append(book)
+            if len(books) >= GOODREADS_DISCOVERY_BOOK_LIMIT:
+                break
+        if books:
+            shelves.append({
+                "name": row["name"],
+                "source": "Goodreads",
+                "source_url": row["source_url"],
+                "books": books,
+            })
+    if not shelves:
+        return None
+    return {
+        "version": GOODREADS_DISCOVERY_CACHE_VERSION,
+        "mode": mode,
+        "fetched_at": int(time.time()),
+        "shelves": shelves,
+    }
+
+
+def _refresh_goodreads_discovery(mode):
+    cache_key = goodreads_discovery_cache_key(mode)
+    failure_key = goodreads_discovery_failure_key(mode)
+    try:
+        with filesystem_lock(GOODREADS_DISCOVERY_LOCK_FILE):
+            current = _goodreads_discovery_cached_entry(mode)
+            if current and current["age"] < GOODREADS_DISCOVERY_FRESH_TTL:
+                return
+            if disk_cache_get(failure_key, GOODREADS_DISCOVERY_FAILURE_TTL):
+                return
+            payload = build_goodreads_discovery(mode)
+            if not payload:
+                disk_cache_set(failure_key, {"failed_at": time.time()})
+                return
+            cache_set(cache_key, payload)
+            disk_cache_set(cache_key, payload)
+            CACHE.pop(failure_key, None)
+            disk_cache_delete(failure_key)
+    finally:
+        with GOODREADS_DISCOVERY_REFRESH_LOCK:
+            GOODREADS_DISCOVERY_REFRESHING.discard(mode)
+
+
+def schedule_goodreads_discovery_refresh(mode):
+    if not GOODREADS_DISCOVERY_ENABLED or goodreads_status()["circuit_open"]:
+        return False
+    with GOODREADS_DISCOVERY_REFRESH_LOCK:
+        if mode in GOODREADS_DISCOVERY_REFRESHING:
+            return False
+        GOODREADS_DISCOVERY_REFRESHING.add(mode)
+    try:
+        GOODREADS_DISCOVERY_EXECUTOR.submit(_refresh_goodreads_discovery, mode)
+    except RuntimeError:
+        with GOODREADS_DISCOVERY_REFRESH_LOCK:
+            GOODREADS_DISCOVERY_REFRESHING.discard(mode)
+        return False
+    return True
+
+
+def goodreads_discovery_shelves(mode, lang="en", schedule=True):
+    """Return only local Goodreads rails and optionally queue a refresh."""
+
+    if not GOODREADS_DISCOVERY_ENABLED or normalize_book_lang(lang) != "en":
+        return []
+    mode = mode if mode in {"fiction", "nonfiction"} else "nonfiction"
+    entry = _goodreads_discovery_cached_entry(mode)
+    if schedule and (not entry or entry["age"] >= GOODREADS_DISCOVERY_FRESH_TTL):
+        schedule_goodreads_discovery_refresh(mode)
+    if not entry:
+        return []
+    if entry.get("source") == "disk":
+        cache_set(goodreads_discovery_cache_key(mode), entry["data"])
+    add_server_timing("goodreads-rails", duration=0, description=entry["source"])
+    return entry["data"].get("shelves", [])
+
+
+def goodreads_discovery_status():
+    with GOODREADS_DISCOVERY_REFRESH_LOCK:
+        refreshing = set(GOODREADS_DISCOVERY_REFRESHING)
+    modes = {}
+    for mode in ("nonfiction", "fiction"):
+        entry = _goodreads_discovery_cached_entry(mode)
+        modes[mode] = {
+            "available": bool(entry),
+            "refreshing": mode in refreshing,
+            "cache_age": round(entry["age"]) if entry else None,
+        }
+    return {"enabled": GOODREADS_DISCOVERY_ENABLED, "modes": modes}
 
 
 def safe_bookmarks_url(value):
@@ -4773,6 +5122,75 @@ def cached_book_reception(work_id, lang, allow_stale=True):
         if isinstance(stale, dict) and stale.get("success"):
             return stale, "stale"
     return None, "miss"
+
+
+def reception_summary_from_payload(payload):
+    """Return the strongest aggregate rating without review text."""
+
+    if not isinstance(payload, dict) or not payload.get("success"):
+        return None
+    ratings = [payload.get("rating"), *(payload.get("other_ratings") or [])]
+    ratings = [
+        rating for rating in ratings
+        if (
+            isinstance(rating, dict)
+            and 1 <= _goodreads_number(rating.get("average")) <= 5
+            and _goodreads_number(rating.get("ratings_count"), integer=True) > 0
+        )
+    ]
+    rating = next(
+        (item for item in ratings if item.get("source") == "Goodreads"),
+        ratings[0] if ratings else None,
+    )
+    if not rating:
+        return None
+    average = _goodreads_number(rating.get("average"))
+    count = _goodreads_number(rating.get("ratings_count"), integer=True)
+    if not 1 <= average <= 5 or count < 1:
+        return None
+    return {
+        "average": round(average, 2),
+        "ratings_count": count,
+        "source": str(rating.get("source") or "").strip(),
+        "url": str(rating.get("url") or payload.get("source_url") or "").strip(),
+    }
+
+
+def cached_reception_summaries(ol_keys, lang="en"):
+    """Batch-read rating summaries locally without scheduling any provider."""
+
+    lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
+    requested = list(dict.fromkeys(
+        key for key in (ol_keys or [])
+        if re.fullmatch(r"/works/OL\d+W", str(key or ""))
+    ))[:24]
+    cache_keys = {
+        key: book_reception_cache_key(work_id_from_ol_key(key), lang)
+        for key in requested
+    }
+    summaries = {}
+    disk_misses = []
+    now = time.time()
+    for ol_key, cache_key in cache_keys.items():
+        item = CACHE.get(cache_key)
+        if (
+            isinstance(item, dict)
+            and now - float(item.get("t") or 0) < BOOK_RECEPTION_STALE_TTL
+        ):
+            summary = reception_summary_from_payload(item.get("d"))
+            if summary:
+                summaries[ol_key] = summary
+                continue
+        disk_misses.append(cache_key)
+    disk_entries = disk_cache_entries(disk_misses)
+    by_cache_key = {cache_key: ol_key for ol_key, cache_key in cache_keys.items()}
+    for cache_key, entry in disk_entries.items():
+        if entry["age"] >= BOOK_RECEPTION_STALE_TTL:
+            continue
+        summary = reception_summary_from_payload(entry.get("data"))
+        if summary:
+            summaries[by_cache_key[cache_key]] = summary
+    return summaries
 
 
 def build_book_reception(work_id, lang, include_goodreads=True):
@@ -6085,6 +6503,7 @@ def api_health():
         "database": database,
         "openlibrary": openlibrary_status(),
         "goodreads": goodreads_status(),
+        "goodreads_discovery": goodreads_discovery_status(),
         "inventaire": inventaire_status(),
         "nyt_bestsellers": nyt_status(),
         "cache": {
@@ -6573,7 +6992,7 @@ def api_suggestions():
     return jsonify({"success": True, "books": books})
 
 
-def local_quick_look_detail(ol_key, lang=None):
+def local_quick_look_detail(ol_key, lang=None, reception_summary=None):
     """Return the best preview already held locally and refresh it asynchronously."""
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
     work_id = work_id_from_ol_key(ol_key)
@@ -6607,9 +7026,26 @@ def local_quick_look_detail(ol_key, lang=None):
         "author": first_value("author"),
         "cover_url": localize_cover_url(first_value("cover_url")),
         "description": description,
+        "reception": reception_summary,
         "refreshing": refreshing,
         "cache": cache_state,
     }
+
+
+@app.route("/api/reception-summaries")
+def api_reception_summaries():
+    """Return existing aggregate ratings without starting external work."""
+
+    ol_keys = list(dict.fromkeys(
+        key.strip()
+        for key in request.args.getlist("ol_key")[:24]
+        if re.fullmatch(r"/works/OL\d+W", key.strip())
+    ))
+    lang = normalize_book_lang(request.args.get("book_lang")) or get_book_lang()
+    summaries = cached_reception_summaries(ol_keys, lang)
+    g.cache_control_override = "private, max-age=300"
+    add_server_timing("reception-summaries", duration=0, description="local")
+    return jsonify({"success": True, "ratings": summaries})
 
 
 @app.route("/api/quick-look")
@@ -6623,8 +7059,13 @@ def api_quick_look():
     if not ol_keys:
         return jsonify({"success": False, "error": "No valid Open Library works"}), 400
     lang = get_book_lang()
+    reception_summaries = cached_reception_summaries(ol_keys, lang)
     books = {
-        ol_key: local_quick_look_detail(ol_key, lang)
+        ol_key: local_quick_look_detail(
+            ol_key,
+            lang,
+            reception_summary=reception_summaries.get(ol_key),
+        )
         for ol_key in ol_keys
     }
     refreshing = any(book.get("refreshing") for book in books.values())
@@ -6741,9 +7182,15 @@ def render_home(mode="nonfiction", lang=None, error=None):
     visual_genre_groups = (
         fiction_genre_groups_with_artwork(shelves) if mode == "fiction" else ()
     )
+    goodreads_shelves = goodreads_discovery_shelves(
+        mode,
+        lang,
+        schedule=not request.environ.get("libflix.test_client"),
+    )
     return render_template(
         "index.html",
         shelves=shelves,
+        goodreads_shelves=goodreads_shelves,
         hero=hero,
         hero_books=hero_books,
         hero_items=hero_items,

@@ -188,7 +188,7 @@
       .home-topics-head { margin-bottom:7px; padding:0; }
       .home-topic-rail { margin-right:-16px; }
       .home-topic-rail::after { position:absolute; width:24px; inset:0 0 5px auto; pointer-events:none; background:linear-gradient(90deg, transparent, #141414); content:''; }
-      .home-topic-row { display:flex; gap:8px; overflow-x:auto; padding:4px 32px 5px 0; scroll-padding-right:32px; scroll-snap-type:x mandatory; scrollbar-width:none; }
+      .home-topic-row { display:flex; gap:8px; overflow-x:auto; margin:0; padding:4px 32px 5px 0; scroll-padding-right:32px; scroll-snap-type:x mandatory; scrollbar-width:none; }
       .home-topic-row::-webkit-scrollbar { display:none; }
       .home-topic-card { min-width:min(68vw, 238px); flex:0 0 auto; padding:14px; }
       .book-card, .book-card img { width: 120px; }
@@ -351,6 +351,21 @@
         </button>
       </div>
     </div>
+    {% if loop.first and goodreads_shelves %}
+      {% for goodreads_shelf in goodreads_shelves %}
+      <section class="shelf goodreads-shelf" data-static="1" data-goodreads-shelf aria-labelledby="goodreadsShelf{{ loop.index }}">
+        <div class="shelf-head">
+          <div class="shelf-title" id="goodreadsShelf{{ loop.index }}">{{ goodreads_shelf.name }}</div>
+          <a class="shelf-source-link" href="{{ goodreads_shelf.source_url }}" target="_blank" rel="noopener noreferrer">Goodreads <span aria-hidden="true">↗</span></a>
+        </div>
+        <div class="shelf-row">
+          {% for book in goodreads_shelf.books %}
+            {% include "_book_card.html" %}
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    {% endif %}
     {% endfor %}
   </div>
 
@@ -797,7 +812,7 @@ const SHELF_API_VERSION = 6;
         ? '<div class="cover-skeleton"></div><img data-cover-src="' + esc(b.cover_url) + '" alt="' + esc(titleValue) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="' + fallback + '"><div class="placeholder ph-fallback" style="display:none" aria-label="No cover available"></div>'
         : '<div class="placeholder" aria-label="No cover available"></div>';
       const rankLabel = rank > 0 && rank <= 10 ? '<span class="book-rank" aria-hidden="true">' + rank + '</span>' : '';
-      return '<a href="' + href + '" class="book-card-link' + (rankLabel ? ' ranked-book-link' : '') + '">' + rankLabel + '<div class="book-card' + (b.cover_url ? '' : ' no-cover') + '" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(titleValue) + '" data-author="' + esc(authorValue) + '">' + cover + '<div class="info"><div class="t">' + (titleValue.length > 50 ? esc(titleValue.slice(0,50)) + '...' : esc(titleValue)) + '</div>' + (authorValue ? '<div class="a">' + (authorValue.length > 35 ? esc(authorValue.slice(0,35)) + '...' : esc(authorValue)) + '</div>' : '') + '</div></div></a>';
+      return '<a href="' + href + '" class="book-card-link' + (rankLabel ? ' ranked-book-link' : '') + '">' + rankLabel + '<div class="book-card' + (b.cover_url ? '' : ' no-cover') + '" data-ol-key="' + esc(b.ol_key || '') + '" data-title="' + esc(titleValue) + '" data-author="' + esc(authorValue) + '" data-rating-average="' + esc(String(b.rating_average || 0)) + '" data-ratings-count="' + esc(String(b.ratings_count || 0)) + '" data-rating-source="' + esc(b.rating_source || '') + '" data-rating-url="' + esc(b.rating_url || '') + '">' + cover + '<div class="info"><div class="t">' + (titleValue.length > 50 ? esc(titleValue.slice(0,50)) + '...' : esc(titleValue)) + '</div>' + (authorValue ? '<div class="a">' + (authorValue.length > 35 ? esc(authorValue.slice(0,35)) + '...' : esc(authorValue)) + '</div>' : '') + '</div></div></a>';
     }
 
     function shelfQueue(shelf) {
@@ -882,7 +897,7 @@ const SHELF_API_VERSION = 6;
       }
     }
 
-    document.querySelectorAll('.shelf').forEach(shelf => {
+    document.querySelectorAll('.shelf[data-topic]').forEach(shelf => {
       const row = shelf.querySelector('.shelf-row');
       const btn = shelf.querySelector('.shelf-more-btn');
       if (btn) btn.addEventListener('click', () => loadShelfMore(shelf));
@@ -896,7 +911,7 @@ const SHELF_API_VERSION = 6;
         primeShelf(entry.target);
       });
     }, { rootMargin: '120px 0px' });
-    document.querySelectorAll('.shelf').forEach(shelf => shelfObserver.observe(shelf));
+    document.querySelectorAll('.shelf[data-topic]').forEach(shelf => shelfObserver.observe(shelf));
 
     window.LibFlixPageCleanup = () => {
       pageActive = false;

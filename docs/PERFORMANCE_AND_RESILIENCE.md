@@ -50,6 +50,22 @@ works in Flask and the browser without edge-specific configuration.
 - Download lookup requests a narrow `scope=best` result first. Full alias
   expansion runs during idle time and remains collapsed unless requested.
 
+### Ratings and Goodreads discovery
+
+- Open Library aggregate fields travel in the catalog payload already used to
+  build each card; rendering a score adds no network request.
+- Near-viewport cards may make one idle request for up to 24 work keys. That
+  endpoint uses one local SQLite query and never starts external review work.
+- Quick Look receives cached aggregate data through its existing local batch.
+- Goodreads weekly/monthly rails are stale-while-revalidate: homepage requests
+  read memory or SQLite only, while one bounded background worker refreshes the
+  public chart and maps exact identities to Open Library.
+- Missing, blocked, malformed, or slow Goodreads data removes the optional
+  rails rather than slowing or failing a page. A 15-minute negative cache and
+  the shared circuit breaker prevent repeated pressure during an outage.
+- Save Data, 2G, and Chinese browsing skip optional card-summary or Goodreads
+  discovery work.
+
 ### Search and browser-local continuity
 
 - The fixed search palette calls `/api/suggestions` after a short debounce.

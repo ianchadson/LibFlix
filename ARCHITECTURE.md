@@ -238,6 +238,34 @@ skeleton or fast refresh workers open. Goodreads requests are
 spaced, size-limited, timeout-bounded, circuit-broken, and may be disabled with
 `LIBFLIX_GOODREADS_REVIEWS=0`. Failures are negatively cached for ten minutes;
 the browser hides the Reviews section instead of exposing a provider error.
+
+### Browse-card ratings (`GET /api/reception-summaries`)
+
+List records retain Open Library's existing `ratings_average` and
+`ratings_count` fields, so a compact card score has no extra request cost.
+Visible cards are eligible for one idle batch of up to 24 work keys. The batch
+endpoint performs a single SQLite read over existing `book_reception` entries,
+prefers an already-cached Goodreads aggregate, and never schedules a provider,
+book-detail, or reception refresh. Save Data and 2G clients keep the embedded
+Open Library score and skip the optional upgrade. Quick Look consumes the same
+local summary in its existing batched request.
+
+### Goodreads discovery rails
+
+English fiction and non-fiction homepages can render mode-specific public
+Goodreads Most Read signals:
+
+- `Trending on Goodreads` uses the weekly chart.
+- `Popular on Goodreads` uses the monthly chart.
+
+The request path reads only `goodreads_discovery:v1:<mode>:en` from memory or
+SQLite. Missing or stale data schedules one cross-process-locked background
+refresh and returns immediately. The refresh parses bounded public HTML, maps
+title/author identities to Open Library in six-book query batches, requires a
+strong exact match and usable cover, and removes duplicate works across rails.
+Successful data is fresh for six hours and may remain visible for 30 days;
+failures are suppressed for 15 minutes. The feature can be disabled with
+`LIBFLIX_GOODREADS_DISCOVERY=0` and is omitted entirely in Chinese mode.
 - A single result page has no pagination controls.
 
 ### Download Search (`GET /search`)
@@ -1016,6 +1044,7 @@ and WebKit scrollbar hiding rules.
 | CN English display title | memory + SQLite | `english_title:v1:<ol_key>` | 30 days |
 | Assembled book detail | memory + SQLite | `book_detail:v6:<lang>:<work>` | 7 days fresh; up to 90 days stale |
 | Reader reviews | memory + SQLite | `book_reception:v1:<lang>:<work>` | 7 days fresh; up to 90 days stale |
+| Goodreads discovery rails | memory + SQLite | `goodreads_discovery:v1:<mode>:en` | 6 hours fresh; up to 30 days stale |
 | Similar books | memory + SQLite | `similar:v8:...` | 7 days fresh; complete empty results use a 30-minute negative key |
 | Download search results | memory + SQLite | `download_search:v11:...` | 15 minutes for complete searches; stale fallback; scope is part of the key |
 | Homepage shelves | memory | `shelves_{lang}_{mode}` | 1 hour |

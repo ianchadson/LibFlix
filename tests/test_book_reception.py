@@ -303,6 +303,18 @@ class ReceptionTemplateTests(unittest.TestCase):
         self.assertNotIn("goodreads.com/api", template)
         self.assertNotIn("<script src=\"https://www.goodreads.com", template)
 
+    def test_review_shelf_scrolls_and_every_card_has_a_rating_cue(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+        stylesheet = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+
+        self.assertIn('aria-label="Reader review excerpts"', template)
+        self.assertIn('tabindex="0"', template)
+        self.assertIn("function reviewRatingCue(review, reviewSourceName)", template)
+        self.assertIn("reviewRatingCue(review, reviewSourceName)", template)
+        self.assertIn("grid-auto-flow: column", stylesheet)
+        self.assertIn("overflow-x: auto", stylesheet)
+        self.assertIn("scroll-snap-type: inline proximity", stylesheet)
+
 
 if __name__ == "__main__":
     unittest.main()

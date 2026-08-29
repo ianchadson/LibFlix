@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-08-29 - Goodreads discovery and broader ratings
+
+- Added compact aggregate scores to shared book cards across homepage,
+  categories, discovery, Quick Look, and More Like This.
+- Reused Open Library rating fields already present in catalog responses and
+  added an idle 24-work cache-only upgrade that reads existing Goodreads
+  aggregates in one SQLite query without starting external work.
+- Added mode-specific `Trending on Goodreads` and `Popular on Goodreads` rails
+  from the public weekly/monthly Most Read charts, mapped to exact covered Open
+  Library works and deduplicated across rails.
+- Kept Goodreads discovery entirely stale-while-revalidate with one guarded
+  background worker, six-hour freshness, 30-day fallback, a 15-minute failure
+  cache, strict host/path checks, bounded HTML, and an environment kill switch.
+- Added parser, identity, stale-cache, cache-only endpoint, and surface coverage
+  tests plus health visibility for Goodreads discovery refreshes.
+
 ## 2026-08-29 - In-page reader reviews
 
 - Added a responsive Reviews section to canonical book pages with a Goodreads
@@ -14,6 +30,10 @@
 - Added exact title/author validation, derivative-page rejection, spoiler
   filtering, strict Goodreads URL validation, bounded response sizes, request
   spacing, timeouts, a circuit breaker, and a kill switch.
+- Made review cards a horizontally scrollable, snap-aligned shelf on desktop
+  and mobile, with keyboard access and a partial-card cue on narrow screens.
+- Added a compact star cue to editorial verdicts such as Rave and Positive and
+  to otherwise unrated excerpts, so every review card has a visual rating cue.
 
 ## 2026-08-29 - Fiction discovery quality and browse polish
 

@@ -1776,6 +1776,26 @@
         authorNode.textContent = truncate(author, 70);
         contentNode.appendChild(authorNode);
       }
+      const reception = details?.reception || {
+        average: Number(card.dataset.ratingAverage) || 0,
+        ratings_count: Number(card.dataset.ratingsCount) || 0,
+        source: card.dataset.ratingSource || '',
+      };
+      const ratingAverage = Number(reception?.average) || 0;
+      const ratingsCount = Number(reception?.ratings_count) || 0;
+      const minimumRatings = reception?.source === 'Goodreads' ? 20 : 5;
+      if (ratingAverage >= 1 && ratingAverage <= 5 && ratingsCount >= minimumRatings) {
+        const ratingNode = document.createElement('div');
+        ratingNode.className = 'quick-peek-rating';
+        const starNode = document.createElement('span');
+        starNode.className = 'book-rating-star';
+        starNode.setAttribute('aria-hidden', 'true');
+        starNode.textContent = '★';
+        const ratingText = document.createElement('span');
+        ratingText.textContent = ratingAverage.toFixed(1) + (reception.source ? ' · ' + reception.source : '');
+        ratingNode.append(starNode, ratingText);
+        contentNode.appendChild(ratingNode);
+      }
 
       const descriptionWrap = document.createElement('div');
       descriptionWrap.className = 'quick-peek-description';
@@ -2126,6 +2146,171 @@
       quickPeekWarmBudget = 6;
       registerQuickPeekCards();
     });
+  })();
+
+  (() => {
+    const summaryCache = window.LibFlixRatingSummaryCache || new Map();
+    window.LibFlixRatingSummaryCache = summaryCache;
+    const cardsByKey = new Map();
+    const queuedKeys = new Set();
+    const registeredCards = new WeakSet();
+    let requestActive = false;
+    let idleHandle = null;
+
+    const pageLang = () => document.documentElement.lang === 'zh' ? 'cn' : 'en';
+    const compactCount = value => {
+      const count = Math.max(0, Number(value) || 0);
+      if (count >= 1000000) return (count / 1000000).toFixed(count >= 10000000 ? 0 : 1).replace('.0', '') + 'm';
+      if (count >= 1000) return (count / 1000).toFixed(count >= 100000 ? 0 : 1).replace('.0', '') + 'k';
+      return String(Math.round(count));
+    };
+    const cardSummary = card => ({
+      average: Number(card?.dataset.ratingAverage) || 0,
+      ratings_count: Number(card?.dataset.ratingsCount) || 0,
+      source: String(card?.dataset.ratingSource || ''),
+      url: String(card?.dataset.ratingUrl || ''),
+    });
+    const ratingLabel = summary => {
+      const source = summary.source || 'reader ratings';
+      return `${Number(summary.average).toFixed(1)} out of 5 on ${source}, ${compactCount(summary.ratings_count)} ratings`;
+    };
+    const renderBadge = card => {
+      if (!card?.isConnected) return;
+      const summary = cardSummary(card);
+      const minimumRatings = summary.source === 'Goodreads' ? 20 : 5;
+      const valid = summary.average >= 1 && summary.average <= 5 && summary.ratings_count >= minimumRatings;
+      const existing = card.querySelector(':scope > .book-rating-badge');
+      if (!valid) {
+        existing?.remove();
+        return;
+      }
+      const badge = existing || document.createElement('span');
+      badge.className = 'book-rating-badge';
+      badge.setAttribute('aria-hidden', 'true');
+      badge.title = ratingLabel(summary);
+      badge.innerHTML = '<span class="book-rating-star">★</span><span>' + summary.average.toFixed(1) + '</span>';
+      if (!existing) card.appendChild(badge);
+    };
+    const applySummary = (card, summary) => {
+      if (!card || !summary) return;
+      const current = cardSummary(card);
+      if (current.source === 'Goodreads' && summary.source !== 'Goodreads') return;
+      card.dataset.ratingAverage = String(Number(summary.average) || 0);
+      card.dataset.ratingsCount = String(Number(summary.ratings_count) || 0);
+      card.dataset.ratingSource = String(summary.source || '');
+      card.dataset.ratingUrl = String(summary.url || '');
+      renderBadge(card);
+    };
+    const updateCards = (olKey, summary) => {
+      const cards = cardsByKey.get(olKey);
+      if (!cards) return;
+      cards.forEach(card => {
+        if (!card.isConnected) cards.delete(card);
+        else if (summary) applySummary(card, summary);
+      });
+      if (!cards.size) cardsByKey.delete(olKey);
+    };
+    const connectionAllowsFetch = () => {
+      const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+      return !connection?.saveData && !String(connection?.effectiveType || '').includes('2g');
+    };
+    const flush = () => {
+      idleHandle = null;
+      if (requestActive || !queuedKeys.size || !connectionAllowsFetch()) return;
+      const keys = Array.from(queuedKeys).slice(0, 24);
+      keys.forEach(key => queuedKeys.delete(key));
+      const params = new URLSearchParams({ book_lang: pageLang() });
+      keys.forEach(key => params.append('ol_key', key));
+      requestActive = true;
+      fetch('/api/reception-summaries?' + params.toString(), {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' },
+      })
+        .then(response => response.ok ? response.json() : Promise.reject(new Error('rating summary unavailable')))
+        .then(data => {
+          const ratings = data.success ? (data.ratings || {}) : {};
+          keys.forEach(key => {
+            const cacheKey = pageLang() + ':' + key;
+            const summary = ratings[key] || null;
+            summaryCache.set(cacheKey, summary);
+            updateCards(key, summary);
+          });
+        })
+        .catch(() => {})
+        .finally(() => {
+          requestActive = false;
+          if (queuedKeys.size) scheduleFlush();
+        });
+    };
+    const scheduleFlush = () => {
+      if (idleHandle !== null || requestActive || !queuedKeys.size) return;
+      const queue = () => {
+        if ('requestIdleCallback' in window) idleHandle = window.requestIdleCallback(flush, { timeout: 1400 });
+        else idleHandle = window.setTimeout(flush, 700);
+      };
+      if (document.readyState === 'complete') queue();
+      else {
+        idleHandle = -1;
+        window.addEventListener('load', queue, { once: true });
+      }
+    };
+    const queueCard = card => {
+      const olKey = card?.dataset.olKey || '';
+      if (!/^\/works\/OL\d+W$/.test(olKey) || card.dataset.ratingSource === 'Goodreads') return;
+      const cacheKey = pageLang() + ':' + olKey;
+      if (summaryCache.has(cacheKey)) {
+        applySummary(card, summaryCache.get(cacheKey));
+        return;
+      }
+      queuedKeys.add(olKey);
+      scheduleFlush();
+    };
+    const observer = 'IntersectionObserver' in window
+      ? new IntersectionObserver(entries => {
+          entries.forEach(entry => {
+            if (!entry.isIntersecting) return;
+            observer.unobserve(entry.target);
+            queueCard(entry.target);
+          });
+        }, { rootMargin: '240px' })
+      : null;
+    const registerCard = card => {
+      if (!card || registeredCards.has(card)) return;
+      registeredCards.add(card);
+      const olKey = card.dataset.olKey || '';
+      if (/^\/works\/OL\d+W$/.test(olKey)) {
+        if (!cardsByKey.has(olKey)) cardsByKey.set(olKey, new Set());
+        cardsByKey.get(olKey).add(card);
+      }
+      renderBadge(card);
+      if (observer) observer.observe(card);
+      else queueCard(card);
+    };
+    const register = (root = document) => {
+      if (root.matches?.('.book-card')) registerCard(root);
+      root.querySelectorAll?.('.book-card').forEach(registerCard);
+    };
+    const applyBook = (card, book = {}) => {
+      if (!card) return;
+      card.dataset.ratingAverage = String(book.rating_average || 0);
+      card.dataset.ratingsCount = String(book.ratings_count || 0);
+      card.dataset.ratingSource = String(book.rating_source || '');
+      card.dataset.ratingUrl = String(book.rating_url || '');
+      registerCard(card);
+    };
+
+    window.LibFlixRatings = { register, applyBook };
+    const start = () => {
+      register(document);
+      new MutationObserver(mutations => {
+        mutations.forEach(mutation => mutation.addedNodes.forEach(node => {
+          if (node.nodeType === Node.ELEMENT_NODE) register(node);
+        }));
+      }).observe(document.body, { childList: true, subtree: true });
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start, { once: true });
+    else start();
+    window.addEventListener('libflix:navigated', () => register(document));
   })();
 
   (() => {

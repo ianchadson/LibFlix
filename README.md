@@ -45,7 +45,10 @@ supplements broad-topic searches with public semantic metadata, and Wikipedia's
 current and previous year pages provide the optional NYT number-one signal.
 Book pages can also show cached public Goodreads ratings and short attributed
 Goodreads or Book Marks excerpts, with Open Library ratings as the reliable
-fallback.
+fallback. Browse cards expose aggregate ratings from their existing catalog
+payload and quietly upgrade to a cached Goodreads aggregate when one already
+exists; they never start a review-source request. Mode-specific Goodreads Most
+Read signals also supply cached weekly and monthly homepage rails.
 
 ## Screenshots
 
@@ -180,6 +183,11 @@ fallback.
   current and previous-year books with reader activity; the latter is bounded
   to works with a median length of 220 pages or fewer. Neither rail is
   personalized.
+- **Goodreads discovery rails** - English fiction and non-fiction homepages can
+  add `Trending on Goodreads` and `Popular on Goodreads` from the public weekly
+  and monthly Most Read charts. The rails are mapped back to exact Open Library
+  works, deduplicated, and served only from local cache; a cold or failed source
+  never delays the homepage.
 - **Top 10 treatment** - the first ten Trending books receive large rank
   numerals without changing the underlying canonical work order.
 - **Progressively hydrated shelves** - the homepage sends stable shelf skeletons
@@ -208,6 +216,10 @@ fallback.
   metadata while missing details refresh asynchronously. Scrolling dismisses
   the preview and requires fresh pointer intent, preventing it from jumping
   between books passing under a stationary cursor.
+- **Rating at a glance** - homepage, category, discovery, and similar-book cards
+  show a compact aggregate score when one is already available. Near-viewport
+  cards are upgraded in one idle, cache-only batch, and Quick Look reuses the
+  same summary without a second provider request.
 
 ### Category Pages
 
@@ -445,6 +457,9 @@ fallback.
 | `LIBFLIX_OL_REFRESH_PENDING_LIMIT` | `12` | Maximum active and queued stale Open Library refreshes per worker |
 | `LIBFLIX_INVENTAIRE_REFRESH_PENDING_LIMIT` | `12` | Maximum active and queued stale Inventaire refreshes per worker |
 | `LIBFLIX_GOODREADS_REVIEWS` | `1` | Enable best-effort Goodreads rating and excerpt enrichment |
+| `LIBFLIX_GOODREADS_DISCOVERY` | `1` | Enable cache-backed Goodreads weekly/monthly homepage rails |
+| `LIBFLIX_GOODREADS_DISCOVERY_TTL` | `21600` | Fresh lifetime for Goodreads discovery rails |
+| `LIBFLIX_GOODREADS_DISCOVERY_STALE_TTL` | `2592000` | Maximum stale lifetime for Goodreads discovery rails |
 | `LIBFLIX_BOOK_RECEPTION_TTL` | `604800` | Fresh lifetime for a successful Reviews payload |
 | `LIBFLIX_BOOK_RECEPTION_STALE_TTL` | `7776000` | Maximum stale Reviews fallback lifetime |
 | `KINDLE_SOURCE_CACHE_TTL` | `86400` seconds | Idle lifetime for a verified EPUB/PDF source copy |

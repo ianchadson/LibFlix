@@ -93,7 +93,13 @@
       </div>
       <div class="reviews-content" id="reviewsContent" hidden>
         <div class="reviews-summary" id="reviewsSummary"></div>
-        <div class="review-grid" id="reviewGrid"></div>
+        <div
+          class="review-grid"
+          id="reviewGrid"
+          role="region"
+          aria-label="Reader review excerpts"
+          tabindex="0"
+        ></div>
       </div>
     </section>
 
@@ -236,6 +242,24 @@
       }).join('')}</span>`;
     }
 
+    function reviewRatingCue(review, reviewSourceName) {
+      const rating = Number(review?.rating) || 0;
+      if (rating > 0) return ratingStars(rating);
+
+      const sentiment = String(review?.sentiment || '').trim();
+      const normalized = sentiment.toLowerCase();
+      const tone = ['rave', 'positive', 'mixed', 'pan'].includes(normalized)
+        ? normalized
+        : 'unrated';
+      const label = sentiment || (reviewSourceName === 'Goodreads' ? 'Reader review' : 'Review');
+      return `
+        <span class="review-sentiment is-${tone}" aria-label="${escapeHtml(label)}">
+          <span class="review-sentiment-icon" aria-hidden="true">★</span>
+          <span>${escapeHtml(label)}</span>
+        </span>
+      `;
+    }
+
     function hideReviewsSection() {
       const section = document.getElementById('reviewsSection');
       if (section) section.hidden = true;
@@ -288,12 +312,11 @@
       grid.innerHTML = reviews.map(review => {
         const reviewUrl = safeReceptionUrl(review.url || sourceUrl);
         const reviewer = escapeHtml(review.reviewer || 'Goodreads reader');
-        const sentiment = String(review.sentiment || '').trim();
         const reviewSourceName = String(review.source || reviewsSource?.source || 'source');
         const reviewLinkLabel = reviewSourceName === 'Goodreads' ? 'Full review' : 'Source';
         return `
           <article class="review-card">
-            ${review.rating ? ratingStars(review.rating) : (sentiment ? `<span class="review-sentiment">${escapeHtml(sentiment)}</span>` : '')}
+            ${reviewRatingCue(review, reviewSourceName)}
             <blockquote>${escapeHtml(review.excerpt || '')}</blockquote>
             <footer>
               <cite>${reviewer}</cite>
@@ -844,7 +867,7 @@
             const cover = book.cover_url
               ? '<div class="cover-skeleton"></div><img data-cover-src="' + escapeHtml(book.cover_url) + '" alt="' + title + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="placeholder" hidden aria-label="No cover available"></div>'
               : '<div class="placeholder" aria-label="No cover available"></div>';
-            return '<a href="' + href + '" class="book-card-link"><div class="book-card' + (book.cover_url ? '' : ' no-cover') + '" data-ol-key="' + escapeHtml(book.ol_key || '') + '" data-title="' + title + '" data-author="' + author + '">' + cover + '<div class="info"><div class="t">' + title + '</div>' + (author ? '<div class="a">' + author + '</div>' : '') + '</div></div></a>';
+            return '<a href="' + href + '" class="book-card-link"><div class="book-card' + (book.cover_url ? '' : ' no-cover') + '" data-ol-key="' + escapeHtml(book.ol_key || '') + '" data-title="' + title + '" data-author="' + author + '" data-rating-average="' + escapeHtml(String(book.rating_average || 0)) + '" data-ratings-count="' + escapeHtml(String(book.ratings_count || 0)) + '" data-rating-source="' + escapeHtml(book.rating_source || '') + '" data-rating-url="' + escapeHtml(book.rating_url || '') + '">' + cover + '<div class="info"><div class="t">' + title + '</div>' + (author ? '<div class="a">' + author + '</div>' : '') + '</div></div></a>';
           }).join('');
           const row = document.getElementById('similarRow');
           showSimilarSection();
