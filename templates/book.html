@@ -103,6 +103,7 @@
 
     <section class="similar-section" id="similarSection" aria-labelledby="similarHeading">
       <h2 class="shelf-title" id="similarHeading">More Like This</h2>
+      <div class="similar-intents" id="similarIntents" role="tablist" aria-label="Recommendation type" hidden></div>
       <div class="shelf-row" id="similarRow" aria-live="polite" aria-busy="true">
         <div class="similar-loading" role="status">
           <div class="spinner-book" aria-hidden="true"></div>
@@ -203,6 +204,8 @@
     let similarResultsRendered = false;
     let similarResultsPartial = false;
     let similarRenderSignature = '';
+    let similarGroups = [];
+    let activeSimilarIntent = 'themes';
 
     function escapeHtml(value) {
       return window.LibFlixDownloads.escapeHtml(value);
@@ -270,7 +273,12 @@
       const summary = document.getElementById('reviewsSummary');
       const grid = document.getElementById('reviewGrid');
       const sourceLink = document.getElementById('reviewsSourceLink');
-      const rating = data?.rating || null;
+      const sourceRatings = (Array.isArray(data?.source_ratings) ? data.source_ratings : [
+        data?.rating,
+        ...(Array.isArray(data?.other_ratings) ? data.other_ratings : []),
+      ]).filter(item => item?.average && item?.ratings_count && item?.source);
+      const preferredSource = String(data?.rating?.source || '');
+      const rating = sourceRatings.find(item => item.source === preferredSource) || sourceRatings[0] || null;
       const reviews = Array.isArray(data?.reviews) ? data.reviews.slice(0, 3) : [];
       if (!section || (!rating && !reviews.length)) {
         hideReviewsSection();
@@ -290,8 +298,8 @@
         const countLabel = rating.ratings_count
           ? `${compactReviewCount(rating.ratings_count)} ratings`
           : 'Reader rating';
-        const otherRatings = (Array.isArray(data.other_ratings) ? data.other_ratings : [])
-          .filter(item => item?.average && item?.source)
+        const otherRatings = sourceRatings
+          .filter(item => item.source !== rating.source)
           .map(item => `<span>${escapeHtml(item.source)} ${Number(item.average).toFixed(2)} · ${compactReviewCount(item.ratings_count)} ratings</span>`)
           .join('');
         summary.innerHTML = `
@@ -327,6 +335,9 @@
       loading.hidden = true;
       content.hidden = false;
       section.setAttribute('aria-busy', 'false');
+      if (window.location.hash === '#reviewsSection') {
+        window.requestAnimationFrame(() => section.scrollIntoView({ block: 'start' }));
+      }
     }
 
     function scheduleReceptionRetry() {
@@ -723,6 +734,7 @@
     function hideSimilarSection() {
       document.getElementById('similarSection').hidden = true;
       document.getElementById('similarRow').setAttribute('aria-busy', 'false');
+      document.getElementById('similarIntents').hidden = true;
       similarRetryDeadline = 0;
       if (similarRetryTimer) window.clearTimeout(similarRetryTimer);
       similarRetryTimer = null;
@@ -731,6 +743,7 @@
     function renderSimilarLoading(force = false) {
       const row = document.getElementById('similarRow');
       showSimilarSection();
+      document.getElementById('similarIntents').hidden = true;
       row.setAttribute('aria-busy', 'true');
       if (!force && row.querySelector('.book-card-link, .similar-loading')) return;
       row.innerHTML = '<div class="similar-loading" role="status"><div class="spinner-book" aria-hidden="true"></div><span>Finding similar books…</span></div>';
@@ -739,6 +752,7 @@
     function renderSimilarRetry(message) {
       const row = document.getElementById('similarRow');
       showSimilarSection();
+      document.getElementById('similarIntents').hidden = true;
       row.setAttribute('aria-busy', 'false');
       row.innerHTML = '<div class="similar-retry" role="status"><span>' + escapeHtml(message) + '</span><button class="download-retry" type="button">Try again</button></div>';
       row.querySelector('button').addEventListener('click', () => {
@@ -786,6 +800,90 @@
       if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
       const retryAt = Date.parse(value);
       return Number.isFinite(retryAt) ? Math.max(0, retryAt - Date.now()) : 0;
+    }
+
+    function recommendationGroupsFromPayload(data) {
+      const books = Array.isArray(data?.books) ? data.books : [];
+      const booksByKey = new Map(books.map(book => [String(book.ol_key || ''), book]));
+      const groups = (Array.isArray(data?.recommendation_groups) ? data.recommendation_groups : [])
+        .map(group => ({
+          id: String(group?.id || ''),
+          label: String(group?.label || ''),
+          books: (Array.isArray(group?.items) ? group.items : [])
+            .map(item => {
+              const book = booksByKey.get(String(item?.ol_key || ''));
+              return book ? { ...book, recommendation_reason: String(item?.reason || '') } : null;
+            })
+            .filter(Boolean),
+        }))
+        .filter(group => group.id && group.label && group.books.length);
+      if (groups.length) return groups;
+      return books.length ? [{ id: 'themes', label: 'Similar themes', books }] : [];
+    }
+
+    function similarBookMarkup(book) {
+      const href = bookUrl(book);
+      const title = escapeHtml(book.title || 'Untitled');
+      const author = escapeHtml(book.author || '');
+      const reason = escapeHtml(book.recommendation_reason || 'Similar themes');
+      const cover = book.cover_url
+        ? '<div class="cover-skeleton"></div><img data-cover-src="' + escapeHtml(book.cover_url) + '" alt="' + title + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="placeholder" hidden aria-label="No cover available"></div>'
+        : '<div class="placeholder" aria-label="No cover available"></div>';
+      return '<a href="' + href + '" class="book-card-link"><div class="book-card' + (book.cover_url ? '' : ' no-cover') + '" data-ol-key="' + escapeHtml(book.ol_key || '') + '" data-title="' + title + '" data-author="' + author + '" data-recommendation-reason="' + reason + '" data-rating-average="' + escapeHtml(String(book.rating_average || 0)) + '" data-ratings-count="' + escapeHtml(String(book.ratings_count || 0)) + '" data-rating-source="' + escapeHtml(book.rating_source || '') + '" data-rating-url="' + escapeHtml(book.rating_url || '') + '">' + cover + '<div class="info"><div class="t">' + title + '</div>' + (author ? '<div class="a">' + author + '</div>' : '') + '</div></div></a>';
+    }
+
+    function renderActiveSimilarIntent(focusTab = false) {
+      const group = similarGroups.find(item => item.id === activeSimilarIntent) || similarGroups[0];
+      if (!group) {
+        hideSimilarSection();
+        return;
+      }
+      activeSimilarIntent = group.id;
+      const row = document.getElementById('similarRow');
+      row.innerHTML = group.books.map(similarBookMarkup).join('');
+      row.setAttribute('aria-busy', 'false');
+      row.scrollLeft = 0;
+      document.querySelectorAll('#similarIntents .similar-intent').forEach(button => {
+        const selected = button.dataset.intent === activeSimilarIntent;
+        button.setAttribute('aria-selected', String(selected));
+        button.tabIndex = selected ? 0 : -1;
+        if (selected && focusTab) button.focus();
+      });
+      window.LibFlixCoverLoader?.register(row);
+      window.LibFlixCoverRecovery?.register(row);
+      window.LibFlixRatings?.register(row);
+    }
+
+    function renderSimilarGroups(data) {
+      similarGroups = recommendationGroupsFromPayload(data);
+      if (!similarGroups.some(group => group.id === activeSimilarIntent)) {
+        activeSimilarIntent = similarGroups[0]?.id || 'themes';
+      }
+      const intents = document.getElementById('similarIntents');
+      intents.hidden = similarGroups.length <= 1;
+      intents.innerHTML = similarGroups.map(group => (
+        '<button class="similar-intent" id="similar-intent-' + escapeHtml(group.id) + '" type="button" role="tab" aria-controls="similarRow" aria-selected="' + String(group.id === activeSimilarIntent) + '" tabindex="' + (group.id === activeSimilarIntent ? '0' : '-1') + '" data-intent="' + escapeHtml(group.id) + '">' + escapeHtml(group.label) + '</button>'
+      )).join('');
+      intents.querySelectorAll('.similar-intent').forEach(button => {
+        button.addEventListener('click', () => {
+          activeSimilarIntent = button.dataset.intent;
+          renderActiveSimilarIntent();
+        });
+        button.addEventListener('keydown', event => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault();
+          const buttons = Array.from(intents.querySelectorAll('.similar-intent'));
+          const current = buttons.indexOf(button);
+          const next = event.key === 'Home'
+            ? 0
+            : event.key === 'End'
+              ? buttons.length - 1
+              : (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+          activeSimilarIntent = buttons[next].dataset.intent;
+          renderActiveSimilarIntent(true);
+        });
+      });
+      renderActiveSimilarIntent();
     }
 
     function fetchSimilar(subjects) {
@@ -851,31 +949,24 @@
             hideSimilarSection();
             return;
           }
-          const nextRenderSignature = data.books.map(book => book.ol_key || (book.title + '|' + book.author)).join('|');
+          const nextRenderSignature = JSON.stringify({
+            books: data.books.map(book => book.ol_key || (book.title + '|' + book.author)),
+            groups: (data.recommendation_groups || []).map(group => [
+              group.id,
+              (group.items || []).map(item => item.ol_key + ':' + item.reason),
+            ]),
+          });
           const isPartial = Boolean(data.partial || data.refreshing);
           if (nextRenderSignature === similarRenderSignature && isPartial) {
             similarResultsRendered = true;
             similarResultsPartial = true;
             if (scheduleSimilarRetry()) return;
           }
-          const html = data.books.map(book => {
-            const href = bookUrl(book);
-            const title = escapeHtml(book.title || 'Untitled');
-            const author = escapeHtml(book.author || '');
-            const cover = book.cover_url
-              ? '<div class="cover-skeleton"></div><img data-cover-src="' + escapeHtml(book.cover_url) + '" alt="' + title + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onload="this.classList.add(\'loaded\')" onerror="this.hidden=true;this.nextElementSibling.hidden=false"><div class="placeholder" hidden aria-label="No cover available"></div>'
-              : '<div class="placeholder" aria-label="No cover available"></div>';
-            return '<a href="' + href + '" class="book-card-link"><div class="book-card' + (book.cover_url ? '' : ' no-cover') + '" data-ol-key="' + escapeHtml(book.ol_key || '') + '" data-title="' + title + '" data-author="' + author + '" data-rating-average="' + escapeHtml(String(book.rating_average || 0)) + '" data-ratings-count="' + escapeHtml(String(book.ratings_count || 0)) + '" data-rating-source="' + escapeHtml(book.rating_source || '') + '" data-rating-url="' + escapeHtml(book.rating_url || '') + '">' + cover + '<div class="info"><div class="t">' + title + '</div>' + (author ? '<div class="a">' + author + '</div>' : '') + '</div></div></a>';
-          }).join('');
-          const row = document.getElementById('similarRow');
           showSimilarSection();
-          row.setAttribute('aria-busy', 'false');
-          row.innerHTML = html;
+          renderSimilarGroups(data);
           similarResultsRendered = true;
           similarResultsPartial = isPartial;
           similarRenderSignature = nextRenderSignature;
-          window.LibFlixCoverLoader?.register(row);
-          window.LibFlixCoverRecovery?.register(row);
           if (isPartial) {
             scheduleSimilarRetry();
           } else {
@@ -1099,7 +1190,10 @@
     };
 
     const reviewsSection = document.getElementById('reviewsSection');
-    if ('IntersectionObserver' in window && reviewsSection) {
+    const reviewsRequestedByFragment = window.location.hash === '#reviewsSection';
+    if (reviewsRequestedByFragment) {
+      loadBookReception();
+    } else if ('IntersectionObserver' in window && reviewsSection) {
       receptionObserver = new IntersectionObserver(entries => {
         if (!entries.some(entry => entry.isIntersecting)) return;
         receptionObserver.disconnect();
