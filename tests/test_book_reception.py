@@ -141,6 +141,39 @@ class GoodreadsParserTests(unittest.TestCase):
 
 
 class ReceptionAssemblyTests(unittest.TestCase):
+    def test_bayesian_score_does_not_let_small_perfect_sample_outrank_consensus(self):
+        small_sample = app.bayesian_rating_score(5.0, 12)
+        broad_consensus = app.bayesian_rating_score(4.5, 80000)
+
+        self.assertLess(small_sample, broad_consensus)
+
+    def test_fresh_provider_rating_precedes_stale_cached_sources(self):
+        payload = {
+            "success": True,
+            "rating": {
+                "source": "Goodreads",
+                "average": 4.51,
+                "ratings_count": 1840371,
+            },
+            "other_ratings": [{
+                "source": "Open Library",
+                "average": 4.4,
+                "ratings_count": 12,
+            }],
+            "source_ratings": [{
+                "source": "Open Library",
+                "average": 4.4,
+                "ratings_count": 12,
+            }],
+        }
+
+        ratings = app.source_ratings_from_payload(payload)
+
+        self.assertEqual(
+            [rating["source"] for rating in ratings],
+            ["Goodreads", "Open Library"],
+        )
+
     def test_open_library_rating_is_normalized(self):
         with patch.object(app, "ol_get", return_value={
             "summary": {"average": 4.502793, "count": 179},
@@ -185,6 +218,14 @@ class ReceptionAssemblyTests(unittest.TestCase):
         self.assertTrue(payload["success"])
         self.assertEqual(payload["rating"]["source"], "Goodreads")
         self.assertEqual(payload["other_ratings"][0]["source"], "Open Library")
+        self.assertEqual(
+            [rating["source"] for rating in payload["source_ratings"]],
+            ["Goodreads", "Open Library"],
+        )
+        self.assertEqual(
+            [rating["average"] for rating in payload["source_ratings"]],
+            [4.51, 4.4],
+        )
         self.assertEqual(len(payload["reviews"]), 1)
         self.assertEqual(payload["reviews_source"]["source"], "Goodreads")
 

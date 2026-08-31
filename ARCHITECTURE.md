@@ -229,6 +229,13 @@ challenge, Book Marks can provide bounded professional-review excerpts instead.
 Open Library's ratings endpoint is fetched independently and becomes the primary
 rating source whenever Goodreads is unavailable.
 
+Every successful payload also exposes a `source_ratings` list. Goodreads and
+Open Library retain their own raw average, count, URL, and source identity;
+LibFlix never computes a cross-provider average. A Bayesian confidence score is
+derived separately for ranking so a very small perfect sample cannot outrank a
+large, slightly lower consensus. Display surfaces continue to show only each
+provider's raw value.
+
 Successful payloads are shared through SQLite for seven days and remain usable
 as stale fallback for up to 90 days. Cold refreshes are coalesced and run in a
 two-worker bounded queue. The fast stage publishes Open Library and Book Marks
@@ -662,6 +669,14 @@ catalog corpus. The browser keeps those cards visible while bounded remote
 subject and same-author sources refine the shelf. Generic taxonomy tails such
 as `General` are excluded before source selection, and author matches require
 the displayed primary author rather than incidental contributor metadata.
+Candidate ranking includes a bounded Bayesian rating signal and a small recent-
+publication bonus. Final selection deduplicates work and normalized title
+identities, then caps repeated authors and series. The response keeps `books`
+as the canonical data list and adds lightweight `recommendation_groups` item
+references for Similar themes, Next in series, Shorter alternatives, and
+Recently acclaimed. Switching those intent tabs is entirely client-side and
+does not schedule another provider request; item reasons are exposed only by
+Quick Look.
 
 ### `GET /api/search`
 

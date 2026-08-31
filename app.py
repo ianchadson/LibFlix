@@ -203,6 +203,10 @@ GOODREADS = "https://www.goodreads.com"
 BOOKMARKS_REVIEWS = "https://bookmarks.reviews"
 BOOK_RECEPTION_CACHE_VERSION = 1
 GOODREADS_DISCOVERY_CACHE_VERSION = 1
+RATING_BAYES_PRIOR_MEAN = 3.8
+RATING_BAYES_PRIOR_WEIGHT = 250
+RECOMMENDATION_AUTHOR_CAP = 2
+RECOMMENDATION_SERIES_CAP = 2
 BOOK_RECEPTION_FRESH_TTL = max(
     3600,
     int(os.environ.get("LIBFLIX_BOOK_RECEPTION_TTL", "604800")),
@@ -4399,6 +4403,27 @@ def _goodreads_number(value, integer=False):
     return max(0, int(number)) if integer else max(0.0, number)
 
 
+def bayesian_rating_score(
+    average,
+    ratings_count,
+    prior_mean=RATING_BAYES_PRIOR_MEAN,
+    prior_weight=RATING_BAYES_PRIOR_WEIGHT,
+):
+    """Return a confidence-adjusted score without changing the raw rating."""
+
+    average = min(5.0, max(0.0, _goodreads_number(average)))
+    count = _goodreads_number(ratings_count, integer=True)
+    prior_mean = min(5.0, max(0.0, float(prior_mean)))
+    prior_weight = max(0.0, float(prior_weight))
+    if not average or not count:
+        return 0.0
+    return round(
+        ((average * count) + (prior_mean * prior_weight))
+        / (count + prior_weight),
+        4,
+    )
+
+
 def _goodreads_derivative_penalty(candidate_title, requested_title):
     candidate = normalize_match_text(candidate_title)
     requested = normalize_match_text(requested_title)
@@ -5124,20 +5149,52 @@ def cached_book_reception(work_id, lang, allow_stale=True):
     return None, "miss"
 
 
-def reception_summary_from_payload(payload):
-    """Return the strongest aggregate rating without review text."""
+def source_ratings_from_payload(payload):
+    """Return valid provider aggregates as separate, source-labelled records."""
 
     if not isinstance(payload, dict) or not payload.get("success"):
-        return None
-    ratings = [payload.get("rating"), *(payload.get("other_ratings") or [])]
-    ratings = [
-        rating for rating in ratings
-        if (
-            isinstance(rating, dict)
-            and 1 <= _goodreads_number(rating.get("average")) <= 5
-            and _goodreads_number(rating.get("ratings_count"), integer=True) > 0
-        )
-    ]
+        return []
+    cached_sources = payload.get("source_ratings")
+    candidates = [payload.get("rating"), *(payload.get("other_ratings") or [])]
+    if isinstance(cached_sources, list):
+        candidates.extend(cached_sources)
+    ratings = []
+    seen_sources = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        source = str(candidate.get("source") or "").strip()
+        source_key = source.casefold()
+        average = _goodreads_number(candidate.get("average"))
+        count = _goodreads_number(candidate.get("ratings_count"), integer=True)
+        if not source or source_key in seen_sources or not 1 <= average <= 5 or count < 1:
+            continue
+        seen_sources.add(source_key)
+        ratings.append({
+            "source": source,
+            "average": round(average, 2),
+            "ratings_count": count,
+            "reviews_count": _goodreads_number(
+                candidate.get("reviews_count"),
+                integer=True,
+            ),
+            "url": str(candidate.get("url") or "").strip(),
+        })
+    return ratings
+
+
+def reception_payload_with_source_ratings(payload):
+    if not isinstance(payload, dict):
+        return payload
+    normalized = dict(payload)
+    normalized["source_ratings"] = source_ratings_from_payload(payload)
+    return normalized
+
+
+def reception_summary_from_payload(payload):
+    """Return one raw provider aggregate without averaging across sources."""
+
+    ratings = source_ratings_from_payload(payload)
     rating = next(
         (item for item in ratings if item.get("source") == "Goodreads"),
         ratings[0] if ratings else None,
@@ -5153,6 +5210,7 @@ def reception_summary_from_payload(payload):
         "ratings_count": count,
         "source": str(rating.get("source") or "").strip(),
         "url": str(rating.get("url") or payload.get("source_url") or "").strip(),
+        "confidence_score": bayesian_rating_score(average, count),
     }
 
 
@@ -5262,7 +5320,7 @@ def build_book_reception(work_id, lang, include_goodreads=True):
             primary = openlibrary_rating
     if not primary and not reviews:
         return None
-    return {
+    payload = {
         "success": True,
         "rating": primary,
         "other_ratings": other_ratings,
@@ -5276,6 +5334,8 @@ def build_book_reception(work_id, lang, include_goodreads=True):
         ),
         "fetched_at": int(time.time()),
     }
+    payload["source_ratings"] = source_ratings_from_payload(payload)
+    return payload
 
 
 def _enrich_book_reception_with_goodreads(work_id, lang, cache_key):
@@ -5328,6 +5388,7 @@ def _enrich_book_reception_with_goodreads(work_id, lang, cache_key):
         }
         payload["source_url"] = goodreads.get("url", "")
     payload["fetched_at"] = int(time.time())
+    payload["source_ratings"] = source_ratings_from_payload(payload)
     if payload.get("rating") or payload.get("reviews"):
         cache_set(cache_key, payload)
         disk_cache_set(cache_key, payload)
@@ -7575,13 +7636,174 @@ def book_page(work_id, clean_mode, clean_lang):
         **detail,
     )
 
+def recommendation_freshness_bonus(published_year, current_year=None):
+    try:
+        year = int(published_year or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    current_year = int(current_year or time.gmtime().tm_year)
+    if year < 1000 or year > current_year + 1:
+        return 0.0
+    return round(max(0.0, 20.0 - max(0, current_year - year) * 2.0), 2)
+
+
+def recommendation_series_key(book):
+    explicit = str((book or {}).get("recommendation_series") or "").strip()
+    if explicit:
+        return normalize_match_text(explicit)
+    title = str((book or {}).get("title") or "")
+    match = re.match(
+        r"^(.+?)\s*(?:[\[(]\s*)?(?:book|volume|vol|part)\s*[#.: -]*\d+\b",
+        title,
+        flags=re.IGNORECASE,
+    )
+    return normalize_match_text(match.group(1)) if match else ""
+
+
+def recommendation_title_identity(title):
+    value = re.sub(r"[\[(].*?[\])]", " ", str(title or ""))
+    value = re.sub(
+        r"\b(?:translated|translation|english|chinese|simplified chinese|"
+        r"traditional chinese|international|movie tie-in)\s+edition\b.*$",
+        " ",
+        value,
+        flags=re.IGNORECASE,
+    )
+    return normalize_title(value)
+
+
+def diversify_recommendation_books(
+    books,
+    current_title="",
+    current_authors=None,
+    limit=12,
+):
+    """Select a stable, varied shelf from already-ranked candidates."""
+
+    current_authors = {
+        normalize_author(author)
+        for author in bounded_identity_values(current_authors, limit=6)
+        if normalize_author(author)
+    }
+    current_title_key = recommendation_title_identity(current_title)
+    selected = []
+    seen_work_keys = set()
+    seen_title_keys = {current_title_key} if current_title_key else set()
+    author_counts = {}
+    series_counts = {}
+    for source_book in books or []:
+        book = dict(source_book or {})
+        work_key = str(book.get("ol_key") or "").strip()
+        title_key = recommendation_title_identity(book.get("title"))
+        author_key = normalize_author(book.get("author", ""))
+        series_key = recommendation_series_key(book)
+        if not work_key or work_key in seen_work_keys or not title_key:
+            continue
+        if title_key in seen_title_keys:
+            continue
+        if author_key and author_counts.get(author_key, 0) >= RECOMMENDATION_AUTHOR_CAP:
+            continue
+        if series_key and series_counts.get(series_key, 0) >= RECOMMENDATION_SERIES_CAP:
+            continue
+        if series_key:
+            reason = "Same series"
+        elif author_key and author_key in current_authors:
+            reason = "Same author"
+        else:
+            reason = "Similar themes"
+        book["recommendation_reason"] = reason
+        seen_work_keys.add(work_key)
+        seen_title_keys.add(title_key)
+        if author_key:
+            author_counts[author_key] = author_counts.get(author_key, 0) + 1
+        if series_key:
+            series_counts[series_key] = series_counts.get(series_key, 0) + 1
+        selected.append(book)
+        if len(selected) >= max(1, min(int(limit or 12), 12)):
+            break
+    return selected
+
+
+def build_recommendation_groups(books):
+    """Describe distinct recommendation intents without duplicating book data."""
+
+    books = list(books or [])
+    if not books:
+        return []
+
+    def item(book, reason=None):
+        return {
+            "ol_key": str(book.get("ol_key") or ""),
+            "reason": reason or book.get("recommendation_reason") or "Similar themes",
+        }
+
+    groups = [{
+        "id": "themes",
+        "label": "Similar themes",
+        "items": [item(book) for book in books],
+    }]
+    series = [book for book in books if recommendation_series_key(book)]
+    if series:
+        groups.append({
+            "id": "series",
+            "label": "Next in series",
+            "items": [item(book, "Same series") for book in series],
+        })
+    shorter = sorted(
+        [book for book in books if 0 < _goodreads_number(book.get("pages"), integer=True) <= 220],
+        key=lambda book: _goodreads_number(book.get("pages"), integer=True),
+    )
+    if shorter:
+        groups.append({
+            "id": "shorter",
+            "label": "Shorter alternatives",
+            "items": [item(book, "Shorter read") for book in shorter],
+        })
+    current_year = time.gmtime().tm_year
+    acclaimed = [
+        book for book in books
+        if (
+            recommendation_freshness_bonus(book.get("published_year"), current_year) > 0
+            and _goodreads_number(book.get("ratings_count"), integer=True) >= 25
+            and bayesian_rating_score(
+                book.get("rating_average"),
+                book.get("ratings_count"),
+            ) >= 4.0
+        )
+    ]
+    acclaimed.sort(key=lambda book: (
+        -bayesian_rating_score(book.get("rating_average"), book.get("ratings_count")),
+        -_goodreads_number(book.get("ratings_count"), integer=True),
+        -_goodreads_number(book.get("published_year"), integer=True),
+    ))
+    if acclaimed:
+        groups.append({
+            "id": "acclaimed",
+            "label": "Recently acclaimed",
+            "items": [item(book, "Recently acclaimed") for book in acclaimed],
+        })
+    return groups
+
+
+def recommendation_payload(books, current_title="", current_authors=None):
+    selected = diversify_recommendation_books(
+        books,
+        current_title=current_title,
+        current_authors=current_authors,
+    )
+    return {
+        "books": selected,
+        "recommendation_groups": build_recommendation_groups(selected),
+    }
+
+
 def similar_cache_key(ol_key, subjects, lang, current_title="", current_authors=None):
     normalized = "|".join(sorted(subject.casefold() for subject in subjects))
     identity = "|".join(
         normalize_match_text(value)
         for value in bounded_identity_values([current_title, current_authors], limit=7)
     )
-    return f"similar:v8:{lang}:{ol_key}:{normalized}:{identity}"
+    return f"similar:v9:{lang}:{ol_key}:{normalized}:{identity}"
 
 
 def fetch_inventaire_similar_books(
@@ -7594,12 +7816,20 @@ def fetch_inventaire_similar_books(
     """Build canonical recommendations when Open Library is unavailable."""
     subjects = bounded_identity_values(subjects, limit=2)
     current_authors = bounded_identity_values(current_authors, limit=6)
+    series_label = next((
+        str(subject).split(":", 1)[1].strip()
+        for subject in subjects
+        if str(subject).casefold().startswith("series:") and ":" in str(subject)
+    ), "")
     selected = []
     seen_keys = set()
     seen_titles = {normalize_title(current_title)} if current_title else set()
     complete = True
 
     def append_book(book):
+        book = dict(book)
+        if series_label:
+            book["recommendation_series"] = series_label
         title_key = normalize_title(book.get("title", ""))
         if (
             not book.get("ol_key")
@@ -7709,6 +7939,11 @@ def build_similar_books(
 ):
     subjects = bounded_identity_values(subjects, limit=2)
     current_authors = bounded_identity_values(current_authors, limit=6)
+    series_subjects = {
+        normalize_match_text(subject): str(subject).split(":", 1)[1].strip()
+        for subject in subjects
+        if str(subject).casefold().startswith("series:") and ":" in str(subject)
+    }
 
     def fetch_source(source):
         source_type, value = source
@@ -7756,6 +7991,7 @@ def build_similar_books(
                 "confirmed_subject_matches": 0,
                 "confirmed_specific_subject_matches": 0,
                 "author_source": False,
+                "recommendation_series": "",
                 "order": sequence,
             })
             if key not in seen_in_source:
@@ -7782,6 +8018,8 @@ def build_similar_books(
                             ]) >= 2
                         ):
                             entry["confirmed_specific_subject_matches"] += 1
+                        if source_subject in series_subjects:
+                            entry["recommendation_series"] = series_subjects[source_subject]
                 else:
                     entry["author_source"] = True
                 seen_in_source.add(key)
@@ -7826,6 +8064,14 @@ def build_similar_books(
         entry["primary_author_score"] = primary_author_score
         entry["title_overlap"] = title_overlap
         entry["title_score"] = title_score
+        rating_score = bayesian_rating_score(
+            entry["record"].get("ratings_average"),
+            entry["record"].get("ratings_count"),
+        )
+        rating_bonus = max(0.0, rating_score - 3.5) * 80
+        freshness_bonus = recommendation_freshness_bonus(
+            entry["record"].get("first_publish_year"),
+        )
         return (
             entry["matches"] * 320
             + max(0, primary_author_score) * 2
@@ -7833,6 +8079,8 @@ def build_similar_books(
             + title_overlap * 110
             + max(0, title_score - 600) // 2
             + (100 if entry["author_source"] and primary_author_score >= 180 else 0)
+            + rating_bonus
+            + freshness_bonus
         )
 
     ranked = sorted(
@@ -7845,6 +8093,8 @@ def build_similar_books(
         title_key = normalize_title(book.get("title", ""))
         if not title_key or title_key in seen_titles:
             return False
+        if entry.get("recommendation_series"):
+            book["recommendation_series"] = entry["recommendation_series"]
         seen_titles.add(title_key)
         books.append(book)
         return True
@@ -7860,7 +8110,7 @@ def build_similar_books(
         if not entry["matches"] and entry.get("primary_author_score", 0) < 180:
             continue
         append_candidate(entry)
-        if len(books) >= 12:
+        if len(books) >= 24:
             break
 
     # Preserve the strict intersection/same-author tier above, then fill an
@@ -7874,7 +8124,7 @@ def build_similar_books(
             if len(books) >= 6:
                 break
 
-    if not complete and len(books) < 12:
+    if not complete and len(books) < 24:
         fallback_books, _fallback_complete = fetch_inventaire_similar_books(
             ol_key,
             subjects,
@@ -7892,8 +8142,13 @@ def build_similar_books(
                 continue
             seen_titles.add(title_key)
             books.append(book)
-            if len(books) >= 12:
+            if len(books) >= 24:
                 break
+    books = diversify_recommendation_books(
+        books,
+        current_title=current_title,
+        current_authors=current_authors,
+    )
     return (books, complete) if with_status else books
 
 def similar_empty_cache_key(cache_key):
@@ -7976,8 +8231,17 @@ def local_similar_books(
             + min(float(quality or 0), 45)
             + (55 if book.get("cover_url") else 0)
             + min(title_score, 780) * 0.08
+            + max(
+                0.0,
+                bayesian_rating_score(
+                    record.get("ratings_average"),
+                    record.get("ratings_count"),
+                ) - 3.5,
+            ) * 80
+            + recommendation_freshness_bonus(record.get("first_publish_year"))
         )
-        book["reason"] = "Same author" if primary_author_score >= 180 else specific_subjects[0]
+        if specific_subjects and str(specific_subjects[0]).casefold().startswith("series:"):
+            book["recommendation_series"] = str(specific_subjects[0]).split(":", 1)[1].strip()
         ranked.append((score, book))
 
     selected = []
@@ -7993,7 +8257,12 @@ def local_similar_books(
         selected.append(book)
         if len(selected) >= max(1, min(int(limit or 12), 12)):
             break
-    return canonicalize_book_covers(selected)
+    return canonicalize_book_covers(diversify_recommendation_books(
+        selected,
+        current_title=current_title,
+        current_authors=current_authors,
+        limit=limit,
+    ))
 
 def _refresh_similar_books(
     cache_key,
@@ -8012,13 +8281,18 @@ def _refresh_similar_books(
             current_authors=current_authors,
             with_status=True,
         )
+        recommendations = recommendation_payload(
+            books,
+            current_title=current_title,
+            current_authors=current_authors,
+        )
         payload = {
             "success": True,
-            "books": books,
+            **recommendations,
             "refreshing": not complete,
             "partial": not complete,
         }
-        if complete and books:
+        if complete and recommendations["books"]:
             cache_set(cache_key, payload)
             disk_cache_set(cache_key, payload)
         elif complete:
@@ -8135,9 +8409,14 @@ def api_similar():
     add_server_timing("similar", duration=0, description="background")
     g.cache_control_override = "private, max-age=2"
     if local_books:
+        recommendations = recommendation_payload(
+            local_books,
+            current_title=current_title,
+            current_authors=current_authors,
+        )
         payload = {
             "success": True,
-            "books": local_books,
+            **recommendations,
             "refreshing": True,
             "partial": True,
         }
@@ -8158,7 +8437,7 @@ def api_book_reception():
     lang = normalize_book_lang(request.args.get("book_lang")) or get_book_lang()
     payload, cache_state = cached_book_reception(work_id, lang)
     if payload and cache_state != "stale":
-        response_payload = dict(payload)
+        response_payload = reception_payload_with_source_ratings(payload)
         response_payload.update({"cache": cache_state, "refreshing": False})
         add_server_timing("book-reception", duration=0, description=cache_state)
         return jsonify(response_payload)
@@ -8171,7 +8450,7 @@ def api_book_reception():
         refreshing = scheduled or cache_key in BOOK_RECEPTION_REFRESHING
 
     if payload:
-        response_payload = dict(payload)
+        response_payload = reception_payload_with_source_ratings(payload)
         response_payload.update({"cache": "stale", "refreshing": refreshing})
         add_server_timing("book-reception", duration=0, description="stale")
         return jsonify(response_payload)

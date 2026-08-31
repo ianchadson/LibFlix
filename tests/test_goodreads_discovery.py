@@ -153,6 +153,32 @@ class ReviewSummaryContractTests(unittest.TestCase):
 
         self.assertEqual(summary["source"], "Goodreads")
         self.assertEqual(summary["average"], 4.5)
+        self.assertGreater(summary["confidence_score"], 0)
+
+    def test_source_ratings_are_never_averaged_together(self):
+        payload = {
+            "success": True,
+            "rating": {
+                "source": "Goodreads",
+                "average": 4.8,
+                "ratings_count": 40,
+                "url": "https://www.goodreads.com/book/show/1",
+            },
+            "other_ratings": [{
+                "source": "Open Library",
+                "average": 3.6,
+                "ratings_count": 120,
+                "url": "https://openlibrary.org/works/OL1W",
+            }],
+        }
+
+        ratings = app.source_ratings_from_payload(payload)
+
+        self.assertEqual([rating["source"] for rating in ratings], [
+            "Goodreads", "Open Library",
+        ])
+        self.assertEqual([rating["average"] for rating in ratings], [4.8, 3.6])
+        self.assertNotIn("average", app.reception_payload_with_source_ratings(payload))
 
     def test_invalid_goodreads_summary_falls_back_to_open_library(self):
         payload = {
@@ -189,12 +215,23 @@ class ReviewSurfaceTemplateTests(unittest.TestCase):
         self.assertIn("/api/reception-summaries?", navbar)
         self.assertIn("requestIdleCallback", navbar)
         self.assertIn("window.LibFlixRatings", navbar)
+        self.assertNotIn("data-review-jump", navbar)
+        self.assertNotIn("Open reviews", navbar)
         self.assertIn("goodreads_shelves", homepage)
         self.assertIn("data-goodreads-shelf", homepage)
         self.assertIn("shelf-source-link", homepage)
         for template in (category, discovery, book_page):
             self.assertIn("data-rating-average", template)
             self.assertIn("data-ratings-count", template)
+
+    def test_similar_books_expose_intents_and_hover_only_reasons(self):
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+        book_page = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+
+        self.assertIn('id="similarIntents"', book_page)
+        self.assertIn("recommendation_groups", book_page)
+        self.assertIn("data-recommendation-reason", book_page)
+        self.assertIn("card.dataset.recommendationReason", navbar)
 
 
 if __name__ == "__main__":

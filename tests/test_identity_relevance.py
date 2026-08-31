@@ -638,7 +638,8 @@ class SimilarBookRelevanceTests(unittest.TestCase):
             )
 
         self.assertFalse(complete)
-        self.assertEqual(books, [fallback])
+        self.assertEqual([book["ol_key"] for book in books], [fallback["ol_key"]])
+        self.assertEqual(books[0]["recommendation_reason"], "Same author")
         inventaire.assert_called_once()
 
     def test_api_similar_accepts_author_only_seed(self):
@@ -688,7 +689,9 @@ class SimilarBookRelevanceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(payload["partial"])
         self.assertTrue(payload["refreshing"])
-        self.assertEqual(payload["books"], [local_book])
+        self.assertEqual(payload["books"][0]["ol_key"], local_book["ol_key"])
+        self.assertEqual(payload["books"][0]["recommendation_reason"], "Same author")
+        self.assertEqual(payload["recommendation_groups"][0]["id"], "themes")
         local.assert_called_once()
         refresh.assert_called_once()
 
@@ -701,7 +704,82 @@ class SimilarBookRelevanceTests(unittest.TestCase):
             ["Henry Kissinger"],
         )
 
-        self.assertTrue(cache_key.startswith("similar:v8:"))
+        self.assertTrue(cache_key.startswith("similar:v9:"))
+
+    def test_recommendation_rank_prefers_broad_consensus_over_small_perfect_score(self):
+        small_sample = self.record(
+            "/works/OL2W", "Small Sample", "First Author", 2
+        )
+        small_sample.update({
+            "subject": ["Artificial intelligence", "Technology and society"],
+            "ratings_average": 5.0,
+            "ratings_count": 12,
+            "first_publish_year": 2024,
+        })
+        broad_consensus = self.record(
+            "/works/OL3W", "Broad Consensus", "Second Author", 3
+        )
+        broad_consensus.update({
+            "subject": ["Artificial intelligence", "Technology and society"],
+            "ratings_average": 4.5,
+            "ratings_count": 80000,
+            "first_publish_year": 2024,
+        })
+
+        with patch.object(
+            app,
+            "ol_get",
+            return_value={"docs": [small_sample, broad_consensus]},
+        ):
+            books = app.build_similar_books(
+                "/works/OL1W",
+                ["Artificial intelligence", "Technology and society"],
+                "en",
+                current_title="A Different Title",
+            )
+
+        self.assertEqual(books[0]["ol_key"], "/works/OL3W")
+
+    def test_recommendation_diversity_deduplicates_works_titles_and_authors(self):
+        books = [
+            {"ol_key": "/works/OL2W", "title": "First", "author": "One Author"},
+            {"ol_key": "/works/OL2W", "title": "First reprint", "author": "One Author"},
+            {"ol_key": "/works/OL3W", "title": "First (Chinese Edition)", "author": "One Author"},
+            {"ol_key": "/works/OL4W", "title": "Second", "author": "One Author"},
+            {"ol_key": "/works/OL5W", "title": "Third", "author": "One Author"},
+            {"ol_key": "/works/OL6W", "title": "Fourth", "author": "Another Author"},
+        ]
+
+        selected = app.diversify_recommendation_books(books)
+
+        self.assertEqual(
+            [book["ol_key"] for book in selected],
+            ["/works/OL2W", "/works/OL4W", "/works/OL6W"],
+        )
+
+    def test_recommendation_groups_separate_series_short_and_acclaimed_intents(self):
+        current_year = app.time.gmtime().tm_year
+        books = [{
+            "ol_key": "/works/OL2W",
+            "title": "Example Series Book 2",
+            "author": "A. Writer",
+            "recommendation_series": "Example Series",
+            "recommendation_reason": "Same series",
+            "pages": 180,
+            "published_year": current_year - 1,
+            "rating_average": 4.6,
+            "ratings_count": 5000,
+        }]
+
+        groups = app.build_recommendation_groups(books)
+
+        self.assertEqual(
+            [group["id"] for group in groups],
+            ["themes", "series", "shorter", "acclaimed"],
+        )
+        self.assertEqual(groups[1]["items"][0]["reason"], "Same series")
+        self.assertEqual(groups[2]["items"][0]["reason"], "Shorter read")
+        self.assertEqual(groups[3]["items"][0]["reason"], "Recently acclaimed")
 
     def test_confirmed_single_subject_candidates_backfill_after_strict_tier(self):
         strict = self.record(
@@ -743,8 +821,9 @@ class SimilarBookRelevanceTests(unittest.TestCase):
 
     def test_single_subject_backfill_does_not_dilute_three_strict_matches(self):
         strict = [
-            self.record(f"/works/OL{index}W", f"Strict {index}", "Author", index)
-            for index in range(2, 5)
+            self.record("/works/OL2W", "Strict 2", "Alpha Writer", 2),
+            self.record("/works/OL3W", "Strict 3", "Beta Writer", 3),
+            self.record("/works/OL4W", "Strict 4", "Gamma Writer", 4),
         ]
         for record in strict:
             record["subject"] = [
@@ -772,9 +851,10 @@ class SimilarBookRelevanceTests(unittest.TestCase):
                 current_authors=["Henry Kissinger"],
             )
 
+        self.assertEqual(len(books), 3)
         self.assertEqual(
-            [book["ol_key"] for book in books],
-            [book["key"] for book in strict],
+            {book["ol_key"] for book in books},
+            {book["key"] for book in strict},
         )
 
     def test_unconfirmed_dual_query_result_is_not_treated_as_related(self):
