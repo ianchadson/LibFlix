@@ -2194,8 +2194,7 @@
       const badge = existing || document.createElement('span');
       badge.className = 'book-rating-badge';
       badge.setAttribute('aria-hidden', 'true');
-      badge.title = ratingLabel(summary) + ' · Open reviews';
-      badge.dataset.reviewJump = 'true';
+      badge.title = ratingLabel(summary);
       badge.innerHTML = '<span class="book-rating-star">★</span><span>' + summary.average.toFixed(1) + '</span>';
       if (!existing) card.appendChild(badge);
     };
@@ -2308,14 +2307,6 @@
     };
 
     window.LibFlixRatings = { register, applyBook };
-    document.addEventListener('click', event => {
-      const badge = event.target.closest?.('.book-rating-badge[data-review-jump="true"]');
-      const link = badge?.closest('a[href]');
-      if (!link?.href) return;
-      const reviewUrl = new URL(link.href, window.location.href);
-      reviewUrl.hash = 'reviewsSection';
-      link.href = reviewUrl.href;
-    }, true);
     const start = () => {
       register(document);
       new MutationObserver(mutations => {

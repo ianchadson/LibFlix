@@ -48,8 +48,7 @@ Goodreads or Book Marks excerpts, with Open Library ratings as the reliable
 fallback. Goodreads and Open Library aggregates remain source-labelled and are
 never averaged together. Browse cards expose aggregate ratings from their existing catalog
 payload and quietly upgrade to a cached Goodreads aggregate when one already
-exists; selecting a card rating opens that book's Reviews section. They never
-start a review-source request. Mode-specific Goodreads Most
+exists; they never start a review-source request. Mode-specific Goodreads Most
 Read signals also supply cached weekly and monthly homepage rails.
 
 ## Screenshots
