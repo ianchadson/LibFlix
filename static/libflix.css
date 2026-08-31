@@ -714,33 +714,37 @@ body:has(.kindle-global-tray:not([hidden])) .app-toast {
 
 .book-rating-badge {
   position: absolute;
-  top: 7px;
-  right: 7px;
+  top: 8px;
+  right: 8px;
   z-index: 5;
-  min-width: 40px;
-  height: 21px;
-  padding: 0 7px;
-  border: 1px solid rgba(255, 255, 255, .12);
+  min-width: 35px;
+  height: 19px;
+  padding: 0 6px;
+  border: 1px solid rgba(255, 255, 255, .09);
   border-radius: 4px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 4px;
-  background: rgba(7, 8, 10, .84);
-  box-shadow: 0 3px 12px rgba(0, 0, 0, .28);
-  color: #f3f3f4;
-  font-size: .66rem;
-  font-weight: 760;
+  gap: 3px;
+  background: rgba(10, 11, 13, .46);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .16);
+  color: #fff;
+  font-size: .61rem;
+  font-weight: 680;
   line-height: 1;
   pointer-events: none;
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, .52);
 }
 
 .book-rating-star {
   color: #ffb34d;
   font-size: .72rem;
   line-height: 1;
+}
+
+.book-rating-badge .book-rating-star {
+  color: #ffb34d;
+  font-size: .64rem;
 }
 
 .quick-peek-rating {
@@ -2035,10 +2039,13 @@ button.edition-recommended {
 }
 
 .reviews-loading {
-  display: grid;
-  grid-template-columns: 184px minmax(0, 1fr);
-  gap: 22px;
-  min-height: 154px;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--app-muted);
+  font-size: .78rem;
+  font-weight: 620;
 }
 
 .reviews-loading[hidden],
@@ -2046,26 +2053,14 @@ button.edition-recommended {
   display: none !important;
 }
 
-.reviews-summary-skeleton,
-.review-skeletons span {
-  border-radius: var(--app-radius);
-  background: linear-gradient(100deg, #15171b 8%, #202329 18%, #15171b 33%);
-  background-size: 220% 100%;
-  animation: coverShimmer 1.2s linear infinite;
-}
-
-.reviews-summary-skeleton {
-  height: 94px;
-}
-
-.review-skeletons {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.review-skeletons span {
-  min-height: 154px;
+.reviews-loading-spinner {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  border: 2px solid rgba(255, 255, 255, .13);
+  border-top-color: rgba(255, 255, 255, .72);
+  border-radius: 50%;
+  animation: appSpin .8s linear infinite;
 }
 
 .reviews-summary {
@@ -2588,20 +2583,6 @@ button.edition-recommended {
 
   .reviews-section {
     padding: 28px 0 36px;
-  }
-
-  .reviews-loading {
-    grid-template-columns: 116px minmax(0, 1fr);
-    gap: 10px;
-    min-height: 132px;
-  }
-
-  .review-skeletons {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .review-skeletons span:last-child {
-    display: none;
   }
 
   .reviews-summary {

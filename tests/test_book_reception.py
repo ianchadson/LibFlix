@@ -315,6 +315,17 @@ class ReceptionTemplateTests(unittest.TestCase):
         self.assertIn("overflow-x: auto", stylesheet)
         self.assertIn("scroll-snap-type: inline proximity", stylesheet)
 
+    def test_review_loader_is_compact_and_does_not_assume_a_card_count(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+        stylesheet = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+
+        self.assertIn('class="reviews-loading-spinner"', template)
+        self.assertIn("Loading reviews", template)
+        self.assertNotIn("review-skeletons", template)
+        self.assertNotIn("reviews-summary-skeleton", template)
+        self.assertIn(".reviews-loading-spinner", stylesheet)
+        self.assertNotIn(".review-skeletons", stylesheet)
+
 
 if __name__ == "__main__":
     unittest.main()
