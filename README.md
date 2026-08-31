@@ -45,9 +45,11 @@ supplements broad-topic searches with public semantic metadata, and Wikipedia's
 current and previous year pages provide the optional NYT number-one signal.
 Book pages can also show cached public Goodreads ratings and short attributed
 Goodreads or Book Marks excerpts, with Open Library ratings as the reliable
-fallback. Browse cards expose aggregate ratings from their existing catalog
+fallback. Goodreads and Open Library aggregates remain source-labelled and are
+never averaged together. Browse cards expose aggregate ratings from their existing catalog
 payload and quietly upgrade to a cached Goodreads aggregate when one already
-exists; they never start a review-source request. Mode-specific Goodreads Most
+exists; selecting a card rating opens that book's Reviews section. They never
+start a review-source request. Mode-specific Goodreads Most
 Read signals also supply cached weekly and monthly homepage rails.
 
 ## Screenshots
@@ -249,12 +251,16 @@ Read signals also supply cached weekly and monthly homepage rails.
   change their markup, and the entire section disappears quietly when no source
   has usable data.
 - **More Like This** - up to two specific subjects plus the current author feed
-  a bounded, locally ranked single-row shelf. Multi-subject and same-author
-  books win over tangential popularity matches, while broad taxonomy labels are
-  discarded before they can seed unrelated results. A local corpus supplies an
-  immediate partial shelf; bounded Open Library and directly mapped Inventaire
-  work then refine it in place without blanking visible cards. Its API request
-  waits until the section approaches the viewport.
+  a bounded, locally ranked single-row shelf. Confidence-adjusted rating and
+  small freshness signals refine relevance without changing the raw scores
+  shown to users. Work/title deduplication plus author and series caps prevent a
+  shelf from collapsing into editions or translations of the same books.
+  Available results are grouped into Similar themes, Next in series, Shorter
+  alternatives, and Recently acclaimed intents; recommendation reasons appear
+  only in Quick Look. A local corpus supplies an immediate partial shelf;
+  bounded Open Library and directly mapped Inventaire work then refine it in
+  place without blanking visible cards. Its API request waits until the section
+  approaches the viewport.
 - **Hidden More Like This scrollbar** - the shelf scrolls horizontally without a
   visible scrollbar.
 - **Inline edition picker** - download candidates appear as responsive edition

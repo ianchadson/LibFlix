@@ -732,8 +732,15 @@ body:has(.kindle-global-tray:not([hidden])) .app-toast {
   font-size: .61rem;
   font-weight: 680;
   line-height: 1;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
   text-shadow: 0 1px 2px rgba(0, 0, 0, .52);
+  transition: background-color .12s ease, border-color .12s ease;
+}
+
+.book-rating-badge:hover {
+  border-color: rgba(255, 255, 255, .2);
+  background: rgba(10, 11, 13, .72);
 }
 
 .book-rating-star {
@@ -761,6 +768,15 @@ body:has(.kindle-global-tray:not([hidden])) .app-toast {
 
 .quick-peek-rating .book-rating-star {
   font-size: .7rem;
+}
+
+.quick-peek-reason {
+  width: fit-content;
+  margin-bottom: 6px;
+  color: rgba(255, 255, 255, .72);
+  font-size: .6rem;
+  font-weight: 700;
+  line-height: 1.15;
 }
 
 .book-card img,
@@ -1996,6 +2012,7 @@ button.edition-recommended {
 /* Reader reviews */
 .reviews-section {
   padding: 34px 0 42px;
+  scroll-margin-top: 80px;
 }
 
 .reviews-section[hidden] {
@@ -2266,6 +2283,57 @@ button.edition-recommended {
 
 .similar-section .shelf-title {
   margin-bottom: 12px;
+}
+
+.similar-intents {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: -2px 0 14px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.similar-intents[hidden] {
+  display: none;
+}
+
+.similar-intents::-webkit-scrollbar {
+  display: none;
+}
+
+.similar-intent {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  color: var(--app-muted);
+  font: inherit;
+  font-size: .72rem;
+  font-weight: 680;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.similar-intent:hover {
+  color: var(--app-text);
+  background: rgba(255, 255, 255, .045);
+}
+
+.similar-intent[aria-selected="true"] {
+  border-color: var(--app-line);
+  background: #1b1c20;
+  color: var(--app-text);
+}
+
+.similar-intent:focus-visible {
+  outline: 2px solid rgba(255, 20, 37, .7);
+  outline-offset: 2px;
 }
 
 .similar-section .book-card,
