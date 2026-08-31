@@ -335,9 +335,6 @@
       loading.hidden = true;
       content.hidden = false;
       section.setAttribute('aria-busy', 'false');
-      if (window.location.hash === '#reviewsSection') {
-        window.requestAnimationFrame(() => section.scrollIntoView({ block: 'start' }));
-      }
     }
 
     function scheduleReceptionRetry() {
@@ -1190,10 +1187,7 @@
     };
 
     const reviewsSection = document.getElementById('reviewsSection');
-    const reviewsRequestedByFragment = window.location.hash === '#reviewsSection';
-    if (reviewsRequestedByFragment) {
-      loadBookReception();
-    } else if ('IntersectionObserver' in window && reviewsSection) {
+    if ('IntersectionObserver' in window && reviewsSection) {
       receptionObserver = new IntersectionObserver(entries => {
         if (!entries.some(entry => entry.isIntersecting)) return;
         receptionObserver.disconnect();
