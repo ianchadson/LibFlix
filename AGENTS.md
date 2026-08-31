@@ -56,12 +56,17 @@ Use a disposable data directory so tests cannot read or overwrite repository or
 production state:
 
 ```bash
-LIBFLIX_DATA_DIR="$(mktemp -d)" \
-LIBFLIX_RATE_LIMITING_ENABLED=0 \
-PYTHONWARNINGS='error::ResourceWarning' \
-python -m unittest discover -s tests -v
+LIBFLIX_TEST_ROOT="$(mktemp -d)"
+trap 'rm -rf "$LIBFLIX_TEST_ROOT"' EXIT
 
-python -m py_compile \
+LIBFLIX_DATA_DIR="$LIBFLIX_TEST_ROOT/data" \
+LIBFLIX_RATE_LIMITING_ENABLED=0 \
+PYTHONPYCACHEPREFIX="$LIBFLIX_TEST_ROOT/pycache" \
+PYTHONWARNINGS='error::ResourceWarning' \
+unshare --net --map-root-user -- \
+  python -m unittest discover -s tests -v
+
+PYTHONPYCACHEPREFIX="$LIBFLIX_TEST_ROOT/pycache" python -m py_compile \
   app.py topic_discovery.py nyt_bestsellers.py book_preparation.py \
   kindle_delivery.py security_runtime.py downloaders/*.py
 node --check static/download-ui.js
@@ -70,12 +75,14 @@ node --check static/libflix-sw.js
 python -m json.tool static/manifest.webmanifest >/dev/null
 ```
 
-Some topic API tests can schedule best-effort background refreshes after their
-assertions. Tests must remain deterministic when outbound HTTP is unavailable;
-never solve a test failure by adding credentials or production access. If a
-cloud network policy blocks the aggregate suite, isolate the triggering test,
-deny outbound HTTP in the test process, and report the distinction between a
-test assertion failure and a network-policy block.
+The `unshare` wrapper disables outbound networking at the operating-system
+namespace level and is verified in the Codex universal cloud image. Some topic
+API tests can schedule best-effort background refreshes after their assertions,
+so keep this isolation in place for the aggregate suite. Tests must remain
+deterministic without network access; never solve a test failure by adding
+credentials or production access. If `unshare` is unavailable in another
+environment, use that environment's network sandbox and clearly distinguish a
+network-policy block from a test assertion failure.
 
 For UI work, use an isolated headless browser context and the routes listed in
 `README.md`. Never use a personal browser profile.
