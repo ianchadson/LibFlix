@@ -1713,6 +1713,10 @@ button.edition-recommended {
   gap: 6px;
 }
 
+.edition-actions:has(.edition-books) {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .edition-action {
   min-height: 38px;
   border-radius: var(--app-radius);
@@ -1751,6 +1755,23 @@ button.edition-recommended {
 }
 
 .edition-download.busy {
+  opacity: .72;
+  pointer-events: none;
+}
+
+.edition-books {
+  border: 1px solid rgba(113, 174, 255, .3);
+  background: rgba(52, 116, 194, .16);
+  color: #a9ceff;
+}
+
+.edition-books:hover {
+  border-color: rgba(130, 190, 255, .55);
+  background: rgba(52, 116, 194, .28);
+  color: #d9ebff;
+}
+
+.edition-books.busy {
   opacity: .72;
   pointer-events: none;
 }
@@ -2575,6 +2596,10 @@ button.edition-recommended {
 
   .edition-action {
     min-width: 0;
+  }
+
+  .edition-actions:has(.edition-books) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .similar-section {

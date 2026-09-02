@@ -4,6 +4,7 @@
   const icons = {
     download: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12"></path><path d="m7 10 5 5 5-5"></path><path d="M5 21h14"></path></svg>',
     send: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4Z"></path><path d="M22 2 11 13"></path></svg>',
+    books: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4.5A2.5 2.5 0 0 1 7.5 2H20v17H7.5A2.5 2.5 0 0 0 5 21.5z"></path><path d="M5 4.5v17"></path><path d="M8.5 6H16"></path><path d="M8.5 10H16"></path></svg>',
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>',
     chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>',
     info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><path d="M12 8h.01"></path></svg>',
@@ -82,6 +83,9 @@
     const actions = book.md5
       ? '<div class="edition-actions">' +
           '<a class="edition-action edition-download" href="' + downloadHref + '" data-md5="' + escapeHtml(book.md5) + '" data-format="' + escapeHtml(format) + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>' + escapeHtml(format.toUpperCase()) + '</span></a>' +
+          (extension === 'epub'
+            ? '<button class="edition-action edition-books" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-filename="' + escapeHtml(filename) + '" data-download-href="' + escapeHtml(downloadHref) + '" aria-label="Add ' + escapeHtml(title) + ' to Apple Books">' + icons.books + '<span>Books</span></button>'
+            : '') +
           (kindleCompatible
             ? '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(coverUrl) + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>'
             : '') +
@@ -161,6 +165,13 @@
       }
 
       const kindle = event.target.closest('.edition-kindle[data-md5]');
+      const books = event.target.closest('.edition-books[data-md5]');
+      if (books) {
+        addToAppleBooks(books).catch(error => {
+          if (error?.name !== 'AbortError') window.LibFlixNotify?.('Apple Books import unavailable: ' + error.message, 'error');
+        });
+        return;
+      }
       if (!kindle) return;
       const existingJob = storedKindleJobId(kindle.dataset.md5);
       if (existingJob) {
@@ -188,7 +199,45 @@
     });
   }
 
-  function createKindleProgress(button) {
+  async function addToAppleBooks(button) {
+    if (button.dataset.busy === '1') return;
+    button.dataset.busy = '1';
+    button.classList.add('busy');
+    const original = button.innerHTML;
+    button.replaceChildren();
+    const spinner = document.createElement('span');
+    spinner.className = 'download-spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.textContent = 'Preparing';
+    button.append(spinner, label);
+    const href = button.dataset.downloadHref;
+    const filename = button.dataset.filename || 'book.epub';
+    try {
+      const response = await fetch(href, { credentials: 'same-origin' });
+      if (!response.ok) throw new Error('the EPUB could not be downloaded');
+      const blob = await response.blob();
+      const file = new File([blob], filename, { type: 'application/epub+zip' });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: button.dataset.title || 'Book' });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+        window.LibFlixNotify?.('EPUB downloaded. Open it in Files and choose Books.');
+      }
+    } finally {
+      button.dataset.busy = '0';
+      button.classList.remove('busy');
+      button.innerHTML = original;
+    }
+  }
+
     const row = button?.closest('.edition-row');
     if (!row) return null;
     const disclosure = button.closest('.edition-more');

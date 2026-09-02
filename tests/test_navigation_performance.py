@@ -708,6 +708,17 @@ class DownloadShellTests(unittest.TestCase):
         self.assertIn(".edition-recommendation:focus-within .edition-reasons-tooltip", stylesheet)
         self.assertIn("visibility: hidden;", stylesheet)
 
+    def test_epub_downloads_offer_a_share_sheet_path_to_apple_books(self):
+        downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()
+        stylesheet = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+
+        self.assertIn("extension === 'epub'", downloads)
+        self.assertIn("Add ' + escapeHtml(title) + ' to Apple Books", downloads)
+        self.assertIn("navigator.canShare?.({ files: [file] })", downloads)
+        self.assertIn("navigator.share({ files: [file]", downloads)
+        self.assertIn("Open it in Files and choose Books.", downloads)
+        self.assertIn(".edition-actions:has(.edition-books)", stylesheet)
+
     def test_download_tap_uses_native_browser_navigation(self):
         downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()
         download_handler = downloads.split(
