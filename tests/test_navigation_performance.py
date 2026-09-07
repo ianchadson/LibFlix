@@ -719,6 +719,80 @@ class DownloadShellTests(unittest.TestCase):
         self.assertNotIn("data-preparable", downloads)
         self.assertIn("setDownloadBusy(download, 'Starting')", download_handler)
 
+    def test_download_actions_launch_books_shortcut_before_kindle(self):
+        downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()
+        stylesheet = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+
+        apple_books = downloads.index('class="edition-action edition-apple-books"')
+        kindle = downloads.index('class="edition-action edition-kindle"', apple_books)
+        self.assertLess(apple_books, kindle)
+        self.assertIn("const appleBooksAvailable = extension === 'epub';", downloads)
+        self.assertIn("const appleBooksShortcutName = 'LibFlix to Books';", downloads)
+        self.assertIn(
+            "const appleBooksShortcutStorageKey = 'libflix.appleBooksShortcutReady';",
+            downloads,
+        )
+        self.assertIn("const legacyAppleBooksShortcutStorageKeys", downloads)
+        self.assertIn("'libflix.appleBooksShortcutReady.v1'", downloads)
+        self.assertIn("'libflix.appleBooksShortcutReady.v2'", downloads)
+        self.assertIn("'libflix.appleBooksShortcutReady.v3'", downloads)
+        self.assertIn("legacyAppleBooksShortcutStorageKeys.some", downloads)
+        self.assertIn("const appleBooksInstallStartedKey", downloads)
+        self.assertIn("new URL(downloadHref, window.location.origin).href", downloads)
+        self.assertIn("const appleBooksHref = appleBooksAvailable", downloads)
+        self.assertIn("'shortcuts://run-shortcut?name='", downloads)
+        self.assertIn("'&input=text&text='", downloads)
+        self.assertIn("class=\"apple-books-spinner\"", downloads)
+        self.assertIn("showAppleBooksSetup(appleBooks)", downloads)
+        self.assertIn("fetch('/apple-books-shortcut'", downloads)
+        self.assertIn("<span> Books</span>", downloads)
+        self.assertIn("Get the shortcut", downloads)
+        self.assertIn("Open in  Books", downloads)
+        self.assertIn("aria-label=\"Open ' + escapeHtml(title) + ' in Apple Books\"", downloads)
+        self.assertIn("Add it in Shortcuts", downloads)
+        self.assertIn("I added it — open book", downloads)
+        self.assertIn("Get the shortcut again", downloads)
+        self.assertIn("Add Shortcut", downloads)
+        self.assertIn("setAppleBooksSetupStage(setup, 'finish')", downloads)
+        self.assertIn("window.sessionStorage.setItem(appleBooksInstallStartedKey, '1')", downloads)
+        self.assertIn("window.localStorage.setItem(appleBooksShortcutStorageKey, '1')", downloads)
+        self.assertIn("window.location.href = href", downloads)
+        self.assertNotIn("navigator.share", downloads)
+        self.assertNotIn("&open=books", downloads)
+        self.assertNotIn("shortcuts://create-shortcut", downloads)
+        self.assertIn("grid-template-columns: repeat(3, minmax(92px, 1fr));", stylesheet)
+        self.assertIn(".apple-books-setup[hidden]", stylesheet)
+        self.assertIn(".apple-books-setup-stage[hidden]", stylesheet)
+        self.assertNotIn(".apple-books-setup-steps", stylesheet)
+
+    def test_apple_books_shortcut_installer_is_signed_and_downloadable(self):
+        shortcut_path = Path(app.APPLE_BOOKS_SHORTCUT_PATH)
+
+        self.assertTrue(shortcut_path.is_file())
+        self.assertEqual(shortcut_path.read_bytes()[:4], b"AEA1")
+        response = app.app.test_client().get("/apple-books-shortcut")
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, "application/octet-stream")
+            self.assertIn(
+                'filename="LibFlix to Books.shortcut"',
+                response.headers.get("Content-Disposition", ""),
+            )
+            self.assertEqual(response.data[:4], b"AEA1")
+        finally:
+            response.close()
+
+    def test_apple_books_first_tap_opens_setup_instead_of_running_shortcut(self):
+        downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()
+        apple_books_handler = downloads.split(
+            "const appleBooks = event.target.closest('.edition-apple-books');", 1
+        )[1].split("const download =", 1)[0]
+
+        self.assertIn("if (!isAppleBooksShortcutReady())", apple_books_handler)
+        self.assertIn("event.preventDefault()", apple_books_handler)
+        self.assertIn("showAppleBooksSetup(appleBooks)", apple_books_handler)
+        self.assertIn("setAppleBooksOpening(appleBooks)", apple_books_handler)
+
 
 if __name__ == "__main__":
     unittest.main()

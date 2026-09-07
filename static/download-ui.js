@@ -7,8 +7,22 @@
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"></path></svg>',
     chevron: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6"></path></svg>',
     info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><path d="M12 8h.01"></path></svg>',
+    books: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11a2 2 0 0 1 2 2v15a2.7 2.7 0 0 0-2.4-1.5H4Z"></path><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v17a2.7 2.7 0 0 1 2.4-1.5H20Z"></path></svg>',
   };
   const hiddenKindleFormats = new Set(['azw', 'azw3', 'mobi']);
+  const appleBooksShortcutName = 'LibFlix to Books';
+  const appleBooksShortcutStorageKey = 'libflix.appleBooksShortcutReady';
+  const legacyAppleBooksShortcutStorageKeys = [
+    'libflix.appleBooksShortcutReady.v1',
+    'libflix.appleBooksShortcutReady.v2',
+    'libflix.appleBooksShortcutReady.v3',
+  ];
+  const appleBooksInstallStartedKey = 'libflix.appleBooksInstallStarted.v1';
+  let pendingAppleBooksHref = '';
+  let pendingAppleBooksButton = null;
+  let appleBooksSetupReturnFocus = null;
+  let appleBooksReadyThisSession = false;
+  let appleBooksInstallController = null;
 
   function escapeHtml(value) {
     const element = document.createElement('div');
@@ -30,6 +44,250 @@
   function shorten(value, length) {
     const text = String(value || '').trim();
     return text.length > length ? text.slice(0, length - 1).trimEnd() + '…' : text;
+  }
+
+  function isAppleBooksShortcutReady() {
+    if (appleBooksReadyThisSession) return true;
+    try {
+      const ready = window.localStorage.getItem(appleBooksShortcutStorageKey) === '1'
+        || legacyAppleBooksShortcutStorageKeys.some(key => window.localStorage.getItem(key) === '1');
+      if (ready) window.localStorage.setItem(appleBooksShortcutStorageKey, '1');
+      return ready;
+    } catch {
+      return false;
+    }
+  }
+
+  function rememberAppleBooksShortcut() {
+    appleBooksReadyThisSession = true;
+    try {
+      window.localStorage.setItem(appleBooksShortcutStorageKey, '1');
+    } catch {
+      // The handoff can still run when private browsing blocks local storage.
+    }
+    try {
+      window.sessionStorage.removeItem(appleBooksInstallStartedKey);
+    } catch {
+      // Session state is only a convenience for the setup sheet.
+    }
+  }
+
+  function appleBooksInstallStarted() {
+    try {
+      return window.sessionStorage.getItem(appleBooksInstallStartedKey) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function markAppleBooksInstallStarted() {
+    try {
+      window.sessionStorage.setItem(appleBooksInstallStartedKey, '1');
+    } catch {
+      // The finish screen still works for the current page without session storage.
+    }
+  }
+
+  function setAppleBooksSetupStage(setup, stage) {
+    const finishing = stage === 'finish';
+    setup.dataset.stage = finishing ? 'finish' : 'intro';
+    setup.querySelector('[data-apple-books-intro]').hidden = finishing;
+    setup.querySelector('[data-apple-books-finish]').hidden = !finishing;
+    setup.querySelector('#appleBooksSetupTitle').textContent = finishing
+      ? 'Add it in Shortcuts'
+      : 'Open in  Books';
+    setup.querySelector('#appleBooksSetupIntro').textContent = finishing
+      ? 'In Downloads, open “LibFlix to Books” and tap Add Shortcut. Then return here.'
+      : 'Add a shortcut once. Next time, go straight to Books.';
+    setup.querySelector('[data-apple-books-progress]').textContent = finishing ? 'Step 2 of 2' : 'One-time setup';
+  }
+
+  function showAppleBooksRecovery(button) {
+    const row = button?.closest('.edition-row');
+    if (!row || row.querySelector('.apple-books-recovery')) return;
+    const recovery = document.createElement('div');
+    recovery.className = 'apple-books-recovery';
+    recovery.innerHTML = '<span>Didn’t open?</span><button type="button">Set up again</button>';
+    recovery.querySelector('button').addEventListener('click', () => showAppleBooksSetup(button, true));
+    row.append(recovery);
+  }
+
+  function setAppleBooksOpening(appleBooks) {
+    if (!appleBooks || appleBooks.dataset.opening === 'true') return false;
+    appleBooks.dataset.opening = 'true';
+    appleBooks.dataset.originalAriaLabel = appleBooks.getAttribute('aria-label') || 'Open in Apple Books';
+    appleBooks.dataset.originalHtml = appleBooks.innerHTML;
+    appleBooks.classList.add('opening');
+    appleBooks.setAttribute('aria-busy', 'true');
+    appleBooks.setAttribute('aria-disabled', 'true');
+    appleBooks.setAttribute('aria-label', 'Opening in Apple Books');
+    appleBooks.innerHTML = '<span class="apple-books-spinner" aria-hidden="true"></span><span>Opening…</span>';
+    let timer;
+    const reset = () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', reset);
+      delete appleBooks.dataset.opening;
+      appleBooks.classList.remove('opening');
+      appleBooks.removeAttribute('aria-busy');
+      appleBooks.removeAttribute('aria-disabled');
+      appleBooks.setAttribute('aria-label', appleBooks.dataset.originalAriaLabel);
+      appleBooks.innerHTML = appleBooks.dataset.originalHtml || '<span> Books</span>';
+      delete appleBooks.dataset.originalAriaLabel;
+      delete appleBooks.dataset.originalHtml;
+      if (appleBooks.isConnected) showAppleBooksRecovery(appleBooks);
+    };
+    const onVisibility = () => { if (!document.hidden) reset(); };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', reset);
+    timer = window.setTimeout(reset, 6000);
+    return true;
+  }
+
+  function closeAppleBooksSetup(clearPending = true) {
+    const setup = document.getElementById('appleBooksSetup');
+    if (!setup) return;
+    appleBooksInstallController?.abort();
+    setup.hidden = true;
+    document.body.classList.remove('modal-open');
+    if (appleBooksSetupReturnFocus instanceof HTMLElement && appleBooksSetupReturnFocus.isConnected) {
+      appleBooksSetupReturnFocus.focus({ preventScroll: true });
+    }
+    appleBooksSetupReturnFocus = null;
+    if (clearPending) {
+      pendingAppleBooksHref = '';
+      pendingAppleBooksButton = null;
+    }
+  }
+
+  function ensureAppleBooksSetup() {
+    let setup = document.getElementById('appleBooksSetup');
+    if (setup) return setup;
+    setup = document.createElement('div');
+    setup.className = 'apple-books-setup';
+    setup.id = 'appleBooksSetup';
+    setup.hidden = true;
+    setup.innerHTML =
+      '<section class="apple-books-setup-card" role="dialog" aria-modal="true" aria-labelledby="appleBooksSetupTitle" aria-describedby="appleBooksSetupIntro">' +
+        '<button class="apple-books-setup-close" type="button" data-apple-books-close aria-label="Close Apple Books setup">×</button>' +
+        '<span class="apple-books-setup-icon">' + icons.books + '</span>' +
+        '<div class="apple-books-setup-heading" aria-live="polite">' +
+          '<span class="apple-books-progress" data-apple-books-progress>One-time setup</span>' +
+          '<h2 id="appleBooksSetupTitle">Open in  Books</h2>' +
+          '<p id="appleBooksSetupIntro">Add a shortcut once. Next time, go straight to Books.</p>' +
+        '</div>' +
+        '<div class="apple-books-selected" data-apple-books-selected></div>' +
+        '<div class="apple-books-setup-stage" data-apple-books-intro>' +
+          '<button class="apple-books-setup-primary" type="button" data-apple-books-install>Get the shortcut</button>' +
+          '<button class="apple-books-setup-link" type="button" data-apple-books-ready>Already added? Open book</button>' +
+        '</div>' +
+        '<div class="apple-books-setup-stage" data-apple-books-finish hidden>' +
+          '<button class="apple-books-setup-primary" type="button" data-apple-books-ready>I added it — open book</button>' +
+          '<button class="apple-books-setup-link" type="button" data-apple-books-install>Get the shortcut again</button>' +
+        '</div>' +
+        '<p class="apple-books-setup-error" role="alert" data-apple-books-error hidden></p>' +
+        '<a class="apple-books-setup-link apple-books-fallback" data-apple-books-fallback>Download EPUB instead</a>' +
+      '</section>';
+    document.body.append(setup);
+
+    setup.addEventListener('click', async event => {
+      if (event.target === setup || event.target.closest('[data-apple-books-close]')) {
+        closeAppleBooksSetup();
+        return;
+      }
+      const install = event.target.closest('[data-apple-books-install]');
+      if (install) {
+        event.preventDefault();
+        if (appleBooksInstallController) return;
+        const controller = new AbortController();
+        appleBooksInstallController = controller;
+        const timeout = window.setTimeout(() => controller.abort(), 15000);
+        const label = install.textContent;
+        install.disabled = true;
+        install.setAttribute('aria-busy', 'true');
+        install.innerHTML = '<span class="apple-books-spinner" aria-hidden="true"></span>Preparing…';
+        const error = setup.querySelector('[data-apple-books-error]');
+        error.hidden = true;
+        try {
+          const response = await fetch('/apple-books-shortcut', { signal: controller.signal, cache: 'no-store' });
+          if (!response.ok) throw new Error('installer unavailable');
+          const blob = await response.blob();
+          if (await blob.slice(0, 4).text() !== 'AEA1') throw new Error('invalid installer');
+          if (controller.signal.aborted || setup.hidden) return;
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = appleBooksShortcutName + '.shortcut';
+          document.body.append(link);
+          link.click();
+          link.remove();
+          window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+          markAppleBooksInstallStarted();
+          setAppleBooksSetupStage(setup, 'finish');
+          setup.querySelector('[data-apple-books-finish] .apple-books-setup-primary')?.focus({ preventScroll: true });
+        } catch {
+          if (!setup.hidden) {
+            error.textContent = 'Couldn’t get the shortcut. Try again, or download the EPUB below.';
+            error.hidden = false;
+          }
+        } finally {
+          window.clearTimeout(timeout);
+          appleBooksInstallController = null;
+          install.disabled = false;
+          install.removeAttribute('aria-busy');
+          install.textContent = label;
+        }
+        return;
+      }
+      if (event.target.closest('[data-apple-books-fallback]')) { closeAppleBooksSetup(); return; }
+      if (!event.target.closest('[data-apple-books-ready]')) return;
+      const href = pendingAppleBooksHref;
+      const button = pendingAppleBooksButton;
+      rememberAppleBooksShortcut();
+      closeAppleBooksSetup(false);
+      pendingAppleBooksHref = '';
+      pendingAppleBooksButton = null;
+      if (!href || !setAppleBooksOpening(button)) return;
+      window.location.href = href;
+    });
+    setup.addEventListener('keydown', event => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeAppleBooksSetup();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const controls = Array.from(setup.querySelectorAll('a[href], button:not([disabled])'))
+        .filter(control => !control.closest('[hidden]'));
+      if (!controls.length) return;
+      const first = controls[0];
+      const last = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+    return setup;
+  }
+
+  function showAppleBooksSetup(appleBooks, repair = false) {
+    const setup = ensureAppleBooksSetup();
+    pendingAppleBooksHref = appleBooks.href;
+    pendingAppleBooksButton = appleBooks;
+    appleBooksSetupReturnFocus = appleBooks;
+    const stage = !repair && appleBooksInstallStarted() ? 'finish' : 'intro';
+    setup.querySelector('[data-apple-books-selected]').textContent = appleBooks.closest('.edition-row')?.querySelector('.edition-title')?.textContent || 'Selected EPUB';
+    setup.querySelector('[data-apple-books-fallback]').href = appleBooks.closest('.edition-row')?.querySelector('.edition-download')?.href || '';
+    setup.querySelector('[data-apple-books-error]').hidden = true;
+    setAppleBooksSetupStage(setup, stage);
+    setup.hidden = false;
+    document.body.classList.add('modal-open');
+    setup.querySelector(
+      stage === 'finish' ? '[data-apple-books-finish] .apple-books-setup-primary' : '[data-apple-books-intro] .apple-books-setup-primary',
+    )?.focus({ preventScroll: true });
   }
 
   function metaItem(value) {
@@ -64,6 +322,14 @@
     const downloadHref = book.md5
       ? '/download/' + encodeURIComponent(book.md5) + '?filename=' + encodeURIComponent(filename)
       : '';
+    const appleBooksAvailable = extension === 'epub';
+    const appleBooksDownloadUrl = appleBooksAvailable
+      ? new URL(downloadHref, window.location.origin).href
+      : '';
+    const appleBooksHref = appleBooksAvailable
+      ? 'shortcuts://run-shortcut?name=' + encodeURIComponent(appleBooksShortcutName)
+        + '&input=text&text=' + encodeURIComponent(appleBooksDownloadUrl)
+      : '';
     const fallbackCoverUrl = String(options.fallbackCoverUrl || '');
     const coverUrl = String(book.cover_url || fallbackCoverUrl);
     const failedCoverFallback = book.cover_url && fallbackCoverUrl && book.cover_url !== fallbackCoverUrl
@@ -80,8 +346,11 @@
       metaItem(shorten(book.language, 18)),
     ].join('');
     const actions = book.md5
-      ? '<div class="edition-actions">' +
+      ? '<div class="edition-actions' + (appleBooksAvailable ? ' has-apple-books' : '') + '">' +
           '<a class="edition-action edition-download" href="' + downloadHref + '" data-md5="' + escapeHtml(book.md5) + '" data-format="' + escapeHtml(format) + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>' + escapeHtml(format.toUpperCase()) + '</span></a>' +
+          (appleBooksAvailable
+            ? '<a class="edition-action edition-apple-books" href="' + escapeHtml(appleBooksHref) + '" aria-label="Open ' + escapeHtml(title) + ' in Apple Books"><span> Books</span></a>'
+            : '') +
           (kindleCompatible
             ? '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(coverUrl) + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>'
             : '') +
@@ -151,6 +420,20 @@
     if (!container || wiredContainers.has(container)) return;
     wiredContainers.add(container);
     container.addEventListener('click', event => {
+      const appleBooks = event.target.closest('.edition-apple-books');
+      if (appleBooks) {
+        if (appleBooks.dataset.opening === 'true') {
+          event.preventDefault();
+          return;
+        }
+        if (!isAppleBooksShortcutReady()) {
+          event.preventDefault();
+          showAppleBooksSetup(appleBooks);
+          return;
+        }
+        setAppleBooksOpening(appleBooks);
+        return;
+      }
       const download = event.target.closest('.edition-download');
       if (download) {
         if (!download.dataset.originalHtml) download.dataset.originalHtml = download.innerHTML;
