@@ -20,6 +20,12 @@ Inventaire can improve topic recall, provide a strict identity-search fallback,
 and supply validated author labels or entity artwork, but only when `P648` maps
 directly to that canonical work. It cannot create an unresolved native route or
 download identity.
+
+The search-only exception is `publisher_catalog.py`: a curated registry of verified
+publisher metadata supplements identity search at the HTML/API route boundary.
+These ISBN-identified cards link externally to the publisher and display download
+unavailability. They never enter the shared discovery cache, shelves, canonical
+book routes, or download pipeline. Existing matching catalog records take precedence.
 The NYT/Wikipedia signal is a ranking overlay rather than a discovery provider
 and is reported under `ranking_sources`, not candidate `sources`.
 

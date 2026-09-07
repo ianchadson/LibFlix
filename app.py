@@ -19,6 +19,7 @@ from flask.testing import FlaskClient
 from opencc import OpenCC
 
 from book_preparation import prepare_book_for_kindle
+from publisher_catalog import PUBLISHER_BOOKS, supplement_search
 from kindle_delivery import (
     KindleSourceCache,
     SourceFileError,
@@ -7375,6 +7376,9 @@ def discover(clean_mode, clean_lang):
             page = requested_page - 1
         else:
             books, total, total_pages = cached_result
+            books, total, total_pages = supplement_search(
+                q, books, total, total_pages, requested_page, lang
+            )
             page = requested_page
         search_unavailable = total is None
     if search_unavailable:
@@ -7478,6 +7482,7 @@ def api_discover():
         return jsonify({"success": True, "query": q, **paged})
 
     books, total, total_pages = fetch_discovery_books(q, page, lang)
+    books, total, total_pages = supplement_search(q, books, total, total_pages, page, lang)
     if total is None:
         g.cache_control_override = "no-store"
         return jsonify({
@@ -9312,6 +9317,14 @@ def invcover(cover_hash, size="M"):
     s = size.upper() if size.upper() in ("S", "M", "L") else "M"
     url = f"https://inventaire.io/img/entities/{cover_hash}"
     return cached_cover_response("inventaire", cover_hash, s, url)
+
+
+@app.route("/publishercover/<isbn>")
+def publishercover(isbn):
+    record = next((book for book in PUBLISHER_BOOKS if book["isbn"] == isbn), None)
+    if record is None:
+        return "", 404
+    return cached_cover_response("publisher", isbn, "M", record["cover_source_url"])
 
 
 def _cover_file_as_jpeg(cache_path):

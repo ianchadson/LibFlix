@@ -1917,6 +1917,7 @@
     const showQuickPeek = link => {
       const card = link.querySelector('.book-card');
       if (!card) return;
+      if (card.dataset.publisherOnly === 'true') { hideQuickPeek(); return; }
       if (quickPeekActiveLink && quickPeekActiveLink !== link) {
         quickPeekActiveLink.classList.remove('quick-peek-target');
       }
