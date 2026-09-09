@@ -273,6 +273,13 @@ Read signals also supply cached weekly and monthly homepage rails.
   and Kindle actions. `Best match` is assigned only after globally ranking all
   filtered candidates by title and author similarity, language, reading format,
   file sanity, and metadata quality.
+- **Apple Books handoff** - EPUB editions include an Apple Books action before
+  Kindle. On first use, LibFlix offers a prepared, Apple-signed two-action
+  Shortcut for the reader to review and add. It downloads the selected EPUB and
+  opens it in Books; later taps launch it directly from the same browser.
+  Setup validates the installer before offering the next step, preserves the
+  selected book, and provides an EPUB fallback. Handoff feedback resets on return
+  with a setup-repair link; the browser cannot confirm that Books imported a file.
 - **Kindle-compatible results only** - MOBI and AZW/AZW3 editions are excluded
   from download results because Send to Kindle does not accept them. EPUB and
   PDF remain available.

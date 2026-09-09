@@ -105,6 +105,12 @@ BOOK_DETAIL_STALE_TTL = 7776000
 SIMILAR_FRESH_TTL = 604800
 SIMILAR_STALE_TTL = 2592000
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+APPLE_BOOKS_SHORTCUT_PATH = os.path.join(
+    APP_DIR,
+    "static",
+    "shortcuts",
+    "LibFlix to Books.shortcut",
+)
 DATA_DIR = os.environ.get("LIBFLIX_DATA_DIR") or APP_DIR
 SHELF_DISK_CACHE = os.path.join(DATA_DIR, "shelf_cache.json")
 API_DISK_CACHE = os.path.join(DATA_DIR, "api_cache.json")
@@ -6537,6 +6543,23 @@ def favicon():
     )
     response = Response(svg, mimetype="image/svg+xml")
     response.headers["Cache-Control"] = "public, max-age=604800, immutable"
+    return response
+
+
+@app.route("/apple-books-shortcut")
+def apple_books_shortcut():
+    if not os.path.isfile(APPLE_BOOKS_SHORTCUT_PATH):
+        return "Shortcut unavailable", 404
+    response = send_file(
+        APPLE_BOOKS_SHORTCUT_PATH,
+        as_attachment=True,
+        download_name="LibFlix to Books.shortcut",
+        mimetype="application/octet-stream",
+        conditional=True,
+        etag=True,
+        max_age=3600,
+    )
+    response.headers["Cache-Control"] = "public, max-age=3600"
     return response
 
 @app.route("/api/metrics/web-vitals", methods=["POST"])

@@ -87,3 +87,10 @@ jobs:
           curl --fail --silent --show-error --max-time 15 \
             'https://libflix.fomalhaut.app/fiction/genres' \
             | grep -q '<h1>Genres</h1>'
+
+      - name: Verify Apple Books installer
+        run: |
+          curl --fail --silent --show-error --max-time 20 \
+            'https://libflix.fomalhaut.app/apple-books-shortcut' \
+            --output installed-shortcut.bin
+          python -c 'from pathlib import Path; actual=Path("installed-shortcut.bin").read_bytes(); expected=Path("static/shortcuts/LibFlix to Books.shortcut").read_bytes(); assert actual[:4] == b"AEA1"; assert actual == expected, "Published shortcut differs from the signed release asset"'
