@@ -31,7 +31,11 @@ async page => {
   await bookButton.click();
   const dialog = page.locator('#appleBooksSetup');
   assert(await dialog.isVisible(), 'First use must show setup');
-  assert(await page.locator('[data-apple-books-selected]').textContent() === books[0].title, 'Keep selected title');
+  assert(await page.locator('#appleBooksSetupTitle').textContent() === 'Set up  Books', 'Concise setup title');
+  assert(await page.locator('#appleBooksSetupIntro').isHidden(), 'Instructions are deferred');
+  assert(await page.locator('[data-apple-books-selected]').count() === 0, 'No redundant book-title box');
+  assert(await page.locator('[data-apple-books-progress]').count() === 0, 'No redundant setup label');
+  assert(await page.locator('[data-apple-books-fallback]').isHidden(), 'Only two initial actions');
   assert((await page.locator('[data-apple-books-fallback]').getAttribute('href')).includes('/download/'), 'Offer EPUB fallback');
   const widths = [320, 390, 768, 1280];
   for (const width of widths) {
@@ -48,7 +52,7 @@ async page => {
   });
   assert(frontmost, 'Background notifications must not cover the setup controls');
   await page.screenshot({ path: 'output/playwright/apple-books-setup.png' });
-  await page.locator('[data-apple-books-fallback]').focus();
+  await page.locator('[data-apple-books-intro] [data-apple-books-ready]').focus();
   await page.keyboard.press('Tab');
   assert(await page.locator('[data-apple-books-close]').evaluate(button => button === document.activeElement), 'Trap focus');
   await page.keyboard.press('Escape');
@@ -60,6 +64,7 @@ async page => {
     await page.locator('[data-apple-books-intro] [data-apple-books-install]').click();
     await page.locator('[data-apple-books-error]:visible').waitFor();
     assert(await dialog.getAttribute('data-stage') === 'intro', 'Failed/invalid file must not advance');
+    assert(await page.locator('[data-apple-books-fallback]').isVisible(), 'Offer fallback when needed');
     assert(await page.locator('[data-apple-books-intro] [data-apple-books-install]').isEnabled(), 'Retry stays enabled');
     await page.unroute('**/apple-books-shortcut');
   }
@@ -69,6 +74,7 @@ async page => {
   const download = await downloadPromise;
   assert(download.suggestedFilename() === 'LibFlix to Books.shortcut', 'Correct installer filename');
   await page.locator('[data-apple-books-finish]:visible').waitFor();
+  assert(await page.locator('#appleBooksSetupIntro').isVisible(), 'Instructions appear after getting shortcut');
   assert(await page.evaluate(() => !localStorage.getItem('libflix.appleBooksShortcutReady')), 'Downloading is not installation');
   await page.screenshot({ path: 'output/playwright/apple-books-finish.png' });
   await page.locator('[data-apple-books-finish] [data-apple-books-ready]').click();

@@ -95,11 +95,12 @@
     setup.querySelector('[data-apple-books-finish]').hidden = !finishing;
     setup.querySelector('#appleBooksSetupTitle').textContent = finishing
       ? 'Add it in Shortcuts'
-      : 'Open in  Books';
-    setup.querySelector('#appleBooksSetupIntro').textContent = finishing
-      ? 'In Downloads, open “LibFlix to Books” and tap Add Shortcut. Then return here.'
-      : 'Add a shortcut once. Next time, go straight to Books.';
-    setup.querySelector('[data-apple-books-progress]').textContent = finishing ? 'Step 2 of 2' : 'One-time setup';
+      : 'Set up  Books';
+    setup.querySelector('#appleBooksSetupIntro').hidden = !finishing;
+    setup.querySelector('[data-apple-books-fallback]').hidden = !finishing;
+    const dialog = setup.querySelector('[role="dialog"]');
+    if (finishing) dialog.setAttribute('aria-describedby', 'appleBooksSetupIntro');
+    else dialog.removeAttribute('aria-describedby');
   }
 
   function showAppleBooksRecovery(button) {
@@ -168,25 +169,23 @@
     setup.id = 'appleBooksSetup';
     setup.hidden = true;
     setup.innerHTML =
-      '<section class="apple-books-setup-card" role="dialog" aria-modal="true" aria-labelledby="appleBooksSetupTitle" aria-describedby="appleBooksSetupIntro">' +
+      '<section class="apple-books-setup-card" role="dialog" aria-modal="true" aria-labelledby="appleBooksSetupTitle">' +
         '<button class="apple-books-setup-close" type="button" data-apple-books-close aria-label="Close Apple Books setup">×</button>' +
         '<span class="apple-books-setup-icon">' + icons.books + '</span>' +
         '<div class="apple-books-setup-heading" aria-live="polite">' +
-          '<span class="apple-books-progress" data-apple-books-progress>One-time setup</span>' +
-          '<h2 id="appleBooksSetupTitle">Open in  Books</h2>' +
-          '<p id="appleBooksSetupIntro">Add a shortcut once. Next time, go straight to Books.</p>' +
+          '<h2 id="appleBooksSetupTitle">Set up  Books</h2>' +
+          '<p id="appleBooksSetupIntro" hidden>In Downloads, open “LibFlix to Books” and tap Add Shortcut. Then return here.</p>' +
         '</div>' +
-        '<div class="apple-books-selected" data-apple-books-selected></div>' +
         '<div class="apple-books-setup-stage" data-apple-books-intro>' +
-          '<button class="apple-books-setup-primary" type="button" data-apple-books-install>Get the shortcut</button>' +
-          '<button class="apple-books-setup-link" type="button" data-apple-books-ready>Already added? Open book</button>' +
+          '<button class="apple-books-setup-primary" type="button" data-apple-books-install>Get shortcut</button>' +
+          '<button class="apple-books-setup-link" type="button" data-apple-books-ready>Already set up</button>' +
         '</div>' +
         '<div class="apple-books-setup-stage" data-apple-books-finish hidden>' +
           '<button class="apple-books-setup-primary" type="button" data-apple-books-ready>I added it — open book</button>' +
           '<button class="apple-books-setup-link" type="button" data-apple-books-install>Get the shortcut again</button>' +
         '</div>' +
         '<p class="apple-books-setup-error" role="alert" data-apple-books-error hidden></p>' +
-        '<a class="apple-books-setup-link apple-books-fallback" data-apple-books-fallback>Download EPUB instead</a>' +
+        '<a class="apple-books-setup-link apple-books-fallback" data-apple-books-fallback hidden>Download EPUB instead</a>' +
       '</section>';
     document.body.append(setup);
 
@@ -229,6 +228,7 @@
           if (!setup.hidden) {
             error.textContent = 'Couldn’t get the shortcut. Try again, or download the EPUB below.';
             error.hidden = false;
+            setup.querySelector('[data-apple-books-fallback]').hidden = false;
           }
         } finally {
           window.clearTimeout(timeout);
@@ -279,7 +279,6 @@
     pendingAppleBooksButton = appleBooks;
     appleBooksSetupReturnFocus = appleBooks;
     const stage = !repair && appleBooksInstallStarted() ? 'finish' : 'intro';
-    setup.querySelector('[data-apple-books-selected]').textContent = appleBooks.closest('.edition-row')?.querySelector('.edition-title')?.textContent || 'Selected EPUB';
     setup.querySelector('[data-apple-books-fallback]').href = appleBooks.closest('.edition-row')?.querySelector('.edition-download')?.href || '';
     setup.querySelector('[data-apple-books-error]').hidden = true;
     setAppleBooksSetupStage(setup, stage);

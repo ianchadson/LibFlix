@@ -1865,26 +1865,8 @@ button.edition-recommended {
   padding: 0 24px;
 }
 
-.apple-books-progress {
-  display: block;
-  margin-bottom: 9px;
-  color: #aaaeb6;
-  font-size: .65rem;
-  font-weight: 650;
-  letter-spacing: .07em;
-  text-transform: uppercase;
-}
-
-.apple-books-selected {
-  margin-top: 18px;
-  padding: 12px;
-  border: 1px solid rgba(255,255,255,.09);
-  border-radius: 10px;
-  color: #e1e2e5;
-  background: rgba(255,255,255,.025);
-  font-size: .8rem;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
+.apple-books-setup [hidden] {
+  display: none !important;
 }
 
 .apple-books-setup-error {
