@@ -285,9 +285,10 @@ Read signals also supply cached weekly and monthly homepage rails.
   Setup validates the installer before offering the next step, preserves the
   selected book, and provides an EPUB fallback. Handoff feedback resets on return
   with a setup-repair link; the browser cannot confirm that Books imported a file.
-- **Kindle-compatible results only** - MOBI and AZW/AZW3 editions are excluded
-  from download results because Send to Kindle does not accept them. EPUB and
-  PDF remain available.
+- **Kindle-compatible results** - EPUB and PDF editions send directly. MOBI and
+  AZW3 editions are converted to EPUB before Send to Kindle (`Convert & Kindle`);
+  if conversion fails the send stops with a clear error rather than mailing a
+  file Amazon would reject. DRM-era AZW editions stay hidden.
 - **Send to Kindle settings** - the global Settings menu opens a keyboard-safe
   Kindle sheet with password visibility, local browser storage, a forget
   action, and a visible configured / configure-connection state.
@@ -573,7 +574,7 @@ Useful local checks:
 ```bash
 LIBFLIX_DATA_DIR="$(mktemp -d)" LIBFLIX_RATE_LIMITING_ENABLED=0 \
   python3 -m unittest discover -s tests -v
-python3 -m py_compile app.py topic_discovery.py nyt_bestsellers.py book_preparation.py kindle_delivery.py security_runtime.py downloaders/base.py downloaders/libgen.py
+python3 -m py_compile app.py topic_discovery.py nyt_bestsellers.py book_preparation.py book_conversion.py kindle_delivery.py security_runtime.py downloaders/base.py downloaders/libgen.py
 python3 app.py
 ```
 

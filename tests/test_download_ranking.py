@@ -167,6 +167,7 @@ class DownloadRankingTests(unittest.TestCase):
 
     def test_recommendation_reasons_explain_kindle_choice(self):
         edition = Book(
+            book_id="a" * 32,
             title="Catching Fire",
             author="Suzanne Collins",
             publisher="Scholastic",
@@ -188,19 +189,21 @@ class DownloadRankingTests(unittest.TestCase):
         self.assertIn("Kindle-ready EPUB", reasons)
         self.assertLessEqual(len(reasons), 4)
 
-    def test_mobi_and_azw_formats_are_hidden(self):
-        self.assertFalse(is_visible_kindle_format("mobi"))
-        self.assertFalse(is_visible_kindle_format("AZW"))
-        self.assertFalse(is_visible_kindle_format("azw3"))
+    def test_mobi_and_azw3_visible_but_azw_stays_hidden(self):
+        self.assertTrue(is_visible_kindle_format("mobi"))
+        self.assertTrue(is_visible_kindle_format("MOBI"))
+        self.assertTrue(is_visible_kindle_format("azw3"))
+        self.assertFalse(is_visible_kindle_format("azw"))
         self.assertTrue(is_visible_kindle_format("epub"))
         self.assertTrue(is_visible_kindle_format("pdf"))
 
-    def test_download_search_excludes_unsupported_kindle_formats(self):
+    def test_download_search_keeps_convertible_mobi_but_drops_hidden_azw(self):
         books = [
             Book(book_id="a" * 32, title="Book", language="English", ext="epub"),
             Book(book_id="b" * 32, title="Book", language="English", ext="mobi"),
             Book(book_id="c" * 32, title="Book", language="English", ext="azw3"),
             Book(book_id="d" * 32, title="Book", language="English", ext="pdf"),
+            Book(book_id="e" * 32, title="Book", language="English", ext="azw"),
         ]
         with (
             patch.object(app.DOWNLOADER, "search", return_value=(books, len(books))),
@@ -211,13 +214,32 @@ class DownloadRankingTests(unittest.TestCase):
             app.app.test_client() as client,
         ):
             response = client.get(
-                "/api/search?q=unsupported-format-filter-test&target_title=Book&lang=all&dedup=0"
+                "/api/search?q=convertible-format-filter-test&target_title=Book&lang=all&dedup=0"
             )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             {book["ext"] for book in response.get_json()["books"]},
-            {"epub", "pdf"},
+            {"epub", "pdf", "mobi", "azw3"},
+        )
+
+        with (
+            patch.object(app.DOWNLOADER, "search", return_value=(books, len(books))),
+            patch.object(app, "cache_get", return_value=None),
+            patch.object(app, "disk_cache_get", return_value=None),
+            patch.object(app, "cache_set"),
+            patch.object(app, "disk_cache_set"),
+            app.app.test_client() as client,
+        ):
+            mobi_response = client.get(
+                "/api/search?q=mobi-format-filter-test&target_title=Book&format=mobi&lang=all&dedup=0"
+            )
+
+        self.assertEqual(mobi_response.status_code, 200)
+        self.assertEqual(mobi_response.get_json()["format"], "mobi")
+        self.assertEqual(
+            {book["ext"] for book in mobi_response.get_json()["books"]},
+            {"mobi"},
         )
 
         with (
@@ -229,14 +251,14 @@ class DownloadRankingTests(unittest.TestCase):
             app.app.test_client() as client,
         ):
             legacy_response = client.get(
-                "/api/search?q=legacy-mobi-filter-test&target_title=Book&format=mobi&lang=all&dedup=0"
+                "/api/search?q=legacy-azw-filter-test&target_title=Book&format=azw&lang=all&dedup=0"
             )
 
         self.assertEqual(legacy_response.status_code, 200)
         self.assertEqual(legacy_response.get_json()["format"], "all")
-        self.assertEqual(
+        self.assertNotIn(
+            "azw",
             {book["ext"] for book in legacy_response.get_json()["books"]},
-            {"epub", "pdf"},
         )
 
     def test_unrelated_book_cannot_be_selected_for_specific_target(self):

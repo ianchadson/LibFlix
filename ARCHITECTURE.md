@@ -440,14 +440,29 @@ Download logic is intentionally modular:
 
 ```text
 downloaders/
-  __init__.py      selects the active downloader
-  base.py          downloader protocol and shared session
+  __init__.py      registry, source selection, and multi-source fan-out
+  base.py          downloader protocol, shared session, source-id helpers
   libgen.py        libgen.li implementation
+  realdebrid.py    Real-Debrid torrent resolution via a public torrent index
 ```
 
-The Flask layer uses `DOWNLOADER.search()` and
-`DOWNLOADER.resolve_download()` rather than hardcoding libgen behavior in the
-route handlers.
+The Flask layer uses `DOWNLOADER.search()`, `DOWNLOADER.resolve_download()`,
+and `DOWNLOADER.invalidate_download()` rather than hardcoding one source's
+behavior in the route handlers. `MultiDownloader` fans a page-one search out
+across the enabled sources and merges results by a namespaced download id.
+
+Enabled sources come from `LIBFLIX_DOWNLOAD_SOURCES` (comma-separated, or
+`all`). With the variable unset the default is LibGen plus Real-Debrid whenever
+`LIBFLIX_REALDEBRID_KEY` is configured. The Real-Debrid token is read only from
+the environment and is never persisted.
+
+Download ids are namespaced so one `/download/<id>` route can dispatch to the
+right provider: LibGen keeps its raw 32-hex MD5 and Real-Debrid uses
+`rd` + a 40-hex infohash. Only LibGen ids are eligible for Send to Kindle,
+because the Kindle source cache verifies the file against the upstream MD5
+content key. The Real-Debrid provider never renders a source page in a browser,
+refuses off-source hosts and redirects, and streams only after the existing
+non-HTML first-byte guard.
 
 ## Routes And API Contracts
 
@@ -803,6 +818,7 @@ Backend attachment preparation:
 
 | Module | Responsibility |
 |---|---|
+| `book_conversion.py` | Legacy MOBI/AZW3 to EPUB conversion before Kindle preparation, with validated output; a failed conversion stops the send |
 | `book_preparation.py` | Canonical filename cleanup, EPUB package metadata/cover repair, PDF metadata repair, and safe original-file fallback |
 
 ## Frontend Interaction Details
@@ -917,10 +933,14 @@ first row is best. The flagged row renders as the persistent primary option;
 remaining editions live in a closed native `<details>` disclosure and are
 expanded automatically if one contains an active resumed delivery.
 
-MOBI and AZW/AZW3 candidates are removed before deduplication and ranking, so
-unsupported Send to Kindle formats cannot appear as download actions or become
-the recommended edition. The job API independently rejects those formats to
-protect against stale clients or direct requests.
+MOBI and AZW3 editions stay visible because LibFlix can convert them to EPUB
+before Send to Kindle, so they are ranked as deliverable candidates. AZW (the
+DRM-era extension) is still removed before deduplication and ranking, and the
+job API independently rejects any format outside EPUB, PDF, MOBI, and AZW3 to
+protect against stale clients or direct requests. A convertible row is flagged
+`kindle_conversion` so the UI can label its action `Convert & Kindle`; only
+LibGen ids are eligible, because the source cache verifies the file against its
+upstream MD5 key.
 
 Ranking is dominated by normalized title similarity, including exact,
 containment, token-overlap, and sequence checks. Author agreement is the next

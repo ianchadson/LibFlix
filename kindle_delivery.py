@@ -18,7 +18,8 @@ from email.policy import SMTP as SMTP_POLICY
 from email.utils import formatdate, make_msgid
 
 
-SUPPORTED_EXTENSIONS = frozenset({"epub", "pdf"})
+SUPPORTED_EXTENSIONS = frozenset({"epub", "pdf", "mobi", "azw3"})
+LEGACY_MOBI_EXTENSIONS = frozenset({"mobi", "azw3"})
 
 
 class SourceFileError(ValueError):
@@ -45,7 +46,20 @@ def _valid_magic(header: bytes, extension: str) -> bool:
         return False
     if extension == "epub":
         return header.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"))
+    if extension in LEGACY_MOBI_EXTENSIONS:
+        return _valid_mobi_magic(header)
     return b"%PDF-" in header[:1024]
+
+
+def _valid_mobi_magic(header: bytes) -> bool:
+    """Recognize a PalmDB/MOBI container by its type and creator codes."""
+    if len(header) < 68:
+        return False
+    type_code = header[60:64]
+    creator_code = header[64:68]
+    # MOBI/AZW books use BOOKMOBI; older PalmDoc uses TEXtREAd.
+    return (type_code, creator_code) in {(b"BOOK", b"MOBI"), (b"TEXt", b"REAd")}
+
 
 
 def validate_source_file(
@@ -211,7 +225,7 @@ class KindleSourceCache:
         entries: list[tuple[float, int, str]] = []
         for directory, _, filenames in os.walk(self.root):
             for filename in filenames:
-                if not filename.endswith((".epub", ".pdf")):
+                if not filename.endswith((".epub", ".pdf", ".mobi", ".azw3")):
                     continue
                 path = os.path.join(directory, filename)
                 try:

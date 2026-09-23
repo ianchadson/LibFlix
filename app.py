@@ -65,8 +65,13 @@ except ImportError:  # Pillow is installed from requirements in production.
 
 # Modular download source — see ``downloaders/`` package.
 from downloaders import DOWNLOADER
-from downloaders.base import Book, SESSION as DL_SESSION
+from downloaders.base import Book, SESSION as DL_SESSION, is_download_id, is_libgen_id
 from downloaders.libgen import MIRROR
+from book_conversion import (
+    cleanup_path as cleanup_conversion_path,
+    convert_to_epub,
+    is_convertible,
+)
 
 warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
@@ -5496,7 +5501,7 @@ def source_metadata_language_penalty(book, preferred_language):
         return -140
     return 0
 
-HIDDEN_KINDLE_FORMATS = frozenset({"azw", "azw3", "mobi"})
+HIDDEN_KINDLE_FORMATS = frozenset({"azw"})
 KINDLE_DELIVERY_FORMATS = frozenset({"epub", "pdf"})
 
 def is_visible_kindle_format(extension):
@@ -5506,6 +5511,14 @@ def is_visible_kindle_format(extension):
 def is_kindle_delivery_format(extension):
     extension = re.sub(r"[^a-z0-9]", "", str(extension or "").casefold())
     return extension in KINDLE_DELIVERY_FORMATS
+
+def is_convertible_kindle_format(extension):
+    """True for legacy formats LibFlix can convert to EPUB for delivery."""
+    return is_convertible(extension)
+
+def is_deliverable_kindle_format(extension):
+    """True when a file can reach Kindle directly or via conversion."""
+    return is_kindle_delivery_format(extension) or is_convertible_kindle_format(extension)
 
 def kindle_accuracy_score(
     book,
@@ -5541,6 +5554,11 @@ def kindle_delivery_size_score(book):
             return -130
         size_mb = size_bytes / (1024 * 1024)
         return max(0, 30 - round(max(0, size_mb - 1.0)))
+    if is_convertible_kindle_format(extension):
+        if size_bytes < 50000 or size_bytes > 50 * 1024 * 1024:
+            return -120
+        size_mb = size_bytes / (1024 * 1024)
+        return max(0, 40 - round(max(0, size_mb - 0.5) * 3))
     return 12 if size_bytes <= 25 * 1024 * 1024 else 0
 
 def fastest_kindle_candidate(
@@ -5552,7 +5570,7 @@ def fastest_kindle_candidate(
     target_titles=None,
     target_authors=None,
 ):
-    accurate_books = [book for book in books if is_kindle_delivery_format(book.ext)]
+    accurate_books = [book for book in books if is_deliverable_kindle_format(book.ext)]
     if not accurate_books:
         return None
     best_accuracy = max(
@@ -5589,7 +5607,7 @@ def book_score(
         book, target_title, target_author, preferred_language,
         target_titles=target_titles, target_authors=target_authors,
     )
-    fmt_scores = {"epub": 160, "pdf": 70, "txt": 12, "djvu": -20, "chm": -30}
+    fmt_scores = {"epub": 160, "pdf": 70, "azw3": 88, "mobi": 80, "txt": 12, "djvu": -20, "chm": -30}
     score += fmt_scores.get(book.ext.lower(), 0)
     try:
         y = int(book.year)
@@ -5628,20 +5646,25 @@ def recommendation_reasons(
     )
     extension = (book.ext or "").lower()
     size_bytes = parse_size_bytes(book.size)
+    libgen_source = is_libgen_id(getattr(book, "book_id", ""))
+    kindle_eligible = is_deliverable_kindle_format(extension) and libgen_source
+    convertible = is_convertible_kindle_format(extension) and libgen_source
     if title_score >= 900:
         reasons.append("Strong title match")
     if target_author and author_score >= 180:
         reasons.append("Author match")
     if extension == "epub":
-        reasons.append("Kindle-ready EPUB")
+        reasons.append("Kindle-ready EPUB" if kindle_eligible else "EPUB download")
     elif extension == "pdf":
-        reasons.append("Readable PDF")
+        reasons.append("Readable PDF" if kindle_eligible else "PDF download")
+    elif convertible:
+        reasons.append("Converts to Kindle EPUB")
     if fastest_to_kindle:
         reasons.append("Fastest to Kindle")
     if preferred_language and book_matches_language(book, preferred_language):
         reasons.append(preferred_language)
     if size_bytes and size_bytes <= 25 * 1024 * 1024:
-        reasons.append("Easy to send")
+        reasons.append("Easy to send" if kindle_eligible else "Small file")
     try:
         if int(book.pages) > 0:
             reasons.append("Complete page data")
@@ -8750,7 +8773,7 @@ def api_search():
     page = int(request.args.get("page", 1)) if request.args.get("page", "1").isdigit() else 1
     page = max(1, min(page, 500))
     fmt = request.args.get("format", "all").lower()
-    if fmt not in ("all", "epub", "pdf"):
+    if fmt not in ("all", "epub", "pdf", "mobi", "azw3"):
         fmt = "all"
     default_download_lang = "Chinese" if get_book_lang() == "cn" else "English"
     lang = request.args.get("lang", default_download_lang)
@@ -8914,7 +8937,7 @@ def api_search():
     if dedup_on:
         books = dedup(books, scorer)
     fastest_book = fastest_kindle_candidate(
-        books,
+        [book for book in books if is_libgen_id(book.book_id)],
         target_title=target_title,
         target_author=target_author,
         preferred_language=lang_filter or "",
@@ -8974,9 +8997,15 @@ def api_search():
             target_titles=target_titles,
             target_authors=target_authors,
         )
-        d["kindle_compatible"] = is_kindle_delivery_format(b.ext)
+        deliverable = is_deliverable_kindle_format(b.ext)
+        kindle_eligible = deliverable and is_libgen_id(b.book_id)
+        d["kindle_compatible"] = kindle_eligible
+        d["kindle_conversion"] = (
+            is_convertible_kindle_format(b.ext) and kindle_eligible
+        )
         d["fastest_to_kindle"] = b is fastest_book
         d["best_match"] = b is best_book
+        d["source"] = str(getattr(b, "source", "") or "")
         result_books.append(d)
     result = {
         "success": True,
@@ -9011,7 +9040,7 @@ def api_search():
 
 @app.route("/download/<md5>")
 def download(md5):
-    if not re.fullmatch(r"[a-fA-F0-9]{32}", md5 or ""):
+    if not is_download_id(md5 or ""):
         return jsonify({"success": False, "error": "Invalid download identifier."}), 404
     md5 = md5.lower()
     filename = request.args.get("filename", f"{md5}.epub")
@@ -9020,13 +9049,15 @@ def download(md5):
     ascii_filename = filename.encode("ascii", "ignore").decode().strip()
     ascii_filename = re.sub(r'[^A-Za-z0-9._ -]+', '', ascii_filename) or f"{md5}.epub"
     extension = re.sub(r"[^a-z0-9]", "", filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
-    if extension in {"epub", "pdf"}:
+    if extension in {"epub", "pdf", "mobi", "azw3"} and is_libgen_id(md5):
         cached_path = _kindle_source_cache().get(md5, extension)
         if cached_path:
             mime = {
                 "epub": "application/epub+zip",
                 "pdf": "application/pdf",
-            }[extension]
+                "mobi": "application/x-mobipocket-ebook",
+                "azw3": "application/vnd.amazon.ebook",
+            }.get(extension, "application/octet-stream")
             response = send_file(
                 cached_path,
                 as_attachment=True,
@@ -9048,6 +9079,21 @@ def download(md5):
         if not url:
             DOWNLOADER.invalidate_download(md5)
             continue
+        if not is_libgen_id(md5):
+            resolved_name = DOWNLOADER.resolved_filename(md5)
+            if resolved_name:
+                candidate = re.sub(r'[\r\n\\/\"<>|:*?]+', ' ', resolved_name)
+                candidate = re.sub(r'\s+', ' ', candidate).strip()[:140]
+                if candidate:
+                    filename = candidate
+                    ascii_filename = re.sub(
+                        r'[^A-Za-z0-9._ -]+', '',
+                        filename.encode("ascii", "ignore").decode().strip(),
+                    ) or filename
+                    extension = (
+                        re.sub(r"[^a-z0-9]", "", filename.rsplit(".", 1)[-1].lower())
+                        if "." in filename else ""
+                    )
         try:
             upstream = DL_SESSION.get(
                 url,
@@ -9125,10 +9171,10 @@ def api_prepare_download(md5):
         "",
         request.args.get("ext", "epub").lower(),
     )
-    if extension not in {"epub", "pdf"}:
+    if extension not in {"epub", "pdf", "mobi", "azw3"}:
         return jsonify({
             "success": False,
-            "error": "Only EPUB and PDF downloads can be prepared.",
+            "error": "Only EPUB, PDF, MOBI, and AZW3 downloads can be prepared.",
         }), 400
 
     md5 = md5.lower()
@@ -10142,6 +10188,7 @@ def _send_to_kindle_events(data):
     tracker = KindleProgressTracker()
     tmp_path = None
     prepared_path = None
+    conversion_path = None
     source_path = ""
     server = None
     smtp_future = None
@@ -10201,6 +10248,28 @@ def _send_to_kindle_events(data):
             source_path = source_cache.commit(tmp_path, md5, ext, validation)
             if source_path != tmp_path:
                 tmp_path = None
+
+        if is_convertible_kindle_format(ext):
+            progress = 66
+            yield tracker.event(
+                "Converting book",
+                progress,
+                "Turning this edition into a Kindle-friendly EPUB",
+            )
+            conversion = convert_to_epub(source_path, ext)
+            if conversion.path:
+                conversion_path = conversion.path
+                source_path = conversion.path
+                ext = conversion.extension
+            else:
+                # Send to Kindle rejects MOBI/AZW3, so an unconverted file
+                # would bounce silently at Amazon; fail visibly instead.
+                app.logger.info(
+                    "Kindle conversion failed for %s: %s", ext, conversion.warning
+                )
+                raise RuntimeError(
+                    "This edition couldn't be converted for Kindle. Try an EPUB or PDF edition."
+                )
 
         progress = 68
         yield tracker.event("Polishing book details", progress, "Checking title, metadata, and cover")
@@ -10348,6 +10417,9 @@ def _send_to_kindle_events(data):
                 os.unlink(path)
             except OSError:
                 pass
+        if conversion_path:
+            cleanup_conversion_path(conversion_path)
+
 
 def _valid_delivery_email(value):
     value = str(value or "").strip()
@@ -10366,8 +10438,8 @@ def validate_kindle_payload(data):
     if not re.fullmatch(r"[a-fA-F0-9]{32}", str(data.get("md5", ""))):
         return "Invalid book identifier"
     extension = re.sub(r"[^a-z0-9]", "", str(data.get("ext", "epub")).casefold()) or "epub"
-    if not is_kindle_delivery_format(extension):
-        return "This file type is not supported by Send to Kindle; use EPUB or PDF"
+    if not is_deliverable_kindle_format(extension):
+        return "This file type is not supported by Send to Kindle; use EPUB, PDF, MOBI, or AZW3"
     smtp_configuration = _kindle_smtp_configuration(data)
     try:
         port = int(smtp_configuration["port"])

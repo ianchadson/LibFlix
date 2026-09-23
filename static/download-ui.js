@@ -9,7 +9,7 @@
     info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><path d="M12 8h.01"></path></svg>',
     books: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11a2 2 0 0 1 2 2v15a2.7 2.7 0 0 0-2.4-1.5H4Z"></path><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v17a2.7 2.7 0 0 1 2.4-1.5H20Z"></path></svg>',
   };
-  const hiddenKindleFormats = new Set(['azw', 'azw3', 'mobi']);
+  const hiddenKindleFormats = new Set(['azw']);
   const appleBooksShortcutName = 'LibFlix to Books';
   const appleBooksShortcutStorageKey = 'libflix.appleBooksShortcutReady';
   const legacyAppleBooksShortcutStorageKeys = [
@@ -300,7 +300,8 @@
     const publisher = shorten(book.publisher || '', 90);
     const extension = String(book.ext || '').toLowerCase();
     const format = extension || 'file';
-    const kindleCompatible = book.kindle_compatible === true || ['epub', 'pdf'].includes(extension);
+    const kindleCompatible = book.kindle_compatible === true;
+    const kindleConversion = book.kindle_conversion === true;
     const recommended = book.best_match === true;
     const reasons = Array.isArray(book.recommendation_reasons)
       ? book.recommendation_reasons.filter(Boolean).slice(0, 4)
@@ -309,13 +310,13 @@
     const recommendation = recommended
       ? reasons.length
         ? '<span class="edition-recommendation">' +
-            '<button class="edition-recommended" type="button" aria-describedby="' + recommendationId + '">Best for Kindle' + icons.info + '</button>' +
+            '<button class="edition-recommended" type="button" aria-describedby="' + recommendationId + '">' + (kindleCompatible ? 'Best for Kindle' : 'Best match') + icons.info + '</button>' +
             '<span class="edition-reasons-tooltip" id="' + recommendationId + '" role="tooltip">' +
               '<span class="edition-tooltip-title">Why this edition</span>' +
               '<span class="edition-tooltip-list">' + reasons.map(reason => '<span class="edition-tooltip-reason">' + icons.check + '<span>' + escapeHtml(reason) + '</span></span>').join('') + '</span>' +
             '</span>' +
           '</span>'
-        : '<span class="edition-recommended">Best for Kindle</span>'
+        : '<span class="edition-recommended">' + (kindleCompatible ? 'Best for Kindle' : 'Best match') + '</span>'
       : '';
     const filename = cleanFilename(book.title, format);
     const downloadHref = book.md5
@@ -351,7 +352,7 @@
             ? '<a class="edition-action edition-apple-books" href="' + escapeHtml(appleBooksHref) + '" aria-label="Open ' + escapeHtml(title) + ' in Apple Books"><span> Books</span></a>'
             : '') +
           (kindleCompatible
-            ? '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(coverUrl) + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>Kindle</span></button>'
+            ? '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(coverUrl) + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>' + (kindleConversion ? 'Convert &amp; Kindle' : 'Kindle') + '</span></button>'
             : '') +
         '</div>'
       : '<div class="edition-actions"><span class="edition-action edition-kindle" aria-disabled="true">Unavailable</span></div>';

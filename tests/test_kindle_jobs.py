@@ -89,11 +89,34 @@ class KindleJobTests(unittest.TestCase):
         self.assertRegex(body["job_id"], r"^[a-f0-9]{32}$")
         submit.assert_called_once()
 
-    def test_create_job_rejects_unsupported_mobi_format(self):
+    def test_create_job_accepts_convertible_mobi_format(self):
         payload = {
             "md5": "a" * 32,
             "title": "Book",
             "ext": "mobi",
+            "kindle_email": "reader@kindle.com",
+            "smtp_host": "smtp.example.com",
+            "smtp_port": 587,
+            "smtp_user": "sender@example.com",
+            "smtp_pass": "secret",
+            "sender_email": "sender@example.com",
+        }
+        public_dns = [(2, 1, 6, "", ("8.8.8.8", 587))]
+        with (
+            app.app.test_client() as client,
+            patch.object(app.socket, "getaddrinfo", return_value=public_dns),
+            patch.object(app.KINDLE_EXECUTOR, "submit") as submit,
+        ):
+            response = client.post("/api/kindle/jobs", json=payload)
+
+        self.assertEqual(response.status_code, 202)
+        submit.assert_called_once()
+
+    def test_create_job_rejects_hidden_azw_format(self):
+        payload = {
+            "md5": "a" * 32,
+            "title": "Book",
+            "ext": "azw",
             "kindle_email": "reader@kindle.com",
             "smtp_host": "smtp.example.com",
             "smtp_port": 587,
@@ -128,7 +151,7 @@ class KindleJobTests(unittest.TestCase):
             response = client.post("/api/kindle/jobs", json=payload)
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("EPUB or PDF", response.get_json()["error"])
+        self.assertIn("EPUB, PDF, MOBI, or AZW3", response.get_json()["error"])
         submit.assert_not_called()
 
     def test_managed_relay_keeps_existing_user_smtp_optional(self):

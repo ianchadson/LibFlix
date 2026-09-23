@@ -68,7 +68,7 @@ unshare --net --map-root-user -- \
 
 PYTHONPYCACHEPREFIX="$LIBFLIX_TEST_ROOT/pycache" python -m py_compile \
   app.py topic_discovery.py nyt_bestsellers.py book_preparation.py \
-  kindle_delivery.py security_runtime.py downloaders/*.py
+  book_conversion.py kindle_delivery.py security_runtime.py downloaders/*.py
 node --check static/download-ui.js
 node --check static/libflix-pwa.js
 node --check static/libflix-sw.js
