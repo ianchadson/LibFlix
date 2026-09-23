@@ -483,6 +483,7 @@ Read signals also supply cached weekly and monthly homepage rails.
 | `KINDLE_RELAY_USER` | `resend` | Managed relay username |
 | `KINDLE_RELAY_PASSWORD` | empty | Managed relay password |
 | `KINDLE_RELAY_PASSWORD_FILE` | `/opt/libflix/shared/resend-api-key` | File-backed relay secret stored outside releases |
+| `LIBFLIX_REALDEBRID_KEY_FILE` | `/opt/libflix/shared/realdebrid-api-key` | File-backed Real-Debrid token stored outside releases; enables the Real-Debrid source at startup |
 | `KINDLE_RELAY_SENDER` | `libflix@fomalhaut.app` | Verified From address used by the managed relay |
 | `KINDLE_RELAY_MAX_ATTACHMENT_MB` | `28` | Raw attachment ceiling below Resend's encoded message limit |
 | `LIBFLIX_TRUST_PROXY_HEADERS` | `0` | Accept Caddy's overwritten `X-LibFlix-Client-IP` only across the localhost Caddy-to-Gunicorn hop; enable only after applying the documented Caddy source allowlist/header rewrite |

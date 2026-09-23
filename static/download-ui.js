@@ -88,13 +88,25 @@
       return;
     }
     if (url.searchParams.get(appleBooksHandoffParam) !== 'error') return;
+    const errorMessage = String(url.searchParams.get('errorMessage') || '');
     url.searchParams.delete(appleBooksHandoffParam);
     url.searchParams.delete('errorMessage');
     try {
       history.replaceState(history.state, '', url.href);
     } catch {}
-    forgetAppleBooksShortcut();
-    window.LibFlixNotify?.('The Books shortcut didn’t run. Tap Books again to set it up.', 'error');
+    // Shortcuts reports a missing shortcut as "could not be found"; any other
+    // message means the shortcut ran and failed, so setup is still valid.
+    const shortcutMissing = !errorMessage || /found|exist|install/i.test(errorMessage);
+    if (shortcutMissing) {
+      forgetAppleBooksShortcut();
+      window.LibFlixNotify?.('The Books shortcut isn’t set up', 'error', {
+        detail: 'Tap Books again to set it up.',
+      });
+      return;
+    }
+    window.LibFlixNotify?.('Books couldn’t get this EPUB', 'error', {
+      detail: 'Try Books again, or use the EPUB download button.',
+    });
   }
 
   function rememberAppleBooksShortcut() {

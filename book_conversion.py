@@ -39,6 +39,15 @@ def is_convertible(extension: str) -> bool:
     return re.sub(r"[^a-z0-9]", "", str(extension or "").casefold()) in CONVERTIBLE_EXTENSIONS
 
 
+def converter_available() -> bool:
+    """True when the ``mobi`` package is importable in this deployment."""
+    try:
+        import mobi  # type: ignore  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _valid_epub(path: str) -> bool:
     if not path or not os.path.isfile(path) or not zipfile.is_zipfile(path):
         return False

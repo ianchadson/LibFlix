@@ -344,3 +344,38 @@ class DownloadRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RealDebridKeyFileTests(unittest.TestCase):
+    def test_key_is_read_from_file_when_environment_is_unset(self):
+        import tempfile
+        from downloaders import realdebrid
+
+        with tempfile.TemporaryDirectory() as directory:
+            key_file = os.path.join(directory, "realdebrid-api-key")
+            with open(key_file, "w", encoding="utf-8") as handle:
+                handle.write("file-token\n")
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("LIBFLIX_REALDEBRID_KEY", "LIBFLIX_RD_KEY")}
+            with patch.dict(os.environ, env, clear=True), \
+                    patch.object(realdebrid, "RD_KEY_FILE", key_file):
+                self.assertTrue(realdebrid.is_enabled())
+                self.assertEqual(realdebrid._api_headers(), {"Authorization": "Bearer file-token"})
+
+    def test_missing_key_file_leaves_source_disabled(self):
+        from downloaders import realdebrid
+
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("LIBFLIX_REALDEBRID_KEY", "LIBFLIX_RD_KEY")}
+        with patch.dict(os.environ, env, clear=True), \
+                patch.object(realdebrid, "RD_KEY_FILE", "/nonexistent/realdebrid-api-key"):
+            self.assertFalse(realdebrid.is_enabled())
+
+    def test_health_reports_download_sources_without_secrets(self):
+        import app
+
+        with patch.dict(os.environ, {"LIBFLIX_REALDEBRID_KEY": "secret-value"}):
+            payload = app.app.test_client().get("/api/health").get_json()
+        self.assertIn("sources", payload["downloads"])
+        self.assertIsInstance(payload["downloads"]["mobi_conversion"], bool)
+        self.assertNotIn("secret-value", str(payload))

@@ -70,6 +70,7 @@ from downloaders.libgen import MIRROR
 from book_conversion import (
     cleanup_path as cleanup_conversion_path,
     convert_to_epub,
+    converter_available as mobi_converter_available,
     is_convertible,
 )
 
@@ -6607,6 +6608,10 @@ def api_health():
             ),
         },
         "kindle_jobs": job_counts,
+        "downloads": {
+            "sources": list(getattr(DOWNLOADER, "order", [])),
+            "mobi_conversion": mobi_converter_available(),
+        },
         "runtime_protection": {
             "rate_limiter_ready": rate_limiter_ready,
             "metrics_ready": metrics_ready,

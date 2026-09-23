@@ -803,6 +803,12 @@ class DownloadShellTests(unittest.TestCase):
         self.assertIn("url.searchParams.delete('errorMessage')", handler)
         self.assertIn("history.replaceState(", handler)
         self.assertIn("Tap Books again to set it up.", handler)
+        self.assertIn("const shortcutMissing = !errorMessage || /found|exist|install/i.test(errorMessage);", handler)
+        self.assertIn("Try Books again, or use the EPUB download button.", handler)
+        missing_branch = handler.split("if (shortcutMissing) {", 1)[1].split("return;", 1)[0]
+        self.assertIn("forgetAppleBooksShortcut();", missing_branch)
+        run_failure = handler.split("if (shortcutMissing) {", 1)[1].split("return;", 1)[1]
+        self.assertNotIn("forgetAppleBooksShortcut", run_failure)
         self.assertIn("document.addEventListener('DOMContentLoaded', handleAppleBooksHandoffReturn", downloads)
         self.assertIn("tap Always Allow when Shortcuts asks", downloads)
 

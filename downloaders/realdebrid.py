@@ -14,7 +14,8 @@ Real-Debrid exposes no torrent *search* endpoint and has disabled the
 The provider is strictly fail-closed: it never renders a source page (so no
 pop-ups or ad scripts can run), refuses off-source hosts, and deletes a torrent
 it could not resolve so the account is not left cluttered.  The API token is
-read only from the environment and is never written to disk.
+read from the environment or a file-backed secret outside releases and is never
+written by LibFlix.
 """
 
 from __future__ import annotations
@@ -65,12 +66,26 @@ _NON_BOOK_CATEGORY_HINTS = re.compile(
 )
 
 
+RD_KEY_FILE = os.environ.get(
+    "LIBFLIX_REALDEBRID_KEY_FILE",
+    "/opt/libflix/shared/realdebrid-api-key",
+)
+
+
 def _api_key() -> str:
-    return (
+    key = (
         os.environ.get("LIBFLIX_REALDEBRID_KEY")
         or os.environ.get("LIBFLIX_RD_KEY")
         or ""
     ).strip()
+    if key:
+        return key
+    # File-backed like the relay secret: provisioned once outside releases.
+    try:
+        with open(RD_KEY_FILE, "r", encoding="utf-8") as secret_file:
+            return secret_file.read().strip()
+    except OSError:
+        return ""
 
 
 def is_enabled() -> bool:
