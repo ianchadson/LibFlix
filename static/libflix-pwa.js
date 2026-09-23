@@ -54,17 +54,9 @@
     const workerUrl = withVersion(script.dataset.worker);
     navigator.serviceWorker.register(workerUrl, { scope: '/', updateViaCache: 'none' })
       .then(registration => {
-        if (registration.waiting && navigator.serviceWorker.controller) {
-          notify('A LibFlix update is ready and will apply after you close the app.');
-        }
-        registration.addEventListener('updatefound', () => {
-          const installing = registration.installing;
-          installing?.addEventListener('statechange', () => {
-            if (installing.state === 'installed' && navigator.serviceWorker.controller) {
-              notify('A LibFlix update is ready and will apply after you close the app.');
-            }
-          });
-        });
+        // Updates activate on their own; nudge any worker left waiting by an
+        // older release so it never lingers behind a stale update notice.
+        registration.waiting?.postMessage({ type: 'SKIP_WAITING' });
       })
       .catch(error => console.warn('LibFlix offline support is unavailable:', error.message));
   };

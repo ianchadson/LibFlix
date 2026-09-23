@@ -1192,6 +1192,18 @@ and the handoff into download matching. Strict title/author identity search also
 runs a concurrent Inventaire fallback, but admits only directly mapped Open
 Library works that pass the same local language and relevance guards.
 
+Identity search asks Open Library for the query-matching edition and alternate
+titles on its primary query, because canonical works are often filed under an
+original or foreign title ("Nineteen Eighty-Four", "The Psychology of Everyday
+Things", "海辺のカフカ"). Relevance counts edition titles, ignores a dropped
+leading article, and gives author credit only for query words the title does
+not already explain. A bounded reader-signal prior (reading-log and edition
+counts) orders comparable matches, and one of Open Library's top two works with
+strong reader signal is kept even when only an unreturned edition matches. The
+card shows the matched edition title when it covers more of the query, and an
+English-mode card replaces a non-Latin author name with its most common Latin
+form from `author_alternative_name`.
+
 Broad-topic discovery can also use Inventaire work search and a small approved
 set of semantic Wikidata subject claims. Inventaire contributes a candidate only
 when its `P648` claim resolves directly to an Open Library work. The local

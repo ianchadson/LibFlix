@@ -111,8 +111,15 @@ const cacheFirstShell = async request => {
 
 self.addEventListener('install', event => {
   // A failed/incomplete shell fails installation, leaving the previous worker
-  // and its complete cache untouched. Updates wait until existing tabs close.
-  event.waitUntil(populateShellCache());
+  // and its complete cache untouched. The worker only serves versioned static
+  // files (pages always load from the network), so a complete update can take
+  // over at once instead of waiting for every tab, which an installed app
+  // rarely closes.
+  event.waitUntil(populateShellCache().then(() => self.skipWaiting()));
+});
+
+self.addEventListener('message', event => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('activate', event => {

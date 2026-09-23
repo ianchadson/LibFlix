@@ -123,6 +123,35 @@ class PwaIntegrationTests(unittest.TestCase):
         self.assertNotIn("staleWhileRevalidateMetadata", worker)
         self.assertNotIn("NAVIGATION_CACHE", worker)
 
+    def test_cookie_language_pages_vary_on_cookie(self):
+        with patch.object(app, "get_shelves", return_value=[]):
+            client = app.app.test_client()
+            client.set_cookie("book_lang", "cn")
+            full = client.get("/")
+            partial = client.get("/", headers={"X-LibFlix-Navigation": "partial"})
+        self.assertIn("Cookie", full.headers.get("Vary", ""))
+        self.assertIn("Cookie", partial.headers.get("Vary", ""))
+        self.assertIn("X-LibFlix-Navigation", partial.headers.get("Vary", ""))
+
+    def test_restored_page_in_the_old_language_reloads_once(self):
+        navbar = (ROOT / "templates/_navbar.html").read_text()
+        guard = navbar.split("const reloadStaleLanguagePage = () => {", 1)[1].split("};", 1)[0]
+
+        self.assertIn("book_lang=(en|cn)", guard)
+        self.assertIn("segments[0] === 'cn' || segments[1] === 'cn'", guard)
+        self.assertIn("window.sessionStorage.getItem(guardKey) === window.location.href", guard)
+        self.assertIn("window.location.reload()", guard)
+        self.assertIn("if (event.persisted) reloadStaleLanguagePage();", navbar)
+
+    def test_worker_updates_activate_without_a_stale_notice(self):
+        worker = (ROOT / "static/libflix-sw.js").read_text()
+        pwa = (ROOT / "static/libflix-pwa.js").read_text()
+
+        self.assertIn("populateShellCache().then(() => self.skipWaiting())", worker)
+        self.assertIn("event.data?.type === 'SKIP_WAITING'", worker)
+        self.assertIn("registration.waiting?.postMessage({ type: 'SKIP_WAITING' })", pwa)
+        self.assertNotIn("update is ready", pwa)
+
     def test_install_action_recognizes_desktop_user_agent_ipads(self):
         pwa = (ROOT / "static/libflix-pwa.js").read_text()
 

@@ -400,6 +400,146 @@ class DiscoveryRelevanceTests(unittest.TestCase):
 
         self.assertEqual(ranked[0]["key"], "/works/OL2W")
 
+    def test_discovery_keeps_popular_work_filed_under_an_original_title(self):
+        # Open Library files the canonical work as "Nineteen Eighty-Four" and
+        # returns an English edition with the same title, so there is no local
+        # title evidence for "1984"; its own top rank plus reader signal is.
+        records = [
+            {
+                "key": "/works/OL1168083W",
+                "title": "Nineteen Eighty-Four",
+                "author_name": ["George Orwell"],
+                "readinglog_count": 8583,
+                "edition_count": 726,
+                "editions": {"docs": [{"title": "Nineteen eighty-four"}]},
+            },
+            {
+                "key": "/works/OL11326416W",
+                "title": "1984 (adaptation)",
+                "author_name": ["Michael Dean", "George Orwell"],
+                "readinglog_count": 505,
+                "edition_count": 4,
+                "editions": {"docs": [{"title": "1984"}]},
+            },
+            {
+                "key": "/works/OL9W",
+                "title": "Popular Unrelated Filler",
+                "author_name": ["Someone Else"],
+                "readinglog_count": 9000,
+            },
+        ]
+
+        ranked = app.rank_discovery_records(records, "1984")
+
+        self.assertEqual(ranked[0]["key"], "/works/OL1168083W")
+        self.assertNotIn("/works/OL9W", [record["key"] for record in ranked])
+
+    def test_discovery_uses_matched_edition_title_for_display(self):
+        record = {
+            "key": "/works/OL1879162W",
+            "title": "The Psychology of Everyday Things",
+            "author_name": ["Donald A. Norman"],
+            "editions": {"docs": [{"title": "The design of everyday things", "language": ["eng"]}]},
+        }
+
+        self.assertGreater(
+            app.discovery_record_relevance(record, "the design of everyday things"),
+            0,
+        )
+        self.assertEqual(
+            app.discovery_display_title(
+                record,
+                "the design of everyday things don norman",
+                "The Psychology of Everyday Things",
+                "en",
+            ),
+            "The Design of Everyday Things",
+        )
+        self.assertEqual(
+            app.discovery_display_title(
+                record,
+                "psychology of everyday things",
+                "The Psychology of Everyday Things",
+                "en",
+            ),
+            "The Psychology of Everyday Things",
+        )
+
+    def test_discovery_author_that_repeats_the_title_gets_no_double_credit(self):
+        records = [
+            {
+                "key": "/works/OL1W",
+                "title": "The Alchemist Cocktail Book",
+                "author_name": ["The Alchemist"],
+                "readinglog_count": 12,
+                "edition_count": 2,
+            },
+            {
+                "key": "/works/OL796465W",
+                "title": "The Alchemist",
+                "author_name": ["Paulo Coelho"],
+                "readinglog_count": 9614,
+                "edition_count": 141,
+            },
+        ]
+
+        ranked = app.rank_discovery_records(records, "The Alchemist")
+
+        self.assertEqual(ranked[0]["key"], "/works/OL796465W")
+
+    def test_discovery_exact_title_ignores_a_dropped_leading_article(self):
+        records = [
+            {
+                "key": "/works/OL1W",
+                "title": "Midnight Library",
+                "author_name": ["Damien Graves"],
+                "readinglog_count": 3,
+            },
+            {
+                "key": "/works/OL2W",
+                "title": "The Midnight Library",
+                "author_name": ["Matt Haig"],
+                "readinglog_count": 4200,
+                "edition_count": 60,
+            },
+        ]
+
+        ranked = app.rank_discovery_records(records, "midnight library")
+
+        self.assertEqual(ranked[0]["key"], "/works/OL2W")
+
+    def test_discovery_summary_mill_author_is_demoted(self):
+        records = [
+            {"key": "/works/OL1W", "title": "Sapiens", "author_name": ["Book Summary"], "readinglog_count": 40},
+            {"key": "/works/OL2W", "title": "Sapiens", "author_name": ["Yuval Noah Harari"], "readinglog_count": 30},
+        ]
+
+        ranked = app.rank_discovery_records(records, "sapiens")
+
+        self.assertEqual(ranked[0]["key"], "/works/OL2W")
+
+    def test_non_latin_author_uses_common_english_form(self):
+        self.assertEqual(
+            app.latin_author_name(
+                "Лев Толстой",
+                ["Leo Tolstoy", "Léon Tolstoï", "LEO TOLSTOY", "Lev Tolstoy",
+                 "Tolstoy, Leo, graf, 1828-1910", "Leo Tolstoi", "Leo Tolstoy (1828 - 1910)",
+                 "Лев Толстой"],
+            ),
+            "Leo Tolstoy",
+        )
+        self.assertEqual(
+            app.latin_author_name(
+                "村上春樹",
+                ["MURAKAMI HARUKI", "Haruki MURAKAMI", "Haruki Murakami", "HARUKI MURAKAMI", "무라카미 하루키"],
+            ),
+            "Haruki Murakami",
+        )
+        self.assertEqual(app.latin_author_name("Ὅμηρος", ["Homer", "HOMER", "Homerus", "Гомер"]), "Homer")
+        self.assertEqual(app.latin_author_name("村上春樹", []), "村上春樹")
+        self.assertEqual(app.display_title_case("The design of everyday things"), "The Design of Everyday Things")
+        self.assertEqual(app.display_title_case("Thinking in Systems"), "Thinking in Systems")
+
     def test_discovery_prefers_catalog_author_over_title_appended_name(self):
         records = [
             {

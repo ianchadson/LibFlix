@@ -1063,6 +1063,33 @@
     }, { once: true });
     window.addEventListener('pageshow', hideTransition);
     window.addEventListener('load', hideTransition);
+    // A page restored from the browser cache or back/forward cache can still be
+    // in the language the reader just switched away from. Its /cn links would
+    // then switch them straight back, so reload once to match the cookie.
+    const reloadStaleLanguagePage = () => {
+      const cookieLang = (document.cookie.match(/(?:^|;\s*)book_lang=(en|cn)(?:;|$)/) || [])[1];
+      if (!cookieLang) return;
+      const segments = window.location.pathname.split('/').filter(Boolean);
+      if (segments[0] === 'cn' || segments[1] === 'cn') return;
+      const pageLang = document.documentElement.lang === 'zh' ? 'cn' : 'en';
+      const guardKey = 'libflix.languageReload';
+      if (pageLang === cookieLang) {
+        try { window.sessionStorage.removeItem(guardKey); } catch {}
+        return;
+      }
+      try {
+        if (window.sessionStorage.getItem(guardKey) === window.location.href) return;
+        window.sessionStorage.setItem(guardKey, window.location.href);
+      } catch {
+        return;
+      }
+      window.location.reload();
+    };
+    reloadStaleLanguagePage();
+    window.addEventListener('pageshow', event => {
+      if (event.persisted) reloadStaleLanguagePage();
+    });
+
     document.addEventListener('click', event => {
       const link = event.target.closest('a[href]');
       if (!link || event.defaultPrevented || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;

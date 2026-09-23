@@ -164,6 +164,11 @@ OL_IDENTITY_FIELDS = f"{OL_COVER_FIELDS},description,alternative_title,isbn,edit
 OL_BOOK_FIELDS = OL_COVER_FIELDS
 OL_DISCOVERY_IDENTIFIER_FIELDS = f"{OL_LIST_FIELDS},isbn"
 OL_COVER_IDENTIFIER_FIELDS = f"{OL_COVER_FIELDS},isbn"
+# Open Library returns the edition that best matches the query in ``editions``.
+# Discovery needs it (plus alternate titles) because many canonical works are
+# filed under an original or foreign title, e.g. "Nineteen Eighty-Four",
+# "The Psychology of Everyday Things", or "海辺のカフカ".
+OL_DISCOVERY_FIELDS = f"{OL_COVER_FIELDS},alternative_title,author_alternative_name"
 OL_SIMILAR_FIELDS = f"{OL_LIST_FIELDS},subject"
 SHELF_BOOK_TARGET = 40
 SHELF_INITIAL_BATCH_SIZE = 12
@@ -2358,6 +2363,132 @@ def resolve_english_title(ol_key):
     disk_cache_set(ckey, result)
     return title
 
+_LATIN_NAME_PATTERN = re.compile(r"[A-Za-z\u00C0-\u024F][A-Za-z\u00C0-\u024F .'\-]*")
+_AUTHOR_ALIAS_NOISE = re.compile(
+    r"\d|,|/|\(|\bstaff\b|\beditors?\b|\btranslat|\bgraf\b|\bcount\b|\bcountess\b",
+    re.IGNORECASE,
+)
+
+
+def _fold_name(value):
+    folded = unicodedata.normalize("NFKD", str(value or ""))
+    folded = "".join(char for char in folded if not unicodedata.combining(char))
+    return re.sub(r"\s+", " ", folded.replace(".", " ")).strip().casefold()
+
+
+def latin_author_name(author, alternatives):
+    """Pick the most common Latin-script form of a non-Latin author name.
+
+    Open Library often lists the native form first ("Лев Толстой", "村上春樹")
+    and keeps English variants only in ``author_alternative_name``. The surname
+    is taken as the most frequent final token, then the most frequent full form
+    with that surname wins.
+    """
+    candidates = []
+    for alternative in alternatives or []:
+        alternative = re.sub(r"\s+", " ", str(alternative or "")).strip(" .")
+        if (
+            not alternative
+            or len(alternative) > 60
+            or not _LATIN_NAME_PATTERN.fullmatch(alternative)
+            or _AUTHOR_ALIAS_NOISE.search(alternative)
+        ):
+            continue
+        folded = _fold_name(alternative)
+        tokens = folded.split()
+        if not tokens or len(tokens) != len(set(tokens)):
+            continue
+        candidates.append((alternative, folded, tokens[-1]))
+    if not candidates:
+        return author
+    # English catalogues favour plain ASCII transliterations ("Leo Tolstoy"
+    # over "Léon Tolstoï"), so use them whenever there are enough to vote.
+    ascii_candidates = [item for item in candidates if item[0].isascii()]
+    if len(ascii_candidates) >= 3:
+        candidates = ascii_candidates
+    surname_counts = {}
+    form_counts = {}
+    for _, folded, surname in candidates:
+        surname_counts[surname] = surname_counts.get(surname, 0) + 1
+        form_counts[folded] = form_counts.get(folded, 0) + 1
+    surname = max(surname_counts, key=lambda key: (surname_counts[key], -len(key)))
+    forms = [item for item in candidates if item[2] == surname]
+    best_form = max(
+        (item[1] for item in forms),
+        key=lambda key: (form_counts[key], len(key.split()) > 1, -len(key)),
+    )
+    spellings = [item[0] for item in forms if item[1] == best_form]
+    display = next(
+        (value for value in spellings if all(
+            word[:1].isupper() and not word[1:].isupper() for word in value.split()
+        )),
+        spellings[0],
+    )
+    return display if display in spellings and all(
+        word[:1].isupper() and not word[1:].isupper() for word in display.split()
+    ) else " ".join(word[:1].upper() + word[1:].lower() for word in display.split())
+
+
+_TITLE_SMALL_WORDS = frozenset({
+    "a", "an", "and", "as", "at", "but", "by", "for", "from", "in", "into",
+    "nor", "of", "on", "or", "the", "to", "with",
+})
+
+
+def display_title_case(title):
+    """Title-case catalogue titles stored in sentence case ("The design of ...")."""
+    words = str(title or "").split()
+    alphabetic = [word for word in words if word[:1].isalpha()]
+    if len(alphabetic) < 2 or sum(word[:1].isupper() for word in alphabetic[1:]) > 0:
+        return title
+    cased = []
+    for index, word in enumerate(words):
+        bare = word.casefold()
+        if 0 < index < len(words) - 1 and bare in _TITLE_SMALL_WORDS:
+            cased.append(bare)
+        elif word[:1].isalpha() and word[1:] == word[1:].lower():
+            cased.append(word[:1].upper() + word[1:])
+        else:
+            cased.append(word)
+    return " ".join(cased)
+
+
+def discovery_display_title(record, query, title, lang=None):
+    """Prefer the edition title a reader searched for over an older work title.
+
+    Open Library files "The Design of Everyday Things" under its 1988 title and
+    returns the query-matching edition in ``editions``; showing the work title
+    would make the right book look like the wrong result.
+    """
+    if (lang or DEFAULT_BOOK_LANG) == "cn":
+        return title
+    query_tokens = set(relevance_tokens(query))
+    if not query_tokens or discovery_identifier(query)[0]:
+        return display_title_case(title)
+    # "the alchemist coelho": judge titles only on the words the byline
+    # does not explain.
+    author_tokens = set(relevance_tokens(" ".join(bounded_identity_values([
+        record.get("author_name"),
+    ], limit=8))))
+    query_tokens = (query_tokens - author_tokens) or query_tokens
+
+    def coverage(value):
+        return len(query_tokens & set(relevance_tokens(value))) / len(query_tokens)
+
+    current = coverage(title)
+    best_title, best_coverage = title, current
+    for edition in (record.get("editions") or {}).get("docs") or []:
+        candidate = str(edition.get("title") or "").strip()
+        if not candidate or not title_matches_lang(candidate, lang):
+            continue
+        candidate_coverage = coverage(candidate)
+        if candidate_coverage > best_coverage:
+            best_title, best_coverage = candidate, candidate_coverage
+    if best_title == title or best_coverage < 2 / 3 or best_coverage <= current:
+        return display_title_case(title)
+    return display_title_case(best_title)
+
+
 def extract_book(w, lang=None, allow_missing_cover=False):
     lang = lang or DEFAULT_BOOK_LANG
     edition = first_matching_edition(w, lang)
@@ -2399,6 +2530,8 @@ def extract_book(w, lang=None, allow_missing_cover=False):
             break
     if not author:
         return None
+    if lang != "cn" and not re.search(r"[A-Za-z]", author):
+        author = latin_author_name(author, w.get("author_alternative_name"))
     cover_url = book_cover_url(cover_id, archive_id)
     ol_key = w.get("key", "")
     book = {
@@ -2755,6 +2888,14 @@ DISCOVERY_STOP_WORDS = frozenset({
     "in", "of", "on", "or", "the", "to", "with",
 })
 DISCOVERY_DERIVATIVE_MARKERS = EDITORIAL_DERIVATIVE_MARKERS
+# Summary mills credit themselves as the author ("Book Summary", "SuperSummary").
+DISCOVERY_DERIVATIVE_AUTHOR_MARKERS = (
+    "book summary",
+    "cliffsnotes",
+    "sparknotes",
+    "summary",
+    "supersummary",
+)
 
 def normalize_relevance_text(value):
     value = normalize_match_text(value)
@@ -2792,11 +2933,22 @@ def cjk_token_evidence(query_tokens, value):
     }
 
 
+def strip_leading_article(text):
+    """Readers often drop "The"/"A": "midnight library" is "The Midnight Library"."""
+    return re.sub(r"^(?:the|a|an)\s+", "", str(text or "").strip())
+
+
 def discovery_derivative_penalty(title_text, query_text, authors):
     penalty = 0
     for marker in DISCOVERY_DERIVATIVE_MARKERS:
         if marker in title_text and marker not in query_text:
             penalty += 650
+
+    author_text = normalize_relevance_text(" ".join(authors))
+    for marker in DISCOVERY_DERIVATIVE_AUTHOR_MARKERS:
+        if marker in author_text and marker not in query_text:
+            penalty += 650
+            break
 
     # Some derivative records put the original author's byline in their title
     # while crediting a different author in the catalogue author field.
@@ -2863,7 +3015,7 @@ def discovery_record_relevance(record, query):
         coverage = overlap / max(len(query_tokens), 1)
         precision = overlap / max(len(title_tokens), 1)
         score = round(520 * coverage + 180 * precision)
-        if title_text == query_text:
+        if strip_leading_article(title_text) == strip_leading_article(query_text):
             score += 700
         elif query_text in title_text or title_text in query_text:
             score += 360
@@ -2879,10 +3031,13 @@ def discovery_record_relevance(record, query):
             best_title_text = title_text
     author_text = " ".join(authors)
     author_tokens = set(relevance_tokens(author_text))
+    # Author credit only counts query words the title did not already explain,
+    # so "The Alchemist Cocktail Book" by "The Alchemist" gets no double credit.
+    title_unexplained = query_tokens - best_title_evidence
     author_evidence = (
         (query_tokens & author_tokens)
         | cjk_token_evidence(query_tokens, author_text)
-    )
+    ) & title_unexplained
     author_overlap = len(author_evidence)
     combined_evidence = best_title_evidence | author_evidence
     best_score += round(360 * author_overlap / max(len(query_tokens), 1))
@@ -2893,7 +3048,7 @@ def discovery_record_relevance(record, query):
         candidate_evidence = (
             (query_tokens & candidate_tokens)
             | cjk_token_evidence(query_tokens, author)
-        )
+        ) & title_unexplained
         if not candidate_evidence:
             continue
         coverage = len(candidate_evidence) / max(len(candidate_tokens), 1)
@@ -2919,19 +3074,94 @@ def discovery_record_relevance(record, query):
         best_score += round(300 * best_fuzzy_ratio)
     return max(
         1,
-        best_score - discovery_derivative_penalty(
-            best_title_text,
-            query_text,
-            authors,
+        best_score - max(
+            discovery_derivative_penalty(best_title_text, query_text, authors),
+            discovery_derivative_penalty(
+                normalize_relevance_text(record.get("title")),
+                query_text,
+                authors,
+            ),
         ),
     )
 
+def discovery_popularity_bonus(record):
+    """Bounded reader-signal prior so the canonical work beats same-title filler.
+
+    It never admits a record on its own (relevance must already be positive) and
+    stays below the exact/contained-title bonuses, so it only reorders books
+    that match the query comparably well.
+    """
+    def count(value):
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    readers = count(record.get("readinglog_count")) + count(record.get("ratings_count"))
+    editions = count(record.get("edition_count"))
+    return min(
+        300,
+        round(55 * math.log10(1 + readers) + 35 * math.log10(1 + editions)),
+    )
+
+
+DISCOVERY_PROVIDER_TRUST_POSITIONS = 2
+DISCOVERY_PROVIDER_TRUST_SCORE = 1400
+
+
+def discovery_provider_trusted(record):
+    """A widely read work Open Library itself ranks at the very top.
+
+    Open Library matches every edition title, but ``editions`` returns only a
+    language-preferred edition, so "1984" can arrive as "Nineteen Eighty-Four"
+    with no local title evidence. Only strong reader signals qualify, which
+    keeps the local filter against low-signal provider filler.
+    """
+    def count(value):
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    readers = count(record.get("readinglog_count"))
+    editions = count(record.get("edition_count"))
+    return readers >= 1000 or (editions >= 40 and readers >= 200)
+
+
+def discovery_titles_cover_query(record, query):
+    query_tokens = set(relevance_tokens(query))
+    if not query_tokens:
+        return True
+    editions = (record.get("editions") or {}).get("docs") or []
+    for title in bounded_identity_values([
+        record.get("title"),
+        record.get("alternative_title"),
+        [edition.get("title") for edition in editions],
+    ]):
+        if query_tokens <= set(relevance_tokens(title)) | cjk_token_evidence(query_tokens, title):
+            return True
+    return False
+
+
 def rank_discovery_records(records, query):
     ranked = []
+    identifier_type, _ = discovery_identifier(query)
     for index, record in enumerate(records or []):
         score = discovery_record_relevance(record, query)
+        if (
+            not identifier_type
+            and index < DISCOVERY_PROVIDER_TRUST_POSITIONS
+            and discovery_provider_trusted(record)
+            and not discovery_titles_cover_query(record, query)
+        ):
+            # Only lift works whose visible titles miss query words (an
+            # alternate title); a longer title that already contains the whole
+            # query ("Becoming Supernatural") competes on its own relevance.
+            score = max(score, DISCOVERY_PROVIDER_TRUST_SCORE - 150 * index)
         if score <= 0:
             continue
+        if not identifier_type:
+            score += discovery_popularity_bonus(record)
         ranked.append((score, index, record))
     return [
         record for score, index, record in sorted(
@@ -4013,7 +4243,7 @@ def known_identity_books(q, lang=None):
 def cached_discovery_books(q, page=1, lang=None):
     """Return discovery data without ever waiting on Open Library."""
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v11:{lang}:{q}:{page}"
+    ckey = f"discover:v12:{lang}:{q}:{page}"
     cached = cache_get(ckey, 900)
     if cached is None:
         cached = disk_cache_get(ckey, 900)
@@ -4076,7 +4306,7 @@ def fetch_inventaire_identity_books(q, lang=None):
 
 def fetch_discovery_books(q, page=1, lang=None):
     lang = lang or DEFAULT_BOOK_LANG
-    ckey = f"discover:v11:{lang}:{q}:{page}"
+    ckey = f"discover:v12:{lang}:{q}:{page}"
     cached = cached_discovery_books(q, page, lang)
     if cached is not None:
         return cached
@@ -4086,13 +4316,17 @@ def fetch_discovery_books(q, page=1, lang=None):
     )
     chinese_title = cjk_identity_title(q) if lang == "cn" and page == 1 else ""
 
-    def fetch_search(query, limit):
+    def fetch_search(query, limit, *, match_editions=False):
         try:
             identifier_type, _ = discovery_identifier(q)
             if lang == "cn":
                 fields = OL_COVER_IDENTIFIER_FIELDS if identifier_type else OL_BOOK_FIELDS
+            elif identifier_type:
+                fields = OL_DISCOVERY_IDENTIFIER_FIELDS
             else:
-                fields = OL_DISCOVERY_IDENTIFIER_FIELDS if identifier_type else OL_LIST_FIELDS
+                # Only the primary query pays for edition/alternate titles; its
+                # top results lead the page, and the cover-rich query stays lean.
+                fields = OL_DISCOVERY_FIELDS if match_editions else OL_LIST_FIELDS
             return ol_get("/search.json", {
                 "q": query,
                 "limit": limit,
@@ -4116,7 +4350,7 @@ def fetch_discovery_books(q, page=1, lang=None):
     # Preserve exact sparse matches while fetching a cover-rich result set in
     # parallel so cover quality does not add a second origin wait.
     with ThreadPoolExecutor(max_workers=4) as pool:
-        raw_future = pool.submit(fetch_search, q, DISCOVERY_SEARCH_LIMIT)
+        raw_future = pool.submit(fetch_search, q, DISCOVERY_SEARCH_LIMIT, match_editions=True)
         covered_future = pool.submit(
             fetch_search,
             covered_query,
@@ -4176,6 +4410,7 @@ def fetch_discovery_books(q, page=1, lang=None):
             )
             if not book:
                 continue
+            book["title"] = discovery_display_title(record, q, book["title"], lang)
             if book_seen(book, seen_keys):
                 if book.get("cover_url"):
                     existing = next(
@@ -6512,6 +6747,10 @@ def cache_headers(resp):
         add_server_timing("app", g.request_started_at, description=request.endpoint or "request")
     if getattr(g, "server_timings", None):
         resp.headers["Server-Timing"] = ", ".join(g.server_timings)
+    if resp.mimetype == "text/html":
+        # Un-prefixed pages ("/", "/discover") render in the cookie's language;
+        # without this a cached Chinese page survives switching to English.
+        resp.vary.add("Cookie")
     if request.endpoint == "switch_language":
         resp.headers["Cache-Control"] = "no-store"
     elif getattr(g, "cache_control_override", None):

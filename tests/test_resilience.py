@@ -284,7 +284,7 @@ class DiscoveryFallbackTests(TemporaryCacheTest):
         self.assertEqual((total, total_pages), (1, 1))
 
     def test_empty_cached_identity_uses_curated_recovery(self):
-        key = "discover:v11:en:The Energy Game Amantha Imber:1"
+        key = "discover:v12:en:The Energy Game Amantha Imber:1"
         app.cache_set(key, ([], 0, 1))
 
         books, total, total_pages = app.cached_discovery_books(
@@ -629,10 +629,11 @@ class DiscoveryFallbackTests(TemporaryCacheTest):
             app.fetch_discovery_books("fast fields", lang="en")
 
         self.assertEqual(ol_get.call_count, 2)
-        self.assertTrue(all(
-            call.args[1]["fields"] == app.OL_LIST_FIELDS
-            for call in ol_get.call_args_list
-        ))
+        fields = sorted(call.args[1]["fields"] for call in ol_get.call_args_list)
+        # The primary query carries edition/alternate titles so works filed
+        # under an original title ("Nineteen Eighty-Four") stay findable; the
+        # cover-rich query keeps the lean list fields.
+        self.assertEqual(fields, sorted([app.OL_DISCOVERY_FIELDS, app.OL_LIST_FIELDS]))
 
     def test_discovery_api_reports_provider_outage_instead_of_no_books(self):
         with patch.object(
