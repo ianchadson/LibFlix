@@ -23,6 +23,9 @@
   let appleBooksSetupReturnFocus = null;
   let appleBooksReadyThisSession = false;
   let appleBooksInstallController = null;
+  // Shortcuts only exists on Apple devices; iPadOS reports a Macintosh user agent.
+  const appleBooksSupported = /iphone|ipad|ipod|macintosh/i.test(navigator.userAgent || '');
+  const appleBooksHandoffParam = 'books_handoff';
 
   function escapeHtml(value) {
     const element = document.createElement('div');
@@ -56,6 +59,42 @@
     } catch {
       return false;
     }
+  }
+
+  function forgetAppleBooksShortcut() {
+    appleBooksReadyThisSession = false;
+    try {
+      window.localStorage.removeItem(appleBooksShortcutStorageKey);
+      legacyAppleBooksShortcutStorageKeys.forEach(key => window.localStorage.removeItem(key));
+    } catch {
+      // Nothing persisted, so the next tap already shows setup.
+    }
+  }
+
+  // Shortcuts opens this URL when the shortcut is missing or fails, so the next
+  // Books tap offers setup again instead of repeating the same dead end.
+  function appleBooksErrorReturnUrl() {
+    const url = new URL(window.location.href);
+    url.hash = '';
+    url.searchParams.set(appleBooksHandoffParam, 'error');
+    return url.href;
+  }
+
+  function handleAppleBooksHandoffReturn() {
+    let url;
+    try {
+      url = new URL(window.location.href);
+    } catch {
+      return;
+    }
+    if (url.searchParams.get(appleBooksHandoffParam) !== 'error') return;
+    url.searchParams.delete(appleBooksHandoffParam);
+    url.searchParams.delete('errorMessage');
+    try {
+      history.replaceState(history.state, '', url.href);
+    } catch {}
+    forgetAppleBooksShortcut();
+    window.LibFlixNotify?.('The Books shortcut didn’t run. Tap Books again to set it up.', 'error');
   }
 
   function rememberAppleBooksShortcut() {
@@ -174,7 +213,7 @@
         '<span class="apple-books-setup-icon">' + icons.books + '</span>' +
         '<div class="apple-books-setup-heading" aria-live="polite">' +
           '<h2 id="appleBooksSetupTitle">Set up  Books</h2>' +
-          '<p id="appleBooksSetupIntro" hidden>In Downloads, open “LibFlix to Books” and tap Add Shortcut. Then return here.</p>' +
+          '<p id="appleBooksSetupIntro" hidden>In Downloads, open “LibFlix to Books” and tap Add Shortcut. Then return here. The first time it runs, tap Always Allow when Shortcuts asks.</p>' +
         '</div>' +
         '<div class="apple-books-setup-stage" data-apple-books-intro>' +
           '<button class="apple-books-setup-primary" type="button" data-apple-books-install>Get shortcut</button>' +
@@ -322,13 +361,14 @@
     const downloadHref = book.md5
       ? '/download/' + encodeURIComponent(book.md5) + '?filename=' + encodeURIComponent(filename)
       : '';
-    const appleBooksAvailable = extension === 'epub';
+    const appleBooksAvailable = extension === 'epub' && appleBooksSupported;
     const appleBooksDownloadUrl = appleBooksAvailable
       ? new URL(downloadHref, window.location.origin).href
       : '';
     const appleBooksHref = appleBooksAvailable
-      ? 'shortcuts://run-shortcut?name=' + encodeURIComponent(appleBooksShortcutName)
+      ? 'shortcuts://x-callback-url/run-shortcut?name=' + encodeURIComponent(appleBooksShortcutName)
         + '&input=text&text=' + encodeURIComponent(appleBooksDownloadUrl)
+        + '&x-error=' + encodeURIComponent(appleBooksErrorReturnUrl())
       : '';
     const fallbackCoverUrl = String(options.fallbackCoverUrl || '');
     const coverUrl = String(book.cover_url || fallbackCoverUrl);
@@ -971,4 +1011,11 @@
     renderPagination,
   };
   restoreGlobalKindleJobs();
+  // Wait for the page shell so LibFlixNotify (defined after this script) exists.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', handleAppleBooksHandoffReturn, { once: true });
+  } else {
+    handleAppleBooksHandoffReturn();
+  }
+  window.addEventListener('libflix:navigated', handleAppleBooksHandoffReturn);
 })();

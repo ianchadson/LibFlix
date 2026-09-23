@@ -741,7 +741,7 @@ class DownloadShellTests(unittest.TestCase):
         apple_books = downloads.index('class="edition-action edition-apple-books"')
         kindle = downloads.index('class="edition-action edition-kindle"', apple_books)
         self.assertLess(apple_books, kindle)
-        self.assertIn("const appleBooksAvailable = extension === 'epub';", downloads)
+        self.assertIn("const appleBooksAvailable = extension === 'epub' && appleBooksSupported;", downloads)
         self.assertIn("const appleBooksShortcutName = 'LibFlix to Books';", downloads)
         self.assertIn(
             "const appleBooksShortcutStorageKey = 'libflix.appleBooksShortcutReady';",
@@ -755,7 +755,7 @@ class DownloadShellTests(unittest.TestCase):
         self.assertIn("const appleBooksInstallStartedKey", downloads)
         self.assertIn("new URL(downloadHref, window.location.origin).href", downloads)
         self.assertIn("const appleBooksHref = appleBooksAvailable", downloads)
-        self.assertIn("'shortcuts://run-shortcut?name='", downloads)
+        self.assertIn("'shortcuts://x-callback-url/run-shortcut?name='", downloads)
         self.assertIn("'&input=text&text='", downloads)
         self.assertIn("class=\"apple-books-spinner\"", downloads)
         self.assertIn("showAppleBooksSetup(appleBooks)", downloads)
@@ -782,6 +782,29 @@ class DownloadShellTests(unittest.TestCase):
         self.assertIn(".apple-books-setup[hidden]", stylesheet)
         self.assertIn(".apple-books-setup-stage[hidden]", stylesheet)
         self.assertNotIn(".apple-books-setup-steps", stylesheet)
+
+    def test_apple_books_is_limited_to_apple_devices(self):
+        downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()
+
+        self.assertIn(
+            "const appleBooksSupported = /iphone|ipad|ipod|macintosh/i.test(navigator.userAgent || '');",
+            downloads,
+        )
+
+    def test_failed_books_shortcut_returns_and_offers_setup_again(self):
+        downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()
+        handler = downloads.split("function handleAppleBooksHandoffReturn() {", 1)[1].split(
+            "function rememberAppleBooksShortcut", 1
+        )[0]
+
+        self.assertIn("'&x-error=' + encodeURIComponent(appleBooksErrorReturnUrl())", downloads)
+        self.assertNotIn("x-success", downloads)
+        self.assertIn("forgetAppleBooksShortcut();", handler)
+        self.assertIn("url.searchParams.delete('errorMessage')", handler)
+        self.assertIn("history.replaceState(", handler)
+        self.assertIn("Tap Books again to set it up.", handler)
+        self.assertIn("document.addEventListener('DOMContentLoaded', handleAppleBooksHandoffReturn", downloads)
+        self.assertIn("tap Always Allow when Shortcuts asks", downloads)
 
     def test_apple_books_shortcut_installer_is_signed_and_downloadable(self):
         shortcut_path = Path(app.APPLE_BOOKS_SHORTCUT_PATH)
