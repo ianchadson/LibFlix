@@ -72,13 +72,28 @@ class PartialNavigationTests(unittest.TestCase):
     def test_cross_page_hash_navigation_focuses_the_imported_fragment(self):
         navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
         replace_page = navbar.split("const replacePage = async", 1)[1].split(
-            "let scrollSaveFrame", 1
+            "let scrollSaveTimer", 1
         )[0]
 
         self.assertIn("if (renderedUrl.hash)", replace_page)
         self.assertIn("fragmentTarget = document.getElementById", replace_page)
         self.assertIn("focusFragmentTarget(fragmentTarget)", replace_page)
         self.assertIn("if (!push && !fragmentTarget", replace_page)
+
+    def test_scroll_position_is_saved_after_scrolling_settles(self):
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+        scheduler = navbar.split("const scheduleScrollPositionSave = () => {", 1)[1].split("};", 1)[0]
+
+        self.assertIn("window.setTimeout(persistScrollPosition", scheduler)
+        self.assertNotIn("requestAnimationFrame", scheduler)
+        self.assertIn("window.addEventListener('pagehide', () => { if (scrollSaveTimer) persistScrollPosition(); });", navbar)
+
+    def test_touch_layouts_skip_backdrop_blur_on_scrolling_bars(self):
+        css = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+        touch_block = css.split("@media (max-width: 768px), (hover: none) and (pointer: coarse) {", 1)[1]
+
+        self.assertIn(".lib-nav {\n    background: rgb(10, 11, 13) !important;\n    backdrop-filter: none;", touch_block)
+        self.assertIn("html.pwa-mobile-nav-ready .mobile-app-nav {", touch_block)
 
     def test_topic_errors_have_accessible_status_and_rate_limit_copy(self):
         template = (Path(app.APP_DIR) / "templates" / "discover.html").read_text()

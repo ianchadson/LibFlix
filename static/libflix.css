@@ -3222,3 +3222,27 @@ button.edition-recommended {
     animation: coverSkeletonPulse 2.1s ease-in-out infinite !important;
   }
 }
+
+/* Scroll performance on touch devices: blurring the backdrop under the sticky/fixed
+   bars re-rasterizes them every scroll frame, and large per-card shadows are costly to
+   repaint. The bars are already near-opaque, so the visual difference is negligible. */
+@media (max-width: 768px), (hover: none) and (pointer: coarse) {
+  .lib-nav {
+    background: rgb(10, 11, 13) !important;
+    backdrop-filter: none;
+  }
+
+  html.pwa-mobile-nav-ready .mobile-app-nav {
+    background: rgb(12, 13, 15);
+    box-shadow: 0 -1px 0 rgba(0, 0, 0, .34);
+    backdrop-filter: none;
+  }
+
+  .book-card {
+    box-shadow: 0 4px 12px rgba(0, 0, 0, .22) !important;
+  }
+
+  .book-rating-badge {
+    box-shadow: none;
+  }
+}

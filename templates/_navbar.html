@@ -957,21 +957,23 @@
       window.dispatchEvent(new CustomEvent('libflix:navigated', { detail: { url } }));
     };
 
-    let scrollSaveFrame = null;
+    // Save scroll position only once scrolling settles: replaceState is synchronous,
+    // janks mobile scrolling when called per frame, and Safari rate-limits it.
+    let scrollSaveTimer = null;
     const persistScrollPosition = () => {
+      if (scrollSaveTimer) window.clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = null;
       const state = history.state || {};
       history.replaceState({ ...state, libflix: true, scrollX: window.scrollX, scrollY: window.scrollY }, '', window.location.href);
     };
     const scheduleScrollPositionSave = () => {
-      if (scrollSaveFrame) return;
-      scrollSaveFrame = requestAnimationFrame(() => {
-        scrollSaveFrame = null;
-        persistScrollPosition();
-      });
+      if (scrollSaveTimer) window.clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = window.setTimeout(persistScrollPosition, 180);
     };
     if ('scrollRestoration' in history) history.scrollRestoration = 'manual';
     history.replaceState({ ...(history.state || {}), libflix: true, scrollX: window.scrollX, scrollY: window.scrollY }, '', window.location.href);
     window.addEventListener('scroll', scheduleScrollPositionSave, { passive: true });
+    window.addEventListener('pagehide', () => { if (scrollSaveTimer) persistScrollPosition(); });
 
     const navigateWithTransition = async (href, { push = true, historyEntry = null } = {}) => {
       const url = new URL(href, window.location.href);
@@ -1128,6 +1130,8 @@
       submitWithTransition(form);
     });
     window.addEventListener('popstate', event => {
+      if (scrollSaveTimer) window.clearTimeout(scrollSaveTimer);
+      scrollSaveTimer = null;
       const pageKey = window.location.pathname + window.location.search;
       let hashTarget = null;
       if (window.location.hash) {
