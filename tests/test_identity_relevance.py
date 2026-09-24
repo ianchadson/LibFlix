@@ -539,6 +539,104 @@ class DiscoveryRelevanceTests(unittest.TestCase):
         self.assertEqual(app.latin_author_name("村上春樹", []), "村上春樹")
         self.assertEqual(app.display_title_case("The design of everyday things"), "The Design of Everyday Things")
         self.assertEqual(app.display_title_case("Thinking in Systems"), "Thinking in Systems")
+        self.assertEqual(app.catalog_title_case("The Divine comedy."), "The Divine Comedy")
+        self.assertEqual(app.catalog_title_case("The sorrows of Werter"), "The Sorrows of Werter")
+        self.assertEqual(app.catalog_title_case("1Q84"), "1Q84")
+
+    def test_english_editions_supply_title_cover_and_aliases(self):
+        def edition(title, lang, cover, year):
+            return {
+                "title": title,
+                "languages": [{"key": f"/languages/{lang}"}] if lang else [],
+                "covers": [cover] if cover else [],
+                "publish_date": str(year),
+            }
+
+        editions = {"entries": [
+            edition("The design of everyday things", "eng", 111, 2002),
+            edition("The Design of Everyday Things", "eng", 222, 2013),
+            edition("The design of everyday things", "", 0, 1990),
+            edition("The psychology of everyday things", "eng", 333, 1988),
+            edition("La psicologia de los objetos cotidianos", "", 10007224, 1998),
+        ]}
+        with patch.object(app, "ol_get", return_value=editions), \
+                patch.object(app, "cache_get", return_value=None), \
+                patch.object(app, "disk_cache_get", return_value=None), \
+                patch.object(app, "cache_set"), patch.object(app, "disk_cache_set"):
+            identity = app.english_edition_identity("/works/OL1879162W")
+
+        self.assertEqual(identity["title"], "The Design of Everyday Things")
+        self.assertEqual(identity["cover_id"], "222")
+        self.assertNotIn("10007224", identity["english_cover_ids"])
+        self.assertIn("The Psychology of Everyday Things", identity["aliases"])
+
+        applied = app.apply_english_edition_identity({
+            "title": "The Psychology of Everyday Things",
+            "download_title": "The Psychology of Everyday Things",
+            "cover_url": "/olcover/10007224/M.webp",
+            "title_aliases": ["The Psychology of Everyday Things"],
+        }, identity)
+        self.assertEqual(applied["title"], "The Design of Everyday Things")
+        self.assertEqual(applied["download_title"], "The Design of Everyday Things")
+        self.assertIn("/olcover/222/", applied["cover_url"])
+        self.assertEqual(applied["title_aliases"][0], "The Design of Everyday Things")
+        self.assertIn("The Psychology of Everyday Things", applied["title_aliases"])
+
+    def test_english_identity_merges_leading_articles_and_retries_failures(self):
+        def edition(title):
+            return {"title": title, "languages": [{"key": "/languages/eng"}], "covers": [], "publish_date": "2001"}
+
+        editions = {"entries": [edition("Plague")] * 5 + [edition("The Plague")] * 3 + [
+            {"title": "La Peste", "languages": [{"key": "/languages/fre"}], "covers": [], "publish_date": "1947"},
+        ] * 6}
+        with patch.object(app, "cache_get", return_value=None), \
+                patch.object(app, "disk_cache_get", return_value=None), \
+                patch.object(app, "cache_set"), patch.object(app, "disk_cache_set") as stored:
+            with patch.object(app, "ol_get", return_value=editions):
+                identity = app.english_edition_identity("/works/OL1230715W")
+            self.assertEqual(identity["title"], "The Plague")
+            stored.reset_mock()
+            with patch.object(app, "ol_get", return_value=None):
+                self.assertIsNone(app.english_edition_identity("/works/OL1230715W"))
+            stored.assert_not_called()
+
+    def test_latin_author_aliases_rank_common_ascii_spellings(self):
+        aliases = app.latin_author_aliases([
+            "Fyodor Dostoevsky", "FYODOR DOSTOEVSKY", "Fyodor Dostoyevsky", "Fiódor Dostoievski",
+            "Dostoevsky", "Fyodor Dostoevsky Staff", "Федор Достоевский",
+        ])
+        self.assertEqual(aliases[0], "Fyodor Dostoevsky")
+        self.assertIn("Fyodor Dostoyevsky", aliases)
+        self.assertNotIn("Fiódor Dostoievski", aliases)
+
+    def test_english_identity_keeps_a_well_used_english_work_title(self):
+        identity = {
+            "english_editions": 30,
+            "title": "1984",
+            "title_counts": {
+                app._edition_title_key("Nineteen Eighty-Four"): 14,
+                app._edition_title_key("1984"): 16,
+            },
+            "cover_id": "5",
+            "english_cover_ids": ["9267242"],
+            "aliases": ["1984", "Nineteen Eighty-Four"],
+        }
+        applied = app.apply_english_edition_identity({
+            "title": "Nineteen Eighty-Four",
+            "cover_url": "/olcover/9267242/M.webp",
+        }, identity)
+        self.assertEqual(applied["title"], "Nineteen Eighty-Four")
+        self.assertIn("/olcover/9267242/", applied["cover_url"])
+        self.assertIn("1984", applied["title_aliases"])
+
+    def test_non_latin_work_author_uses_author_record_alternates(self):
+        work = {"authors": [{"author": {"key": "/authors/OL382524A"}}]}
+        author = {"name": "村上春樹", "personal_name": "Murakami, Haruki",
+                  "alternate_names": ["HARUKI MURAKAMI", "Haruki Murakami", "村上春树"]}
+        with patch.object(app, "ol_get", return_value=author):
+            alternates = app.first_work_author_alternatives(work)
+        self.assertIn("Haruki Murakami", alternates)
+        self.assertEqual(app.latin_author_name("村上春樹", alternates), "Haruki Murakami")
 
     def test_discovery_prefers_catalog_author_over_title_appended_name(self):
         records = [

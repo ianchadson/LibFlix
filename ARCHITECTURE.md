@@ -1205,6 +1205,20 @@ card shows the matched edition title when it covers more of the query, and an
 English-mode card replaces a non-Latin author name with its most common Latin
 form from `author_alternative_name`.
 
+English book detail consults the work's editions (`editions.json`, cached 30
+days). The work record often carries the original-language or first title and a
+default cover from any edition, including untagged translations. When most
+English editions use another title ("The Design of Everyday Things" for the
+work filed as "The Psychology of Everyday Things", "The Plague" for "La
+Peste"), that title becomes the display and download title; a cover outside the
+English editions is replaced by the newest English cover; every English edition
+title becomes a download alias. Untagged editions count as English only when a
+tagged English edition shares their title. A non-Latin or foreign-transliterated
+author ("Лев Толстой", "Fiódor Dostoievski") is shown in its common English form,
+and the most common ASCII spellings are sent as download author aliases so
+LibGen's "Fyodor Dostoevsky" is not filtered out. A failed editions lookup
+leaves the detail incomplete so it is retried rather than cached.
+
 Broad-topic discovery can also use Inventaire work search and a small approved
 set of semantic Wikidata subject claims. Inventaire contributes a candidate only
 when its `P648` claim resolves directly to an Open Library work. The local

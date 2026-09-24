@@ -158,7 +158,7 @@ OL_LIST_FIELDS = (
     "ratings_average,readinglog_count,edition_count"
 )
 OL_COVER_FIELDS = f"{OL_LIST_FIELDS},editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id,editions.ocaid"
-OL_IDENTITY_FIELDS = f"{OL_COVER_FIELDS},description,alternative_title,isbn,editions.author_name,editions.isbn_10,editions.isbn_13"
+OL_IDENTITY_FIELDS = f"{OL_COVER_FIELDS},description,alternative_title,author_alternative_name,isbn,editions.author_name,editions.isbn_10,editions.isbn_13"
 # Backwards-compatible name for list/cover consumers; identity fields are
 # intentionally reserved for a single work-detail lookup.
 OL_BOOK_FIELDS = OL_COVER_FIELDS
@@ -2336,6 +2336,130 @@ def resolve_chinese_title(ol_key):
     disk_cache_set(ckey, result)
     return title
 
+ENGLISH_EDITION_IDENTITY_TTL = 30 * 86400
+
+
+def _edition_title_key(title):
+    """Group edition titles by base title: "The Plague: A Novel" -> "plague"."""
+    base = re.split(r"\s*[:;(\[]\s*", str(title or "").strip(), maxsplit=1)[0]
+    return strip_leading_article(normalize_title(base))
+
+
+def _edition_year(edition):
+    match = re.search(r"(1[5-9]\d\d|20\d\d)", str(edition.get("publish_date") or ""))
+    return int(match.group(1)) if match else 0
+
+
+def english_edition_identity(ol_key):
+    """Summarise a work's English editions: preferred title, cover and aliases.
+
+    Open Library's work record often carries the original-language or first
+    title ("O Alquimista", "The Psychology of Everyday Things") and a default
+    cover from any edition, including untagged translations. English readers
+    need the title most English editions use, an English cover, and every
+    English title as a download alias.
+    """
+    if not re.fullmatch(r"/works/OL\d+W", ol_key or ""):
+        return {}
+    ckey = f"english_edition_identity:v1:{ol_key}"
+    cached = cache_get(ckey, ENGLISH_EDITION_IDENTITY_TTL)
+    if cached is None:
+        cached = disk_cache_get(ckey, ENGLISH_EDITION_IDENTITY_TTL)
+        if cached is not None:
+            cache_set(ckey, cached)
+    if cached is not None:
+        return cached
+
+    data = ol_get(f"{ol_key}/editions.json", {"limit": 200})
+    if data is None:
+        # Unknown, not "no English editions": the caller must not cache.
+        return None
+    entries = data.get("entries") or []
+    tagged = [edition for edition in entries if "eng" in edition_language_codes(edition)]
+    tagged_keys = {_edition_title_key(edition.get("title")) for edition in tagged}
+    # Untagged editions count as English only when a tagged English edition
+    # shares their title; that keeps untagged translations out.
+    english = tagged + [
+        edition for edition in entries
+        if not edition_language_codes(edition)
+        and _edition_title_key(edition.get("title")) in tagged_keys
+    ]
+    groups = {}
+    for edition in english:
+        key = _edition_title_key(edition.get("title"))
+        if not key:
+            continue
+        group = groups.setdefault(key, {"count": 0, "year": 0, "spellings": {}, "editions": []})
+        group["count"] += 1
+        group["year"] = max(group["year"], _edition_year(edition))
+        base = re.split(r"\s*[:;(\[]\s*", str(edition.get("title") or "").strip(), maxsplit=1)[0]
+        group["spellings"][base] = group["spellings"].get(base, 0) + 1
+        group["editions"].append(edition)
+    if not groups:
+        result = {"english_editions": 0}
+    else:
+        ordered = sorted(groups.items(), key=lambda item: (item[1]["count"], item[1]["year"]), reverse=True)
+        top_key, top = ordered[0]
+
+        def spelling(group):
+            forms = group["spellings"]
+            best = max(forms, key=lambda form: (forms[form], sum(ch.isupper() for ch in form)))
+            # "The Plague" over the bare catalogue form "Plague" when a real
+            # share of editions carries the article.
+            with_article = [form for form in forms if re.match(r"(?i)(the|a|an)\s", form)]
+            if with_article and not re.match(r"(?i)(the|a|an)\s", best):
+                article_form = max(with_article, key=lambda form: forms[form])
+                if sum(forms[form] for form in with_article) * 3 >= group["count"]:
+                    best = article_form
+            return catalog_title_case(best)
+
+        def newest_cover(editions):
+            for edition in sorted(editions, key=_edition_year, reverse=True):
+                cover_id = edition_cover_id(edition)
+                if cover_id:
+                    return cover_id
+            return ""
+
+        result = {
+            "english_editions": len(english),
+            "title": spelling(top),
+            "title_key": top_key,
+            "title_counts": {key: group["count"] for key, group in ordered[:8]},
+            "cover_id": str(newest_cover(top["editions"]) or newest_cover(english) or ""),
+            "english_cover_ids": sorted({
+                str(cover) for edition in english for cover in (edition.get("covers") or [])
+                if valid_cover_id(cover)
+            })[:200],
+            "aliases": [spelling(group) for _key, group in ordered[:6]],
+        }
+    cache_set(ckey, result)
+    disk_cache_set(ckey, result)
+    return result
+
+
+def apply_english_edition_identity(result, identity):
+    """Swap a foreign/old title or cover for the English editions' own."""
+    if not identity or not identity.get("english_editions"):
+        return result
+    result = dict(result)
+    counts = identity.get("title_counts") or {}
+    top_count = max(counts.values(), default=0)
+    current_key = _edition_title_key(result.get("title"))
+    if identity.get("title") and counts.get(current_key, 0) * 2 < top_count:
+        result["title"] = identity["title"]
+        result["download_title"] = identity["title"]
+    cover_match = re.search(r"/olcover/(\d+)", str(result.get("cover_url") or ""))
+    english_covers = set(identity.get("english_cover_ids") or [])
+    if identity.get("cover_id") and (not cover_match or cover_match.group(1) not in english_covers):
+        result["cover_url"] = book_cover_url(identity["cover_id"], "")
+    result["title_aliases"] = bounded_identity_values([
+        result.get("title"),
+        identity.get("aliases"),
+        result.get("title_aliases"),
+    ])
+    return result
+
+
 def resolve_english_title(ol_key):
     if not re.fullmatch(r"/works/OL\d+W", ol_key or ""):
         return ""
@@ -2413,9 +2537,13 @@ def latin_author_name(author, alternatives):
         form_counts[folded] = form_counts.get(folded, 0) + 1
     surname = max(surname_counts, key=lambda key: (surname_counts[key], -len(key)))
     forms = [item for item in candidates if item[2] == surname]
+    def full_given_names(key):
+        tokens = key.split()
+        return len(tokens) > 1 and all(len(token) > 1 for token in tokens)
+
     best_form = max(
         (item[1] for item in forms),
-        key=lambda key: (form_counts[key], len(key.split()) > 1, -len(key)),
+        key=lambda key: (full_given_names(key), form_counts[key], len(key.split()) > 1, -len(key)),
     )
     spellings = [item[0] for item in forms if item[1] == best_form]
     display = next(
@@ -2427,6 +2555,33 @@ def latin_author_name(author, alternatives):
     return display if display in spellings and all(
         word[:1].isupper() and not word[1:].isupper() for word in display.split()
     ) else " ".join(word[:1].upper() + word[1:].lower() for word in display.split())
+
+
+def latin_author_aliases(alternatives, limit=3):
+    """Most common plain-ASCII spellings of an author, for download matching."""
+    counts = {}
+    spellings = {}
+    for alternative in alternatives or []:
+        alternative = re.sub(r"\s+", " ", str(alternative or "")).strip(" .")
+        if (
+            not alternative.isascii()
+            or not _LATIN_NAME_PATTERN.fullmatch(alternative)
+            or _AUTHOR_ALIAS_NOISE.search(alternative)
+            or len(alternative.split()) < 2
+        ):
+            continue
+        folded = _fold_name(alternative)
+        counts[folded] = counts.get(folded, 0) + 1
+        if folded not in spellings or (spellings[folded].isupper() and not alternative.isupper()):
+            spellings[folded] = alternative
+    ranked = sorted(
+        counts,
+        key=lambda key: (not all(len(token) > 1 for token in key.split()), -counts[key]),
+    )[:limit]
+    return [
+        spellings[key] if not spellings[key].isupper() else spellings[key].title()
+        for key in ranked
+    ]
 
 
 _TITLE_SMALL_WORDS = frozenset({
@@ -2447,6 +2602,21 @@ def display_title_case(title):
         if 0 < index < len(words) - 1 and bare in _TITLE_SMALL_WORDS:
             cased.append(bare)
         elif word[:1].isalpha() and word[1:] == word[1:].lower():
+            cased.append(word[:1].upper() + word[1:])
+        else:
+            cased.append(word)
+    return " ".join(cased)
+
+
+def catalog_title_case(title):
+    """Title-case catalogue spellings like "The Divine comedy." or "The sorrows of Werter"."""
+    words = str(title or "").strip().rstrip(".").split()
+    cased = []
+    for index, word in enumerate(words):
+        bare = word.casefold()
+        if 0 < index < len(words) - 1 and bare in _TITLE_SMALL_WORDS:
+            cased.append(bare)
+        elif word[:1].islower() and word[1:] == word[1:].lower():
             cased.append(word[:1].upper() + word[1:])
         else:
             cased.append(word)
@@ -6159,6 +6329,22 @@ def english_description_result(ol_key, work=None, fallback_description=""):
 def english_description_for_work(ol_key, work=None):
     return english_description_result(ol_key, work)[0]
 
+def first_work_author_alternatives(work):
+    """Alternate names from the work's first author record ("Haruki Murakami")."""
+    for item in (work or {}).get("authors") or []:
+        author_ref = (item or {}).get("author") if isinstance(item, dict) else None
+        key = (author_ref or {}).get("key") if isinstance(author_ref, dict) else None
+        if not key:
+            continue
+        author = ol_get(key + ".json") or {}
+        personal = str(author.get("personal_name") or "").strip()
+        if "," in personal:
+            family, _, given = personal.partition(",")
+            personal = f"{given.strip()} {family.strip()}".strip()
+        return [value for value in [*(author.get("alternate_names") or []), personal] if value]
+    return []
+
+
 def first_work_author(work):
     authors = work.get("authors") or []
     for item in authors:
@@ -6206,7 +6392,7 @@ def known_book_metadata(work_id, lang=None):
 
 def book_metadata_from_work(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    ckey = f"book_meta:v4:{lang}:{work_id}"
+    ckey = f"book_meta:v5:{lang}:{work_id}"
     cached = cache_get(ckey, API_DISK_CACHE_TTL)
     if cached is None:
         cached = disk_cache_get(ckey, API_DISK_CACHE_TTL)
@@ -6266,16 +6452,41 @@ def book_metadata_from_work(work_id, lang=None):
         if localized_title == title:
             localized_title = ""
     primary_author = (authors[0] if authors else "") or first_work_author(work or {})
+    author_aliases = []
+    if lang != "cn" and primary_author and not primary_author.isascii():
+        alternatives = (
+            search_record.get("author_alternative_name")
+            or first_work_author_alternatives(work)
+        )
+        english_author = latin_author_name(primary_author, alternatives)
+        # Swap native scripts ("Лев Толстой") and foreign transliterations
+        # ("Fiódor Dostoievski" -> "Fyodor Dostoevsky"), but keep accents that
+        # are just the English spelling ("Gabriel García Márquez").
+        if english_author != primary_author and (
+            not re.search(r"[A-Za-z]", primary_author)
+            or (
+                english_author.isascii()
+                and _fold_name(english_author) != _fold_name(primary_author)
+            )
+        ):
+            primary_author = english_author
+        author_aliases = latin_author_aliases(alternatives)
     result = {
         "title": title,
         "localized_title": localized_title,
         "download_title": download_title,
         "author": primary_author,
+        "authors": bounded_identity_values([primary_author, author_aliases], limit=4),
         "cover_url": book_cover_url(cover_id, archive_id),
         "description": extract_desc(search_record),
         "ol_key": ol_key,
         "_complete": bool(work) and (bool(search_record) or editions_checked),
     }
+    if lang != "cn":
+        english_identity = english_edition_identity(ol_key)
+        if english_identity is None:
+            result["_complete"] = False
+        result = apply_english_edition_identity(result, english_identity)
     result.update(collect_book_identity_metadata(
         result,
         work=work,
@@ -6290,7 +6501,7 @@ def book_metadata_from_work(work_id, lang=None):
 
 def book_detail_cache_key(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    return f"book_detail:v6:{lang}:{work_id}"
+    return f"book_detail:v7:{lang}:{work_id}"
 
 def sanitize_cached_book_detail(detail):
     if not isinstance(detail, dict):
@@ -6365,10 +6576,12 @@ def merge_canonical_book_detail(detail, canonical):
 
 def fallback_book_detail(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    metadata_key = f"book_meta:v4:{lang}:{work_id}"
+    metadata_key = f"book_meta:v5:{lang}:{work_id}"
     metadata = (
         cache_get(metadata_key, BOOK_DETAIL_STALE_TTL)
         or disk_cache_get_stale(metadata_key, BOOK_DETAIL_STALE_TTL)
+        or cache_get(f"book_meta:v4:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
+        or disk_cache_get_stale(f"book_meta:v4:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
         or cache_get(f"book_meta:v3:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
         or disk_cache_get_stale(f"book_meta:v3:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
         or cache_get(f"book_meta:v2:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
