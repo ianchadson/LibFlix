@@ -5882,9 +5882,8 @@ def recommendation_reasons(
     )
     extension = (book.ext or "").lower()
     size_bytes = parse_size_bytes(book.size)
-    libgen_source = is_libgen_id(getattr(book, "book_id", ""))
-    kindle_eligible = is_deliverable_kindle_format(extension) and libgen_source
-    convertible = is_convertible_kindle_format(extension) and libgen_source
+    kindle_eligible = is_deliverable_kindle_format(extension)
+    convertible = is_convertible_kindle_format(extension)
     if title_score >= 900:
         reasons.append("Strong title match")
     if target_author and author_score >= 180:
@@ -6546,6 +6545,7 @@ RUNTIME_SECURITY_HEADERS = SecurityHeadersConfig(trust_forwarded_proto=True)
 RUNTIME_RATE_LIMIT_RULES = {
     "api_discover": ("discovery", RateLimitRule(24, 60)),
     "api_suggestions": ("suggestions", RateLimitRule(120, 60)),
+    "api_catalog_suggestions": ("catalog-suggestions", RateLimitRule(30, 60)),
     "api_covers": ("covers", RateLimitRule(120, 60)),
     "api_quick_look": ("quick-look", RateLimitRule(120, 60)),
     "api_book_reception": ("book-reception", RateLimitRule(90, 60)),
@@ -6562,6 +6562,7 @@ RUNTIME_RATE_LIMIT_RULES = {
 RUNTIME_GLOBAL_RATE_LIMIT_RULES = {
     "api_discover": ("discovery-global", RateLimitRule(120, 60)),
     "api_suggestions": ("suggestions-global", RateLimitRule(1200, 60)),
+    "api_catalog_suggestions": ("catalog-suggestions-global", RateLimitRule(120, 60)),
     "api_covers": ("covers-global", RateLimitRule(1200, 60)),
     "api_quick_look": ("quick-look-global", RateLimitRule(1200, 60)),
     "api_book_reception": ("book-reception-global", RateLimitRule(1200, 60)),
@@ -7250,6 +7251,19 @@ def local_book_suggestions(query, lang=None, limit=8):
         score += coverage * 260 + min(float(quality or 0), 35)
         if book.get("cover_url"):
             score += 45
+        # Same demotions as full search: "Summary : the Design of Everyday
+        # Things" by "Slim Reads" must not outrank the book itself.
+        if discovery_derivative_penalty(
+            normalize_relevance_text(title),
+            normalize_relevance_text(query),
+            [author],
+        ):
+            return
+        try:
+            readers = max(0, int(book.get("ratings_count") or 0))
+        except (TypeError, ValueError):
+            readers = 0
+        score += min(80, round(20 * math.log10(1 + readers)))
         if score < 430:
             return
         key = book["ol_key"]
@@ -7307,6 +7321,16 @@ def local_book_suggestions(query, lang=None, limit=8):
         candidates.values(),
         key=lambda item: (-item[0], not bool(item[1].get("cover_url")), normalize_title(item[1]["title"])),
     )
+    # A cached full search for this exact query is already properly ranked
+    # (edition titles, popularity, derivative demotion), so it leads.
+    discovered = cached_discovery_books(query, 1, lang) or ([], 0, 1)
+    discovered_keys = set()
+    leading = []
+    for book in (discovered[0] or [])[:6]:
+        if re.fullmatch(r"/works/OL\d+W", str(book.get("ol_key") or "")) and book.get("title"):
+            leading.append((0, book))
+            discovered_keys.add(book["ol_key"])
+    ranked = leading + [item for item in ranked if item[1].get("ol_key") not in discovered_keys]
     selected = []
     seen_titles = set()
     for _score, book in ranked:
@@ -7333,7 +7357,7 @@ def api_suggestions():
     if len(normalize_match_text(query)) < 2:
         return jsonify({"success": True, "books": []})
     lang = get_book_lang()
-    cache_key = f"suggestions:v1:{lang}:{normalize_match_text(query)}"
+    cache_key = f"suggestions:v2:{lang}:{normalize_match_text(query)}"
     books = cache_get(cache_key, 60)
     if books is None:
         books = local_book_suggestions(query, lang, limit=8)
@@ -7341,6 +7365,26 @@ def api_suggestions():
     g.cache_control_override = "private, max-age=30"
     add_server_timing("suggestions", duration=0, description="local")
     return jsonify({"success": True, "books": books})
+
+
+@app.route("/api/suggestions/catalog")
+def api_catalog_suggestions():
+    """Ranked identity matches for the search palette once typing pauses.
+
+    Kept apart from /api/discover so palette typing never spends the reader's
+    discovery allowance; results share the identity-search cache the full
+    results page reads on Enter.
+    """
+    query = re.sub(r"\s+", " ", request.args.get("q", "")).strip()[:120]
+    if len(normalize_match_text(query)) < 3:
+        return jsonify({"success": True, "books": []})
+    lang = get_book_lang()
+    books, total, _total_pages = fetch_discovery_books(query, 1, lang)
+    if total is None:
+        g.cache_control_override = "no-store"
+        return jsonify({"success": False, "books": [], "code": "source_unavailable"}), 503
+    g.cache_control_override = "private, max-age=120"
+    return jsonify({"success": True, "books": books[:6]})
 
 
 def local_quick_look_detail(ol_key, lang=None, reception_summary=None):
@@ -9181,6 +9225,8 @@ def api_search():
     if dedup_on:
         books = dedup(books, scorer)
     fastest_book = fastest_kindle_candidate(
+        # Real-Debrid editions can be sent too, but resolving a torrent takes
+        # far longer than a LibGen mirror, so they never earn "Fastest".
         [book for book in books if is_libgen_id(book.book_id)],
         target_title=target_title,
         target_author=target_author,
@@ -9242,7 +9288,7 @@ def api_search():
             target_authors=target_authors,
         )
         deliverable = is_deliverable_kindle_format(b.ext)
-        kindle_eligible = deliverable and is_libgen_id(b.book_id)
+        kindle_eligible = deliverable and is_download_id(b.book_id)
         d["kindle_compatible"] = kindle_eligible
         d["kindle_conversion"] = (
             is_convertible_kindle_format(b.ext) and kindle_eligible
@@ -9293,7 +9339,7 @@ def download(md5):
     ascii_filename = filename.encode("ascii", "ignore").decode().strip()
     ascii_filename = re.sub(r'[^A-Za-z0-9._ -]+', '', ascii_filename) or f"{md5}.epub"
     extension = re.sub(r"[^a-z0-9]", "", filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
-    if extension in {"epub", "pdf", "mobi", "azw3"} and is_libgen_id(md5):
+    if extension in {"epub", "pdf", "mobi", "azw3"}:
         cached_path = _kindle_source_cache().get(md5, extension)
         if cached_path:
             mime = {
@@ -10512,7 +10558,7 @@ def _send_to_kindle_events(data):
                     "Kindle conversion failed for %s: %s", ext, conversion.warning
                 )
                 raise RuntimeError(
-                    "This edition couldn't be converted for Kindle. Try an EPUB or PDF edition."
+                    "This edition couldn't be converted for Kindle."
                 )
 
         progress = 68
@@ -10679,7 +10725,7 @@ def validate_kindle_payload(data):
         required += ("smtp_host", "smtp_user", "smtp_pass")
     if not all(data.get(field) for field in required):
         return "Missing required fields"
-    if not re.fullmatch(r"[a-fA-F0-9]{32}", str(data.get("md5", ""))):
+    if not is_download_id(str(data.get("md5", ""))):
         return "Invalid book identifier"
     extension = re.sub(r"[^a-z0-9]", "", str(data.get("ext", "epub")).casefold()) or "epub"
     if not is_deliverable_kindle_format(extension):

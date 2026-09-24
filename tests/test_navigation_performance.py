@@ -135,6 +135,70 @@ class SearchPaletteTests(unittest.TestCase):
         local.assert_called_once_with("The Energy Game Amantha Imber", "en", limit=8)
 
 
+class SearchPaletteRankingTests(unittest.TestCase):
+    def test_cached_full_search_leads_quick_results(self):
+        canonical = {
+            "title": "The Design of Everyday Things",
+            "author": "Donald A. Norman",
+            "ol_key": "/works/OL1879162W",
+            "cover_url": "/olcover/1/M.webp",
+        }
+        with patch.object(app, "cached_discovery_books", return_value=([canonical], 1, 1)), \
+                patch.object(app, "_topic_local_openlibrary_corpus", return_value=[]), \
+                patch.dict(app.KNOWN_WORK_METADATA, {}, clear=True), \
+                patch.dict(app.BOOK_HINTS, {
+                    ("en", "/works/OL40886854W"): {
+                        "title": "Summary : the Design of Everyday Things",
+                        "author": "Slim Reads",
+                        "ol_key": "/works/OL40886854W",
+                    },
+                }, clear=True):
+            books = app.local_book_suggestions("the design of everyday things", "en")
+
+        self.assertEqual(books[0]["ol_key"], "/works/OL1879162W")
+        self.assertNotIn("/works/OL40886854W", [book["ol_key"] for book in books])
+
+    def test_catalog_suggestions_use_ranked_identity_search(self):
+        book = {"title": "The Design of Everyday Things", "author": "Donald A. Norman", "ol_key": "/works/OL1879162W"}
+        with patch.object(app, "fetch_discovery_books", return_value=([book] * 9, 9, 1)) as fetch:
+            response = app.app.test_client().get("/api/suggestions/catalog?q=the+design+of+everyday+things&book_lang=en")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.get_json()["books"]), 6)
+        fetch.assert_called_once_with("the design of everyday things", 1, "en")
+        self.assertIn("api_catalog_suggestions", app.RUNTIME_RATE_LIMIT_RULES)
+        self.assertIn("api_catalog_suggestions", app.RUNTIME_GLOBAL_RATE_LIMIT_RULES)
+
+    def test_palette_replaces_local_results_after_typing_pauses(self):
+        navbar = (Path(app.APP_DIR) / "templates" / "_navbar.html").read_text()
+
+        self.assertIn("fetch('/api/suggestions/catalog?'", navbar)
+        self.assertIn("scheduleCatalogResults(query, lang, data.success ? data.books : [])", navbar)
+        self.assertIn("(searchInput?.value.trim() || '') !== query", navbar)
+        self.assertNotIn("fetch('/api/discover?' + new URLSearchParams({ q: query, book_lang: lang })", navbar)
+
+
+class KindleTrayTests(unittest.TestCase):
+    def test_tray_hides_while_the_inline_progress_bar_is_on_screen(self):
+        downloads = (Path(app.APP_DIR) / "static" / "download-ui.js").read_text()
+        sync = downloads.split("function syncGlobalKindleTrayVisibility() {", 1)[1].split("\n  }\n", 1)[0]
+
+        self.assertIn("tray.hidden = inlineProgressOnScreen(metadata.panel);", sync)
+        self.assertIn("if (event.type === 'complete') {", sync)
+        self.assertIn("window.addEventListener('scroll', scheduleGlobalKindleTrayVisibility, { passive: true });", downloads)
+        self.assertIn("      panel,\n    };", downloads)
+
+    def test_popups_sit_bottom_right(self):
+        stylesheet = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+        tray = stylesheet.split(".kindle-global-tray {", 1)[1].split("}", 1)[0]
+        toast = stylesheet.split(".app-toast {", 1)[1].split("}", 1)[0]
+
+        self.assertIn("right: 20px;", tray)
+        self.assertNotIn("left:", tray)
+        self.assertIn("right: 20px;", toast)
+        self.assertIn("body:has(.kindle-global-tray:not([hidden])) .app-toast", stylesheet)
+
+
 class QuickLookTests(unittest.TestCase):
     def test_quick_look_api_serves_cached_description_without_provider_wait(self):
         detail = {

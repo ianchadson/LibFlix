@@ -259,5 +259,54 @@ class KindleJobTests(unittest.TestCase):
         self.assertNotIn("server-only-secret", repr(context))
 
 
+
+class RealDebridSourceValidationTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tempdir.cleanup)
+        self.book_id = "rd" + "c" * 40
+
+    def _write(self, name, data):
+        path = os.path.join(self.tempdir.name, name)
+        with open(path, "wb") as handle:
+            handle.write(data)
+        return path
+
+    def test_real_debrid_file_is_accepted_without_a_content_hash(self):
+        from kindle_delivery import validate_source_file
+
+        path = self._write("book.epub", b"PK\x03\x04" + b"x" * 200)
+        validation = validate_source_file(path, self.book_id, "epub", expected_size=204)
+        self.assertEqual(validation.digest, self.book_id)
+        self.assertEqual(validation.size, 204)
+
+    def test_real_debrid_file_still_needs_the_right_type_and_size(self):
+        from kindle_delivery import SourceFileError, validate_source_file
+
+        page = self._write("page.epub", b"<html>not a book</html>")
+        with self.assertRaises(SourceFileError):
+            validate_source_file(page, self.book_id, "epub")
+        book = self._write("short.epub", b"PK\x03\x04" + b"x" * 20)
+        with self.assertRaises(SourceFileError):
+            validate_source_file(book, self.book_id, "epub", expected_size=999)
+
+    def test_libgen_file_still_requires_its_md5(self):
+        from kindle_delivery import SourceFileError, validate_source_file
+
+        path = self._write("book.epub", b"PK\x03\x04" + b"x" * 200)
+        with self.assertRaises(SourceFileError):
+            validate_source_file(path, "d" * 32, "epub")
+
+    def test_source_cache_round_trips_real_debrid_ids(self):
+        from kindle_delivery import KindleSourceCache
+
+        cache = KindleSourceCache(os.path.join(self.tempdir.name, "cache"))
+        temporary = cache.temporary_path(self.book_id, "epub")
+        with open(temporary, "wb") as handle:
+            handle.write(b"PK\x03\x04" + b"y" * 100)
+        committed = cache.commit(temporary, self.book_id, "epub")
+        self.assertEqual(cache.get(self.book_id, "epub"), committed)
+
+
 if __name__ == "__main__":
     unittest.main()

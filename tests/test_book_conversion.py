@@ -3,6 +3,7 @@ import struct
 import tempfile
 import unittest
 import zipfile
+from xml.etree import ElementTree
 from unittest.mock import patch
 
 import book_conversion
@@ -168,7 +169,84 @@ class ConvertToEpubTests(unittest.TestCase):
             "progress = 68", 1
         )[0]
         self.assertIn("raise RuntimeError(", conversion_block)
-        self.assertIn("Try an EPUB or PDF edition", conversion_block)
+        self.assertIn("This edition couldn't be converted for Kindle.", conversion_block)
+        self.assertNotIn("Try an EPUB or PDF edition", conversion_block)
+
+
+class Mobi7ConversionTests(unittest.TestCase):
+    """Older (KF7) MOBI files unpack to HTML + images instead of an EPUB."""
+
+    def setUp(self):
+        self.tempdir = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.tempdir, ignore_errors=True))
+        self.extraction = os.path.join(self.tempdir, "mobiex-kf7")
+        self.book_dir = os.path.join(self.extraction, "mobi7")
+        os.makedirs(os.path.join(self.book_dir, "Images"))
+        with open(os.path.join(self.book_dir, "book.html"), "w", encoding="utf-8") as handle:
+            handle.write(
+                '<html><head><guide><reference type="toc" filepos=0000000200 /></guide></head><body>'
+                '<blockquote height="1em"><font size="4">Title &amp; page<br></font></blockquote>'
+                '<p><a href="#filepos200">Chapter one</a></p>'
+                '<mbp:pagebreak />'
+                '<a id="filepos200" /><h2>Chapter one</h2><p>Morning light<br>matters.</p>'
+                '<img src="Images/cover00001.jpeg" width="200">'
+                '<mbp:pagebreak />'
+                '</body></html>'
+            )
+        with open(os.path.join(self.book_dir, "content.opf"), "w", encoding="utf-8") as handle:
+            handle.write(
+                '<package><metadata><dc:title>Protocols</dc:title>'
+                '<dc:creator>Huberman, Andrew D.</dc:creator><dc:language>en</dc:language>'
+                '</metadata></package>'
+            )
+        with open(os.path.join(self.book_dir, "toc.ncx"), "w", encoding="utf-8") as handle:
+            handle.write(
+                '<ncx><navMap><navPoint><navLabel><text>Chapter one</text></navLabel>'
+                '<content src="book.html#filepos200" /></navPoint></navMap></ncx>'
+            )
+        with open(os.path.join(self.book_dir, "Images", "cover00001.jpeg"), "wb") as handle:
+            handle.write(b"\xff\xd8\xff" + b"0" * 32)
+        self.mobi_path = os.path.join(self.tempdir, "book.mobi")
+        with open(self.mobi_path, "wb") as handle:
+            handle.write(_palmdb_mobi())
+
+    def test_kf7_html_is_packaged_as_a_valid_epub(self):
+        html_path = os.path.join(self.book_dir, "book.html")
+        with patch("mobi.extract", return_value=(self.extraction, html_path)):
+            result = convert_to_epub(self.mobi_path, "mobi")
+
+        self.assertTrue(result.path, result.warning)
+        self.assertTrue(book_conversion._valid_epub(result.path))
+        with zipfile.ZipFile(result.path) as archive:
+            names = archive.namelist()
+            self.assertEqual(names[0], "mimetype")
+            self.assertEqual(archive.getinfo("mimetype").compress_type, zipfile.ZIP_STORED)
+            chapters = sorted(name for name in names if name.endswith(".xhtml"))
+            self.assertEqual(len(chapters), 2)
+            self.assertIn("OEBPS/Images/cover00001.jpeg", names)
+            opf = archive.read("OEBPS/content.opf").decode()
+            self.assertIn("<dc:title>Protocols</dc:title>", opf)
+            self.assertIn('<meta name="cover"', opf)
+            ncx = archive.read("OEBPS/toc.ncx").decode()
+            self.assertIn('src="part0001.xhtml#filepos200"', ncx)
+            first = archive.read(chapters[0]).decode()
+            self.assertIn('href="part0001.xhtml#filepos200"', first)
+            self.assertNotIn("height=", first)
+            for name in chapters:
+                ElementTree.fromstring(archive.read(name))
+        self.assertFalse(os.path.exists(self.extraction))
+        book_conversion.cleanup_path(result.path)
+
+    def test_kf7_conversion_failure_cleans_up(self):
+        html_path = os.path.join(self.book_dir, "book.html")
+        with open(html_path, "w", encoding="utf-8") as handle:
+            handle.write("<html><body>   </body></html>")
+        with patch("mobi.extract", return_value=(self.extraction, html_path)):
+            result = convert_to_epub(self.mobi_path, "mobi")
+
+        self.assertEqual(result.path, "")
+        self.assertIn("empty", result.warning)
+        self.assertFalse(os.path.exists(self.extraction))
 
 
 class AppFormatVisibilityTests(unittest.TestCase):
@@ -207,18 +285,39 @@ class AppFormatVisibilityTests(unittest.TestCase):
         self.assertGreater(score, 0)
         self.assertTrue(app_module.is_deliverable_kindle_format(book.ext))
 
-    def test_non_libgen_convertible_row_is_not_kindle_compatible(self):
+    def test_real_debrid_rows_can_be_sent_to_kindle(self):
         import app as app_module
 
-        response = app_module.app.test_client().get(
-            "/api/search?q=protocols&lang=English&format=all&dedup=0&limit=25"
+        rd_book = app_module.Book(
+            book_id="rd" + "b" * 40,
+            title="Protocols",
+            author="Andrew Huberman",
+            ext="mobi",
+            size="1.2 MB",
+            language="English",
+            source="realdebrid",
         )
+        with patch.object(app_module.DOWNLOADER, "search", return_value=([rd_book], 1)), \
+                patch.object(app_module, "cache_get", return_value=None), \
+                patch.object(app_module, "cache_set"):
+            response = app_module.app.test_client().get(
+                "/api/search?q=protocols&lang=English&format=all&dedup=0&limit=25"
+            )
         payload = response.get_json()
         response.close()
-        for row in payload.get("books", []):
-            if row.get("source") != "libgen":
-                self.assertFalse(row.get("kindle_compatible"))
-                self.assertFalse(row.get("kindle_conversion"))
+        rows = [row for row in payload.get("books", []) if row.get("source") == "realdebrid"]
+        self.assertTrue(rows)
+        self.assertTrue(rows[0]["kindle_compatible"])
+        self.assertTrue(rows[0]["kindle_conversion"])
+        self.assertFalse(rows[0]["fastest_to_kindle"])
+        self.assertEqual(
+            app_module.validate_kindle_payload({
+                "md5": "rd" + "b" * 40,
+                "ext": "epub",
+                "kindle_email": "reader@kindle.com",
+            }) != "Invalid book identifier",
+            True,
+        )
 
 
 if __name__ == "__main__":

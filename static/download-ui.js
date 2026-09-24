@@ -614,11 +614,46 @@
     } catch {}
   }
 
+  // The tray mirrors a delivery only while its inline progress bar is out of
+  // view (scrolled away or left behind on another page), so the reader never
+  // sees two progress bars for one book.
+  let globalTrayState = null;
+  let globalTrayFrame = null;
+
+  function inlineProgressOnScreen(panel) {
+    if (!(panel instanceof HTMLElement) || !panel.isConnected || !panel.classList.contains('visible')) return false;
+    const rect = panel.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < window.innerHeight && rect.width > 0 && rect.height > 0;
+  }
+
+  function syncGlobalKindleTrayVisibility() {
+    globalTrayFrame = null;
+    const tray = document.getElementById('kindleGlobalTray');
+    if (!tray || !globalTrayState) return;
+    const { event, metadata } = globalTrayState;
+    if (event.type === 'complete') {
+      // Completion is announced by the "Sent to Kindle" toast.
+      tray.hidden = true;
+      return;
+    }
+    tray.hidden = inlineProgressOnScreen(metadata.panel);
+  }
+
+  function scheduleGlobalKindleTrayVisibility() {
+    if (globalTrayFrame || !globalTrayState) return;
+    globalTrayFrame = window.requestAnimationFrame(syncGlobalKindleTrayVisibility);
+  }
+
+  window.addEventListener('scroll', scheduleGlobalKindleTrayVisibility, { passive: true });
+  window.addEventListener('resize', scheduleGlobalKindleTrayVisibility);
+  window.addEventListener('libflix:navigated', scheduleGlobalKindleTrayVisibility);
+
   function updateGlobalKindleTray(event, metadata = {}) {
     const tray = document.getElementById('kindleGlobalTray');
     if (!tray || !event) return;
     if (globalTrayHideTimer) window.clearTimeout(globalTrayHideTimer);
     globalTrayHideTimer = null;
+    globalTrayState = { event, metadata };
     const presentation = progressPresentation(event);
     const title = document.getElementById('kindleGlobalTrayTitle');
     const stage = document.getElementById('kindleGlobalTrayStage');
@@ -626,7 +661,6 @@
     const detail = document.getElementById('kindleGlobalTrayDetail');
     const track = document.getElementById('kindleGlobalTrayTrack');
     const fill = document.getElementById('kindleGlobalTrayFill');
-    tray.hidden = false;
     tray.classList.toggle('indeterminate', !presentation.hasProgress && event.type === 'progress');
     tray.classList.toggle('complete', event.type === 'complete');
     tray.classList.toggle('error', event.type === 'error' || event.success === false);
@@ -649,9 +683,7 @@
         track.setAttribute('aria-valuetext', presentation.label);
       }
     }
-    if (event.type === 'complete') {
-      globalTrayHideTimer = window.setTimeout(() => { tray.hidden = true; }, 8000);
-    }
+    syncGlobalKindleTrayVisibility();
   }
 
   function updateKindleProgress(panel, event) {
@@ -851,6 +883,7 @@
     const panel = createKindleProgress(button);
     const trayMetadata = {
       title: payload.canonical_title || payload.title || button.dataset.title || 'Book',
+      panel,
     };
     const initialEvent = { type: 'progress', stage: 'Preparing delivery', progress: 0 };
     updateKindleProgress(panel, initialEvent);
@@ -894,7 +927,7 @@
       button.classList.add('sent');
       button.innerHTML = icons.check + '<span>Sent</span>';
       button.setAttribute('aria-label', 'Sent to Kindle');
-      updateGlobalKindleTray({ ...completed, type: 'complete', stage: completed.stage || 'Sent to Kindle', progress: 100 }, { title: cleanedTitle });
+      updateGlobalKindleTray({ ...completed, type: 'complete', stage: completed.stage || 'Sent to Kindle', progress: 100 }, { title: cleanedTitle, panel });
       forgetActiveKindleJob(payload.md5, jobId);
       window.LibFlixNotify?.('Sent to Kindle', 'success', {
         title: cleanedTitle,
@@ -997,7 +1030,13 @@
         trayMetadata,
       );
       observeKindleJob(metadata.jobId, event => updateGlobalKindleTray(event, trayMetadata))
-        .then(() => forgetActiveKindleJob(md5, metadata.jobId))
+        .then(completed => {
+          forgetActiveKindleJob(md5, metadata.jobId);
+          updateGlobalKindleTray({ ...(completed || {}), type: 'complete', progress: 100 }, trayMetadata);
+          window.LibFlixNotify?.('Sent to Kindle', 'success', {
+            title: completed?.title || trayMetadata.title,
+          });
+        })
         .catch(error => {
           const failure = error.kindleEvent || {};
           updateGlobalKindleTray({

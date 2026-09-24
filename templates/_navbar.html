@@ -1192,6 +1192,8 @@
     const searchRecentSection = document.getElementById('searchRecentSection');
     let searchRequest = null;
     let searchTimer = null;
+    let catalogRequest = null;
+    let catalogTimer = null;
     let searchActiveIndex = -1;
     let searchReturnFocus = null;
     const SEARCH_RECENTS_KEY = 'libflix_recent_searches_v1';
@@ -1291,6 +1293,7 @@
         .then(data => {
           if (searchRequest !== controller) return;
           renderSearchSuggestions(data.success ? data.books : []);
+          scheduleCatalogResults(query, lang, data.success ? data.books : []);
         })
         .catch(error => {
           if (error.name !== 'AbortError' && searchRequest === controller) renderSearchSuggestions([]);
@@ -1299,7 +1302,45 @@
           if (searchRequest === controller) searchRequest = null;
         });
     };
+    // Local suggestions are instant but only know books LibFlix has already
+    // seen. Once typing pauses, the ranked catalog search replaces them so the
+    // canonical book (not a summary or a namesake) leads the quick results.
+    const cancelCatalogResults = () => {
+      if (catalogTimer) window.clearTimeout(catalogTimer);
+      catalogTimer = null;
+      catalogRequest?.abort();
+      catalogRequest = null;
+    };
+    const scheduleCatalogResults = (query, lang, localBooks) => {
+      cancelCatalogResults();
+      if (query.length < 3) return;
+      catalogTimer = window.setTimeout(() => {
+        const controller = new AbortController();
+        catalogRequest = controller;
+        fetch('/api/suggestions/catalog?' + new URLSearchParams({ q: query, book_lang: lang }), {
+          signal: controller.signal,
+        })
+          .then(response => (response.ok ? response.json() : null))
+          .then(data => {
+            if (catalogRequest !== controller || (searchInput?.value.trim() || '') !== query) return;
+            const books = (data?.success && Array.isArray(data.books) ? data.books : [])
+              .filter(book => book.ol_key && book.title)
+              .slice(0, 6);
+            if (!books.length) return;
+            const keys = new Set(books.map(book => book.ol_key));
+            renderSearchSuggestions([
+              ...books,
+              ...(localBooks || []).filter(book => !keys.has(book.ol_key)),
+            ].slice(0, 8));
+          })
+          .catch(() => {})
+          .finally(() => {
+            if (catalogRequest === controller) catalogRequest = null;
+          });
+      }, 450);
+    };
     const requestSearchSuggestions = () => {
+      cancelCatalogResults();
       if (searchTimer) window.clearTimeout(searchTimer);
       const query = searchInput?.value.trim() || '';
       if (query.length < 2) {
@@ -1325,6 +1366,7 @@
         window.setTimeout(() => searchInput?.focus({ preventScroll: true }), 30);
       } else {
         searchRequest?.abort();
+        cancelCatalogResults();
         if (searchTimer) window.clearTimeout(searchTimer);
         searchTimer = null;
         if (searchReturnFocus instanceof HTMLElement) searchReturnFocus.focus({ preventScroll: true });

@@ -286,7 +286,8 @@ Read signals also supply cached weekly and monthly homepage rails.
   selected book, and provides an EPUB fallback. Handoff feedback resets on return
   with a setup-repair link; the browser cannot confirm that Books imported a file.
 - **Kindle-compatible results** - EPUB and PDF editions send directly. MOBI and
-  AZW3 editions are converted to EPUB before Send to Kindle (`Convert & Kindle`);
+  AZW3 editions (including older KF7 MOBI files) are converted to EPUB before
+  Send to Kindle (`Convert & Kindle`);
   if conversion fails the send stops with a clear error rather than mailing a
   file Amazon would reject. DRM-era AZW editions stay hidden.
 - **Send to Kindle settings** - the global Settings menu opens a keyboard-safe

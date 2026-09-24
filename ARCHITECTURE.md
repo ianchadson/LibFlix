@@ -458,9 +458,11 @@ the environment and is never persisted.
 
 Download ids are namespaced so one `/download/<id>` route can dispatch to the
 right provider: LibGen keeps its raw 32-hex MD5 and Real-Debrid uses
-`rd` + a 40-hex infohash. Only LibGen ids are eligible for Send to Kindle,
-because the Kindle source cache verifies the file against the upstream MD5
-content key. The Real-Debrid provider never renders a source page in a browser,
+`rd` + a 40-hex infohash. Both are eligible for Send to Kindle. LibGen files
+are verified against their upstream MD5 content key; a Real-Debrid infohash
+names a torrent rather than one file, so those files are accepted on byte count
+and format magic alone and cached under their `rd` id. Only LibGen editions can
+earn "Fastest to Kindle", because torrent resolution is much slower. The Real-Debrid provider never renders a source page in a browser,
 refuses off-source hosts and redirects, and streams only after the existing
 non-HTML first-byte guard.
 
@@ -818,7 +820,7 @@ Backend attachment preparation:
 
 | Module | Responsibility |
 |---|---|
-| `book_conversion.py` | Legacy MOBI/AZW3 to EPUB conversion before Kindle preparation, with validated output; a failed conversion stops the send |
+| `book_conversion.py` | Legacy MOBI/AZW3 to EPUB conversion before Kindle preparation, with validated output (KF8 via the `mobi` package; older KF7 files are rebuilt from their unpacked HTML, images, and TOC); a failed conversion stops the send |
 | `book_preparation.py` | Canonical filename cleanup, EPUB package metadata/cover repair, PDF metadata repair, and safe original-file fallback |
 
 ## Frontend Interaction Details
@@ -939,8 +941,7 @@ DRM-era extension) is still removed before deduplication and ranking, and the
 job API independently rejects any format outside EPUB, PDF, MOBI, and AZW3 to
 protect against stale clients or direct requests. A convertible row is flagged
 `kindle_conversion` so the UI can label its action `Convert & Kindle`; only
-LibGen ids are eligible, because the source cache verifies the file against its
-upstream MD5 key.
+LibGen and Real-Debrid ids are eligible.
 
 Ranking is dominated by normalized title similarity, including exact,
 containment, token-overlap, and sequence checks. Author agreement is the next

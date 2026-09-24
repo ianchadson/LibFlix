@@ -500,7 +500,7 @@ body.is-navigating .lib-nav::after {
 
 .kindle-global-tray {
   position: fixed;
-  left: 20px;
+  right: 20px;
   bottom: 20px;
   z-index: 10950;
   width: min(380px, calc(100vw - 32px));
@@ -2945,7 +2945,7 @@ button.edition-recommended {
   }
 
   .kindle-global-tray {
-    left: 16px;
+    right: 16px;
     bottom: 16px;
   }
 

@@ -19,6 +19,10 @@ from email.utils import formatdate, make_msgid
 
 
 SUPPORTED_EXTENSIONS = frozenset({"epub", "pdf", "mobi", "azw3"})
+# LibGen ids are the file's MD5 content key. Real-Debrid ids ("rd" + infohash)
+# name a torrent, not one file, so they have no content hash to verify.
+SOURCE_ID_PATTERN = re.compile(r"[a-f0-9]{32}|rd[a-f0-9]{40}")
+CONTENT_HASH_PATTERN = re.compile(r"[a-f0-9]{32}")
 LEGACY_MOBI_EXTENSIONS = frozenset({"mobi", "azw3"})
 
 
@@ -69,10 +73,17 @@ def validate_source_file(
     *,
     expected_size: int = 0,
 ) -> SourceValidation:
-    """Validate type, byte count, and the LibGen content hash in one pass."""
+    """Validate type, byte count, and (for LibGen) the content hash in one pass.
+
+    Real-Debrid ids carry no file hash, so those files are accepted on the
+    remaining evidence: a non-empty body, the declared byte count, and the
+    format's magic bytes. The id is returned as the digest so the source cache
+    keys them the same way.
+    """
     expected_md5 = str(expected_md5 or "").casefold()
-    if not re.fullmatch(r"[a-f0-9]{32}", expected_md5):
+    if not SOURCE_ID_PATTERN.fullmatch(expected_md5):
         raise SourceFileError("Invalid source identifier")
+    has_content_hash = bool(CONTENT_HASH_PATTERN.fullmatch(expected_md5))
     extension = _normal_extension(extension)
     digest = hashlib.md5()  # nosec B324 - the upstream identifier is an MD5 content key
     total = 0
@@ -98,6 +109,8 @@ def validate_source_file(
         )
     if not _valid_magic(bytes(header), extension):
         raise SourceFileError("Download source returned the wrong file type")
+    if not has_content_hash:
+        return SourceValidation(total, expected_md5)
     actual_md5 = digest.hexdigest()
     if actual_md5 != expected_md5:
         raise SourceFileError("Downloaded book did not match its source identifier")
@@ -114,7 +127,7 @@ class KindleSourceCache:
 
     def _paths(self, book_id: str, extension: str) -> tuple[str, str]:
         book_id = str(book_id or "").casefold()
-        if not re.fullmatch(r"[a-f0-9]{32}", book_id):
+        if not SOURCE_ID_PATTERN.fullmatch(book_id):
             raise SourceFileError("Invalid source identifier")
         extension = _normal_extension(extension)
         directory = os.path.join(self.root, book_id[:2])
