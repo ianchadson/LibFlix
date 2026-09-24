@@ -638,6 +638,82 @@ class DiscoveryRelevanceTests(unittest.TestCase):
         self.assertIn("Haruki Murakami", alternates)
         self.assertEqual(app.latin_author_name("村上春樹", alternates), "Haruki Murakami")
 
+    def test_identity_search_never_requests_description(self):
+        # Open Library search answers HTTP 500 when description is combined
+        # with the identity fields, which emptied every book's search record.
+        self.assertNotIn("description", app.OL_IDENTITY_FIELDS.split(","))
+        calls = []
+
+        def fake_ol_get(path, params):
+            calls.append(params["fields"])
+            if params["fields"] == app.OL_IDENTITY_FIELDS:
+                return None
+            return {"docs": [{"key": "/works/OL1W", "title": "Book"}]}
+
+        with patch.object(app, "ol_get", side_effect=fake_ol_get):
+            record = app.search_record_for_work("/works/OL1W", "en")
+        self.assertEqual(record["key"], "/works/OL1W")
+        self.assertEqual(calls[:2], [app.OL_IDENTITY_FIELDS, app.OL_IDENTITY_FALLBACK_FIELDS])
+
+    def test_english_titles_allow_typography_and_english_accented_editions(self):
+        self.assertTrue(app.is_english_title("Man’s Search for Meaning"))
+        self.assertTrue(app.is_english_title("Thinking — Fast… and Slow"))
+        self.assertFalse(app.is_english_title("Анна Каренина"))
+        self.assertEqual(app.normalize_match_text("Pedro Páramo"), "pedro paramo")
+        self.assertEqual(app.normalize_match_text("がっこう"), "がっこう")
+        english = {
+            "key": "/works/OL1731119W", "title": "Pedro Páramo", "author_name": ["Juan Rulfo"],
+            "language": ["spa", "eng"], "cover_i": 1,
+            "editions": {"docs": [{"title": "Pedro Páramo", "language": ["eng"]}]},
+        }
+        self.assertEqual(app.extract_book(english, "en")["title"], "Pedro Páramo")
+        spanish_only = {
+            "key": "/works/OL2W", "title": "Cien años de soledad", "author_name": ["G"],
+            "language": ["spa"], "cover_i": 1,
+            "editions": {"docs": [{"title": "Cien años de soledad", "language": ["spa"]}]},
+        }
+        self.assertIsNone(app.extract_book(spanish_only, "en"))
+
+    def test_foreign_tagged_ascii_edition_is_not_treated_as_english(self):
+        record = {"editions": {"docs": [{"title": "Bai nian gu du", "language": ["chi"]}]}}
+        self.assertIsNone(app.first_matching_edition(record, "en"))
+        untagged = {"editions": {"docs": [{"title": "One Hundred Years of Solitude"}]}}
+        self.assertEqual(app.first_matching_edition(untagged, "en")["title"], "One Hundred Years of Solitude")
+
+    def test_english_identity_restores_article_and_strips_catalogue_noise(self):
+        identity = {
+            "english_editions": 197, "title": "Trial", "title_key": app._edition_title_key("Trial"),
+            "title_counts": {app._edition_title_key("Trial"): 197},
+            "group_spellings": {app._edition_title_key("Trial"): "Trial"},
+            "cover_id": "", "english_cover_ids": [], "aliases": ["Trial"],
+        }
+        noisy = app.apply_english_edition_identity(
+            {"title": "The Trial (Penguin Books. no. 907.)", "cover_url": ""}, identity,
+        )
+        self.assertEqual(noisy["title"], "The Trial")
+        foreign = app.apply_english_edition_identity(
+            {"title": "Der Proceß", "cover_url": ""}, identity,
+            article_hint="The Trial (Penguin Books. no. 907.)",
+        )
+        self.assertEqual(foreign["title"], "The Trial")
+
+    def test_inverted_catalogue_author_names_read_naturally(self):
+        self.assertEqual(app.uninvert_author_name("Huberman, Andrew D."), "Andrew D. Huberman")
+        self.assertEqual(app.uninvert_author_name("Martin Luther King, Jr."), "Martin Luther King, Jr.")
+        self.assertEqual(app.uninvert_author_name("Smith, John, 1950-"), "Smith, John, 1950-")
+        self.assertEqual(app.uninvert_author_name("Stephen King"), "Stephen King")
+        self.assertEqual(app.clean_display_title("Fortress besieged ="), "Fortress besieged")
+        self.assertEqual(app.clean_display_title("Who Moved My Cheese?"), "Who Moved My Cheese?")
+
+    def test_english_author_label_uses_wikidata_via_inventaire(self):
+        author = {"name": "Fiódor Dostoievski", "remote_ids": {"wikidata": "Q991"}}
+        entities = {"entities": {"wd:Q991": {"labels": {"en": "Fyodor Dostoyevsky"}}}}
+        with patch.object(app, "ol_get", return_value=author), \
+                patch.object(app, "inventaire_get", return_value=entities) as inventaire:
+            label = app.english_author_label({}, {"author_key": ["OL22242A"]})
+        self.assertEqual(label, "Fyodor Dostoyevsky")
+        self.assertEqual(inventaire.call_args.args[0], "/entities/by-uris")
+
     def test_discovery_prefers_catalog_author_over_title_appended_name(self):
         records = [
             {

@@ -158,7 +158,11 @@ OL_LIST_FIELDS = (
     "ratings_average,readinglog_count,edition_count"
 )
 OL_COVER_FIELDS = f"{OL_LIST_FIELDS},editions,editions.title,editions.language,editions.covers,editions.cover_i,editions.cover_id,editions.ocaid"
-OL_IDENTITY_FIELDS = f"{OL_COVER_FIELDS},description,alternative_title,author_alternative_name,isbn,editions.author_name,editions.isbn_10,editions.isbn_13"
+# No "description": Open Library search returns HTTP 500 when it is combined
+# with these fields, which silently emptied every work's search record.
+# Descriptions come from the work record instead.
+OL_IDENTITY_FIELDS = f"{OL_COVER_FIELDS},alternative_title,author_alternative_name,author_key,isbn,editions.author_name,editions.isbn_10,editions.isbn_13"
+OL_IDENTITY_FALLBACK_FIELDS = f"{OL_COVER_FIELDS},author_key"
 # Backwards-compatible name for list/cover consumers; identity fields are
 # intentionally reserved for a single work-detail lookup.
 OL_BOOK_FIELDS = OL_COVER_FIELDS
@@ -1775,7 +1779,28 @@ def shelf_query(topic, lang=None):
     return f"subject:{topic.replace('_', ' ')} -subject:Fiction{lang_filter}", "rating"
 
 def is_english_title(title):
-    return bool(re.match(r'^[\x20-\x7E\s\-\'.,!?;:()"&]+$', title))
+    # ASCII plus typographic punctuation English catalogues use
+    # (curly quotes, dashes, ellipsis): "Man’s Search for Meaning".
+    return bool(re.match(r'^[\x20-\x7E\s\-\'.,!?;:()"&\u2018\u2019\u201c\u201d\u2013\u2014\u2026]+$', title or ""))
+
+
+def is_latin_title(title):
+    """Latin script with diacritics ("Pedro Páramo", "Les Misérables")."""
+    return bool(title) and bool(re.match(
+        r'^[\x20-\x7E\u00a0-\u024f\u1e00-\u1eff\u2018\u2019\u201c\u201d\u2013\u2014\u2026\s]+$',
+        title,
+    ))
+
+
+def fold_latin_diacritics(value):
+    """Strip accents from Latin letters only; kana voicing marks stay intact."""
+    decomposed = unicodedata.normalize("NFKD", str(value or ""))
+    folded = []
+    for char in decomposed:
+        if unicodedata.combining(char) and folded and ord(folded[-1]) < 0x250:
+            continue
+        folded.append(char)
+    return unicodedata.normalize("NFKC", "".join(folded))
 
 def is_chinese_title(title):
     return bool(re.search(r'[\u3400-\u9fff]', title or ""))
@@ -1884,7 +1909,13 @@ def first_matching_edition(w, lang=None):
     matched = best(ed for ed in editions if record_has_lang(ed, lang))
     if matched:
         return matched
-    matched = best(ed for ed in editions if title_matches_lang(ed.get("title", ""), lang))
+    # An ASCII title is not evidence of English when the edition is tagged
+    # with another language ("Bai nian gu du" is a Chinese edition).
+    matched = best(
+        ed for ed in editions
+        if title_matches_lang(ed.get("title", ""), lang)
+        and not (lang != "cn" and search_record_language_codes(ed))
+    )
     if matched:
         return matched
     return None
@@ -2361,7 +2392,7 @@ def english_edition_identity(ol_key):
     """
     if not re.fullmatch(r"/works/OL\d+W", ol_key or ""):
         return {}
-    ckey = f"english_edition_identity:v1:{ol_key}"
+    ckey = f"english_edition_identity:v2:{ol_key}"
     cached = cache_get(ckey, ENGLISH_EDITION_IDENTITY_TTL)
     if cached is None:
         cached = disk_cache_get(ckey, ENGLISH_EDITION_IDENTITY_TTL)
@@ -2401,9 +2432,17 @@ def english_edition_identity(ol_key):
         ordered = sorted(groups.items(), key=lambda item: (item[1]["count"], item[1]["year"]), reverse=True)
         top_key, top = ordered[0]
 
+        def well_formed(form):
+            # "Fourth Wing" over "Fourth WIng"; "LaRue"-style names still count
+            # when they are the majority spelling.
+            return sum(
+                1 for word in form.split()
+                if word[:1].isalpha() and not (word[:1].isupper() and not word[1:].isupper())
+            )
+
         def spelling(group):
             forms = group["spellings"]
-            best = max(forms, key=lambda form: (forms[form], sum(ch.isupper() for ch in form)))
+            best = max(forms, key=lambda form: (forms[form], -well_formed(form), form[:1].isupper()))
             # "The Plague" over the bare catalogue form "Plague" when a real
             # share of editions carries the article.
             with_article = [form for form in forms if re.match(r"(?i)(the|a|an)\s", form)]
@@ -2426,6 +2465,11 @@ def english_edition_identity(ol_key):
             "title_key": top_key,
             "title_counts": {key: group["count"] for key, group in ordered[:8]},
             "cover_id": str(newest_cover(top["editions"]) or newest_cover(english) or ""),
+            "title_cover_ids": sorted({
+                str(cover) for edition in top["editions"] for cover in (edition.get("covers") or [])
+                if valid_cover_id(cover)
+            })[:200],
+            "group_spellings": {key: spelling(group) for key, group in ordered[:8]},
             "english_cover_ids": sorted({
                 str(cover) for edition in english for cover in (edition.get("covers") or [])
                 if valid_cover_id(cover)
@@ -2437,7 +2481,7 @@ def english_edition_identity(ol_key):
     return result
 
 
-def apply_english_edition_identity(result, identity):
+def apply_english_edition_identity(result, identity, article_hint=""):
     """Swap a foreign/old title or cover for the English editions' own."""
     if not identity or not identity.get("english_editions"):
         return result
@@ -2445,12 +2489,57 @@ def apply_english_edition_identity(result, identity):
     counts = identity.get("title_counts") or {}
     top_count = max(counts.values(), default=0)
     current_key = _edition_title_key(result.get("title"))
-    if identity.get("title") and counts.get(current_key, 0) * 2 < top_count:
-        result["title"] = identity["title"]
-        result["download_title"] = identity["title"]
+    current_is_english_title = counts.get(current_key, 0) > 0
+    # A foreign/old title always yields to the English one. An English title
+    # yields only to a title most English editions use ("The Design of
+    # Everyday Things"), not to a rival translation title ("The Analects").
+    replace = (
+        not current_is_english_title
+        or (
+            counts[current_key] * 2 < top_count
+            and top_count * 2 > int(identity.get("english_editions") or 0)
+        )
+    )
+    if identity.get("title") and replace:
+        title = identity["title"]
+        # Among well-used English titles, prefer the edition Open Library's own
+        # search ranks first ("Smilla's Sense of Snow" over the UK title).
+        hint_key = _edition_title_key(article_hint)
+        hint_spelling = (identity.get("group_spellings") or {}).get(hint_key, "")
+        if hint_spelling and counts.get(hint_key, 0) * 2 >= top_count:
+            title = hint_spelling
+        # Catalogues often drop the article ("Trial"); an English edition from
+        # search that keeps it ("The Trial (Penguin ...)") restores it.
+        hint_base = re.split(r"\s*[:;(\[]\s*", article_hint.strip(), maxsplit=1)[0]
+        if (
+            re.match(r"(?i)(the|a|an)\s", hint_base)
+            and not re.match(r"(?i)(the|a|an)\s", title)
+            and _edition_title_key(hint_base) == _edition_title_key(title)
+        ):
+            title = catalog_title_case(hint_base)
+        result["title"] = title
+        result["download_title"] = title
+    elif re.search(r"[(\[]", str(result.get("title") or "")):
+        # Same English title with catalogue noise: "The Trial (Penguin
+        # Books. no. 907.)" -> "The Trial".
+        clean = (identity.get("group_spellings") or {}).get(current_key, "")
+        current_base = re.split(r"\s*[(\[]\s*", str(result.get("title") or ""), maxsplit=1)[0].strip()
+        if re.match(r"(?i)(the|a|an)\s", current_base) and not re.match(r"(?i)(the|a|an)\s", clean or ""):
+            clean = catalog_title_case(current_base)
+        if clean:
+            result["title"] = clean
+            result["download_title"] = clean
+    if _edition_title_key(result.get("title")) in counts:
+        # Catalogue sentence case -> "One Hundred Years of Solitude".
+        result["title"] = catalog_title_case(result.get("title"))
+        if _edition_title_key(result.get("download_title")) == _edition_title_key(result["title"]):
+            result["download_title"] = result["title"]
     cover_match = re.search(r"/olcover/(\d+)", str(result.get("cover_url") or ""))
-    english_covers = set(identity.get("english_cover_ids") or [])
-    if identity.get("cover_id") and (not cover_match or cover_match.group(1) not in english_covers):
+    current_cover = cover_match.group(1) if cover_match else ""
+    title_covers = set(identity.get("title_cover_ids") or [])
+    showing_top_title = _edition_title_key(result.get("title")) == identity.get("title_key")
+    wanted_covers = title_covers if showing_top_title and title_covers else set(identity.get("english_cover_ids") or [])
+    if identity.get("cover_id") and current_cover not in wanted_covers:
         result["cover_url"] = book_cover_url(identity["cover_id"], "")
     result["title_aliases"] = bounded_identity_values([
         result.get("title"),
@@ -2555,6 +2644,26 @@ def latin_author_name(author, alternatives):
     return display if display in spellings and all(
         word[:1].isupper() and not word[1:].isupper() for word in display.split()
     ) else " ".join(word[:1].upper() + word[1:].lower() for word in display.split())
+
+
+def clean_display_title(title):
+    """Drop dangling catalogue punctuation: "Fortress besieged =" -> "Fortress besieged"."""
+    return re.sub(r"[\s=/:;,]+$", "", str(title or "").strip())
+
+
+_NAME_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv", "phd", "md", "esq"})
+
+
+def uninvert_author_name(name):
+    """Catalogue order to reading order: "Tsʻao, Hsüeh-chʻi" -> "Hsüeh-chʻi Tsʻao"."""
+    name = str(name or "").strip()
+    match = re.fullmatch(r"([^,\d]+),\s*([^,\d]+)", name)
+    if not match:
+        return name
+    family, given = match.group(1).strip(), match.group(2).strip()
+    if given.casefold().strip(".") in _NAME_SUFFIXES or not family or not given:
+        return name
+    return f"{given} {family}"
 
 
 def latin_author_aliases(alternatives, limit=3):
@@ -2675,10 +2784,24 @@ def extract_book(w, lang=None, allow_missing_cover=False):
         ):
             title = edition_title
         title = title or work_title
+    title = clean_display_title(title)
     if not title:
         return None
     if lang == "en" and not title_matches_lang(title, lang):
-        return None
+        # Accented Latin titles are English editions' own spelling when the
+        # work or chosen edition is catalogued in English ("Pedro Páramo").
+        english_edition = record_has_lang(edition or {}, lang)
+        if not (
+            is_latin_title(title)
+            and (
+                english_edition
+                or (
+                    record_has_lang(w, lang)
+                    and not likely_foreign_ascii_title(fold_latin_diacritics(title))
+                )
+            )
+        ):
+            return None
     if lang == "cn" and not (title_matches_lang(title, lang) or record_has_lang(w, lang) or record_has_lang(edition or {}, lang)):
         return None
     cover_id = (
@@ -2702,6 +2825,7 @@ def extract_book(w, lang=None, allow_missing_cover=False):
         return None
     if lang != "cn" and not re.search(r"[A-Za-z]", author):
         author = latin_author_name(author, w.get("author_alternative_name"))
+    author = uninvert_author_name(author)
     cover_url = book_cover_url(cover_id, archive_id)
     ol_key = w.get("key", "")
     book = {
@@ -4752,7 +4876,7 @@ def parse_size_bytes(size_str):
     return val
 
 def normalize_match_text(value):
-    value = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    value = fold_latin_diacritics(value).casefold()
     value = re.sub(r"[\(\[\{（【].*?[\)\]\}）】]", " ", value)
     value = re.sub(r"[^\w\u3400-\u9fff]+", " ", value)
     return re.sub(r"\s+", " ", value).strip()
@@ -6345,6 +6469,34 @@ def first_work_author_alternatives(work):
     return []
 
 
+def english_author_label(work, search_record=None):
+    """English name for the work's first author from its Wikidata label.
+
+    Open Library's canonical author name is often a native script or another
+    language's transliteration ("Fiódor Dostoievski"); the author record links
+    Wikidata, whose English label is the name English catalogues use.
+    """
+    author_key = next(iter((search_record or {}).get("author_key") or []), "")
+    if author_key and not author_key.startswith("/authors/"):
+        author_key = f"/authors/{author_key}"
+    if not author_key:
+        for item in (work or {}).get("authors") or []:
+            author_ref = (item or {}).get("author") if isinstance(item, dict) else None
+            author_key = (author_ref or {}).get("key", "") if isinstance(author_ref, dict) else ""
+            if author_key:
+                break
+    if not re.fullmatch(r"/authors/OL\d+A", author_key or ""):
+        return ""
+    author = ol_get(author_key + ".json") or {}
+    wikidata = str((author.get("remote_ids") or {}).get("wikidata") or "").strip()
+    if not re.fullmatch(r"Q\d+", wikidata):
+        return ""
+    data = inventaire_get("/entities/by-uris", _inventaire_label_params([f"wd:{wikidata}"]))
+    entity = ((data or {}).get("entities") or {}).get(f"wd:{wikidata}") or {}
+    label = str((entity.get("labels") or {}).get("en") or "").strip()
+    return label if label and _LATIN_NAME_PATTERN.fullmatch(label) else ""
+
+
 def first_work_author(work):
     authors = work.get("authors") or []
     for item in authors:
@@ -6367,11 +6519,14 @@ def search_record_for_work(ol_key, lang=None):
         f"key:{ol_key}",
     ]
     for query in dict.fromkeys(queries):
-        data = ol_get("/search.json", {
-            "q": query,
-            "limit": 1,
-            "fields": OL_IDENTITY_FIELDS,
-        })
+        for fields in (OL_IDENTITY_FIELDS, OL_IDENTITY_FALLBACK_FIELDS):
+            data = ol_get("/search.json", {
+                "q": query,
+                "limit": 1,
+                "fields": fields,
+            })
+            if data is not None:
+                break
         record = ((data or {}).get("docs") or [{}])[0]
         if record.get("key") == ol_key:
             return record
@@ -6392,7 +6547,7 @@ def known_book_metadata(work_id, lang=None):
 
 def book_metadata_from_work(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    ckey = f"book_meta:v5:{lang}:{work_id}"
+    ckey = f"book_meta:v6:{lang}:{work_id}"
     cached = cache_get(ckey, API_DISK_CACHE_TTL)
     if cached is None:
         cached = disk_cache_get(ckey, API_DISK_CACHE_TTL)
@@ -6442,6 +6597,16 @@ def book_metadata_from_work(work_id, lang=None):
             archive_id = edition_archive_identifier(archive_edition or {})
     authors = search_record.get("author_name") or []
     selected_title = (edition or {}).get("title") or search_record.get("title") or (work or {}).get("title", "")
+    work_title = str(search_record.get("title") or (work or {}).get("title") or "").strip()
+    if (
+        lang != "cn"
+        and work_title
+        and title_matches_lang(work_title, lang)
+        and not likely_foreign_ascii_title(work_title)
+    ):
+        # The work's own English title beats an edition's subtitle or
+        # article-less catalogue form ("Babel : Or the Necessity...").
+        selected_title = work_title
     title = selected_title
     localized_title = ""
     download_title = selected_title
@@ -6458,7 +6623,10 @@ def book_metadata_from_work(work_id, lang=None):
             search_record.get("author_alternative_name")
             or first_work_author_alternatives(work)
         )
-        english_author = latin_author_name(primary_author, alternatives)
+        english_author = (
+            english_author_label(work, search_record)
+            or latin_author_name(primary_author, alternatives)
+        )
         # Swap native scripts ("Лев Толстой") and foreign transliterations
         # ("Fiódor Dostoievski" -> "Fyodor Dostoevsky"), but keep accents that
         # are just the English spelling ("Gabriel García Márquez").
@@ -6468,9 +6636,11 @@ def book_metadata_from_work(work_id, lang=None):
                 english_author.isascii()
                 and _fold_name(english_author) != _fold_name(primary_author)
             )
+            or _fold_name(english_author) == _fold_name(primary_author)
         ):
             primary_author = english_author
         author_aliases = latin_author_aliases(alternatives)
+    primary_author = uninvert_author_name(primary_author)
     result = {
         "title": title,
         "localized_title": localized_title,
@@ -6482,11 +6652,17 @@ def book_metadata_from_work(work_id, lang=None):
         "ol_key": ol_key,
         "_complete": bool(work) and (bool(search_record) or editions_checked),
     }
+    result["title"] = clean_display_title(result["title"])
+    result["download_title"] = clean_display_title(result["download_title"])
     if lang != "cn":
         english_identity = english_edition_identity(ol_key)
         if english_identity is None:
             result["_complete"] = False
-        result = apply_english_edition_identity(result, english_identity)
+        result = apply_english_edition_identity(
+            result,
+            english_identity,
+            article_hint=str((first_matching_edition(search_record, "en") or {}).get("title") or ""),
+        )
     result.update(collect_book_identity_metadata(
         result,
         work=work,
@@ -6501,7 +6677,7 @@ def book_metadata_from_work(work_id, lang=None):
 
 def book_detail_cache_key(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    return f"book_detail:v7:{lang}:{work_id}"
+    return f"book_detail:v8:{lang}:{work_id}"
 
 def sanitize_cached_book_detail(detail):
     if not isinstance(detail, dict):
@@ -6576,10 +6752,12 @@ def merge_canonical_book_detail(detail, canonical):
 
 def fallback_book_detail(work_id, lang=None):
     lang = normalize_book_lang(lang) or DEFAULT_BOOK_LANG
-    metadata_key = f"book_meta:v5:{lang}:{work_id}"
+    metadata_key = f"book_meta:v6:{lang}:{work_id}"
     metadata = (
         cache_get(metadata_key, BOOK_DETAIL_STALE_TTL)
         or disk_cache_get_stale(metadata_key, BOOK_DETAIL_STALE_TTL)
+        or cache_get(f"book_meta:v5:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
+        or disk_cache_get_stale(f"book_meta:v5:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
         or cache_get(f"book_meta:v4:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
         or disk_cache_get_stale(f"book_meta:v4:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)
         or cache_get(f"book_meta:v3:{lang}:{work_id}", BOOK_DETAIL_STALE_TTL)

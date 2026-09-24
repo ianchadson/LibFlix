@@ -44,7 +44,17 @@ class TopicIntegrationCacheTest(unittest.TestCase):
             app.TOPIC_LOCAL_CORPUS_RECORDS,
         ) = self.original_topic_corpus
         app.CACHE.clear()
-        self.tempdir.cleanup()
+        # Best-effort background refreshes can still be finishing a SQLite
+        # write (WAL/SHM files) in this directory; retry briefly instead of
+        # failing the test on a cleanup race.
+        for _attempt in range(40):
+            try:
+                self.tempdir.cleanup()
+                break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            self.tempdir.cleanup()
 
     @staticmethod
     def books(count=40):

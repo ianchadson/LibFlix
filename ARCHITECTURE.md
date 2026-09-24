@@ -1219,6 +1219,21 @@ and the most common ASCII spellings are sent as download author aliases so
 LibGen's "Fyodor Dostoevsky" is not filtered out. A failed editions lookup
 leaves the detail incomplete so it is retried rather than cached.
 
+The work's own English title is kept over an edition's subtitle or
+article-less catalogue form, and yields only to a title that most English
+editions use. The English author name comes from the author's Wikidata label
+(via Inventaire) when Open Library's name is non-Latin or another language's
+transliteration; catalogue-order names ("Collins, James C.") are shown in
+reading order. The identity search deliberately omits `description`: Open
+Library search answers HTTP 500 when it is combined with the other identity
+fields, and descriptions come from the work record.
+
+In English mode a title may carry typographic punctuation, and an accented
+Latin title is accepted when the work or chosen edition is catalogued in
+English ("Pedro Páramo", "Les Misérables"). Editions tagged with another
+language never count as English merely for having an ASCII title. Matching
+folds Latin diacritics only, leaving kana voicing marks intact.
+
 Broad-topic discovery can also use Inventaire work search and a small approved
 set of semantic Wikidata subject claims. Inventaire contributes a candidate only
 when its `P648` claim resolves directly to an Open Library work. The local
