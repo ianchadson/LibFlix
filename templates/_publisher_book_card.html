@@ -1,0 +1,9 @@
+<a href="{{ book.publisher_url }}" class="book-card-link" aria-label="{{ book.title }} by {{ book.author }}. Download unavailable on LibFlix. View publisher.">
+  <div class="book-card" data-publisher-only="true" data-isbn="{{ book.isbn }}" data-title="{{ book.title }}" data-author="{{ book.author }}">
+    <div class="cover-skeleton"></div>
+    <img data-cover-src="{{ book.cover_url }}" alt="{{ book.title }}" loading="lazy" decoding="async" onload="this.classList.add('loaded')" onerror="this.style.display='none';this.parentNode.querySelector('.ph-fallback').style.display='flex';">
+    <div class="placeholder ph-fallback" style="display:none" aria-label="No cover available"></div>
+    <span class="download-unavailable" title="Download unavailable on LibFlix">Download unavailable</span>
+    <div class="info"><div class="t">{{ book.title }}</div><div class="a">{{ book.author }}</div></div>
+  </div>
+</a>

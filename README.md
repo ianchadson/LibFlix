@@ -2,12 +2,17 @@
 
 LibFlix is a Netflix-style web app for browsing books, previewing metadata, and
 finding download options. Open Library remains the canonical identity for every
-rendered work and the primary source for browsing, details, covers, and similar
+catalog work and the primary source for browsing, details, covers, and similar
 books. Broad-topic, exact-search, cover, and recommendation recovery can also
 use Inventaire through a tightly gated Open Library-work mapping. An attributed
 public-web index of NYT number-one history can add a bounded ranking tie-breaker
 to exact book matches. Downloads are handled separately through the modular
 downloader layer, currently backed by libgen.li.
+
+Identity search can also show reviewed publisher records from `publisher_catalog.py`
+when Open Library lacks a match. These search-only cards link to the publisher,
+carry a “Download unavailable” badge, and never enter shelves or download lookup.
+This is a curated fallback, not a complete publisher search index.
 
 The app supports fiction and non-fiction browsing, English and Chinese discovery
 filters, intent-aware topic and identity search, book previews, similar-book

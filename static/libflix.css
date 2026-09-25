@@ -904,6 +904,10 @@ body:has(.kindle-global-tray:not([hidden])) .app-toast {
   padding: 0 0 44px !important;
 }
 
+.page-discover .book-grid {
+  justify-content: start !important;
+}
+
 .empty-state {
   max-width: 520px;
   margin: 38px auto 80px;

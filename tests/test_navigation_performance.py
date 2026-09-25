@@ -597,6 +597,12 @@ class DiscoveryShellTests(unittest.TestCase):
             template,
         )
 
+    def test_search_grid_aligns_with_heading_instead_of_centering_columns(self):
+        stylesheet = (Path(app.APP_DIR) / "static" / "libflix.css").read_text()
+        centered_grid = stylesheet.index("justify-content: center !important;", stylesheet.index(".page-discover .book-grid"))
+        aligned_grid = stylesheet.index(".page-discover .book-grid {\n  justify-content: start !important;")
+        self.assertGreater(aligned_grid, centered_grid)
+
     def test_topic_layout_uses_one_container_and_one_reason_row(self):
         template = (Path(app.APP_DIR) / "templates" / "discover.html").read_text()
 
