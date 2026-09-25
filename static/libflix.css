@@ -2408,6 +2408,41 @@ button.edition-recommended {
   scroll-snap-align: start;
 }
 
+.review-card-head {
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.review-kind {
+  color: #a7a9af;
+  font-size: .65rem;
+  font-weight: 760;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.reviews-no-rating,
+.reviews-empty {
+  margin: 0;
+  color: var(--app-muted);
+  font-size: .82rem;
+  font-weight: 600;
+}
+
+.reviews-empty[hidden],
+.reviews-links[hidden] {
+  display: none !important;
+}
+
+.reviews-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 16px;
+}
+
 .review-card blockquote {
   margin: 0;
   color: #d5d6da;

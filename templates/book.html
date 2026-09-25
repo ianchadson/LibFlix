@@ -83,7 +83,6 @@
     <section class="reviews-section" id="reviewsSection" aria-labelledby="reviewsHeading" aria-busy="true">
       <div class="reviews-heading-row">
         <h2 class="reviews-section-title" id="reviewsHeading">Reviews</h2>
-        <a class="reviews-source-link" id="reviewsSourceLink" href="#" target="_blank" rel="noopener noreferrer" hidden>View source</a>
       </div>
       <div class="reviews-loading" id="reviewsLoading" role="status" aria-label="Loading reviews">
         <span class="reviews-loading-spinner" aria-hidden="true"></span>
@@ -98,6 +97,8 @@
           aria-label="Reader review excerpts"
           tabindex="0"
         ></div>
+        <p class="reviews-empty" id="reviewsEmpty" hidden>No review excerpts available for this book yet.</p>
+        <div class="reviews-links" id="reviewsLinks" hidden></div>
       </div>
     </section>
 
@@ -243,27 +244,55 @@
       }).join('')}</span>`;
     }
 
+    // Every card uses the same header: who reviewed (reader or critic) and,
+    // when the source gives one, a star rating or critic verdict.
     function reviewRatingCue(review, reviewSourceName) {
       const rating = Number(review?.rating) || 0;
-      if (rating > 0) return ratingStars(rating);
-
+      const critic = reviewSourceName !== 'Goodreads';
+      const kind = `<span class="review-kind">${critic ? 'Critic' : 'Reader'}</span>`;
+      if (rating > 0) return kind + ratingStars(rating);
       const sentiment = String(review?.sentiment || '').trim();
       const normalized = sentiment.toLowerCase();
-      const tone = ['rave', 'positive', 'mixed', 'pan'].includes(normalized)
-        ? normalized
-        : 'unrated';
-      const label = sentiment || (reviewSourceName === 'Goodreads' ? 'Reader review' : 'Review');
-      return `
-        <span class="review-sentiment is-${tone}" aria-label="${escapeHtml(label)}">
+      if (!['rave', 'positive', 'mixed', 'pan'].includes(normalized)) return kind;
+      return kind + `
+        <span class="review-sentiment is-${normalized}" aria-label="${escapeHtml(sentiment)}">
           <span class="review-sentiment-icon" aria-hidden="true">★</span>
-          <span>${escapeHtml(label)}</span>
+          <span>${escapeHtml(sentiment)}</span>
         </span>
       `;
     }
 
+    function reviewLinks(data, ratingSources) {
+      const links = [];
+      const seen = new Set();
+      const add = (label, url) => {
+        const safe = safeReceptionUrl(url);
+        if (!safe || seen.has(label)) return;
+        seen.add(label);
+        links.push(`<a class="reviews-source-link" href="${escapeHtml(safe)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`);
+      };
+      const reviewsSource = data?.reviews_source;
+      if (reviewsSource?.source === 'Book Marks') add('Critic reviews on Book Marks', reviewsSource.url);
+      const goodreadsRating = ratingSources.find(item => item.source === 'Goodreads');
+      add('Read reviews on Goodreads', goodreadsRating?.url || (reviewsSource?.source === 'Goodreads' ? reviewsSource.url : '') || data?.links?.goodreads);
+      add('Open Library', ratingSources.find(item => item.source === 'Open Library')?.url || data?.links?.openlibrary);
+      return links.join('');
+    }
+
     function hideReviewsSection() {
-      const section = document.getElementById('reviewsSection');
-      if (section) section.hidden = true;
+      // Settle into the same layout as a book with no reception data rather
+      // than making the section disappear after a long spinner.
+      renderBookReception({
+        success: true,
+        rating: null,
+        reviews: [],
+        links: {
+          openlibrary: olKey ? 'https://openlibrary.org' + olKey : '',
+          goodreads: bookTitle
+            ? 'https://www.goodreads.com/search?' + new URLSearchParams({ q: `${bookTitle} ${bookAuthor || ''}`.trim() })
+            : '',
+        },
+      });
     }
 
     function renderBookReception(data) {
@@ -272,7 +301,8 @@
       const content = document.getElementById('reviewsContent');
       const summary = document.getElementById('reviewsSummary');
       const grid = document.getElementById('reviewGrid');
-      const sourceLink = document.getElementById('reviewsSourceLink');
+      const emptyNote = document.getElementById('reviewsEmpty');
+      const linksRow = document.getElementById('reviewsLinks');
       const sourceRatings = (Array.isArray(data?.source_ratings) ? data.source_ratings : [
         data?.rating,
         ...(Array.isArray(data?.other_ratings) ? data.other_ratings : []),
@@ -280,18 +310,11 @@
       const preferredSource = String(data?.rating?.source || '');
       const rating = sourceRatings.find(item => item.source === preferredSource) || sourceRatings[0] || null;
       const reviews = Array.isArray(data?.reviews) ? data.reviews.slice(0, 3) : [];
-      if (!section || (!rating && !reviews.length)) {
-        hideReviewsSection();
-        return;
-      }
+      if (!section) return;
+      section.hidden = false;
 
       const reviewsSource = data?.reviews_source || null;
-      const sourceUrl = safeReceptionUrl(reviewsSource?.url || data.source_url || rating?.url);
-      if (sourceUrl) {
-        sourceLink.href = sourceUrl;
-        sourceLink.textContent = `View on ${reviewsSource?.source || rating?.source || 'source'}`;
-        sourceLink.hidden = false;
-      }
+      const sourceUrl = safeReceptionUrl(reviewsSource?.url || data?.source_url || rating?.url);
 
       if (rating) {
         const average = Math.max(0, Math.min(5, Number(rating.average) || 0));
@@ -312,17 +335,18 @@
         `;
         summary.hidden = false;
       } else {
-        summary.hidden = true;
+        summary.innerHTML = '<div class="reviews-no-rating">No reader ratings yet</div>';
+        summary.hidden = false;
       }
 
       grid.innerHTML = reviews.map(review => {
         const reviewUrl = safeReceptionUrl(review.url || sourceUrl);
-        const reviewer = escapeHtml(review.reviewer || 'Goodreads reader');
         const reviewSourceName = String(review.source || reviewsSource?.source || 'source');
-        const reviewLinkLabel = reviewSourceName === 'Goodreads' ? 'Full review' : 'Source';
+        const reviewer = escapeHtml(review.reviewer || (reviewSourceName === 'Goodreads' ? 'Goodreads reader' : 'Critic'));
+        const reviewLinkLabel = 'Full review';
         return `
           <article class="review-card">
-            ${reviewRatingCue(review, reviewSourceName)}
+            <div class="review-card-head">${reviewRatingCue(review, reviewSourceName)}</div>
             <blockquote>${escapeHtml(review.excerpt || '')}</blockquote>
             <footer>
               <cite>${reviewer}</cite>
@@ -332,6 +356,10 @@
         `;
       }).join('');
       grid.hidden = !reviews.length;
+      emptyNote.hidden = Boolean(reviews.length);
+      const links = reviewLinks(data, sourceRatings);
+      linksRow.innerHTML = links;
+      linksRow.hidden = !links;
       loading.hidden = true;
       content.hidden = false;
       section.setAttribute('aria-busy', 'false');
@@ -353,7 +381,7 @@
 
     function loadBookReception(isRetry = false) {
       if (pageDisposed || !olKey || (!isRetry && receptionRequested)) return;
-      if (!isRetry) receptionRetryDeadline = Date.now() + 35000;
+      if (!isRetry) receptionRetryDeadline = Date.now() + 12000;
       receptionRequested = true;
       const controller = new AbortController();
       activeReceptionRequest?.abort();

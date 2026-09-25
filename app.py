@@ -5050,6 +5050,54 @@ def bounded_review_excerpt(value):
     return text.rstrip(" ,.;:-") + ("..." if truncated else "")
 
 
+def goodreads_state_reviews(soup, page_url):
+    """Read review excerpts from the page's embedded Apollo state.
+
+    Goodreads server-renders only the first review card; all top reviews (with
+    their star ratings and reviewer names) ship as JSON in __NEXT_DATA__.
+    """
+    script = soup.select_one("script#__NEXT_DATA__")
+    raw = (script.string or script.get_text()) if script else ""
+    if not raw or len(raw) > 4 * 1024 * 1024:
+        return []
+    try:
+        state = json.loads(raw)["props"]["pageProps"]["apolloState"]
+    except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+        return []
+    if not isinstance(state, dict):
+        return []
+    candidates = [
+        value for key, value in state.items()
+        if str(key).startswith("Review:") and isinstance(value, dict)
+    ]
+    candidates.sort(key=lambda review: -(_goodreads_number(review.get("likeCount"), integer=True)))
+    reviews = []
+    seen = set()
+    for review in candidates:
+        if review.get("spoilerStatus"):
+            continue
+        rating = _goodreads_number(review.get("rating"), integer=True)
+        text = BeautifulSoup(str(review.get("text") or ""), "html.parser").get_text(" ", strip=True)
+        excerpt = bounded_review_excerpt(text)
+        key = normalize_match_text(excerpt)
+        if len(excerpt) < 40 or "spoiler" in excerpt.casefold() or not key or key in seen:
+            continue
+        creator_ref = (review.get("creator") or {}).get("__ref") if isinstance(review.get("creator"), dict) else ""
+        creator = state.get(creator_ref) if creator_ref else None
+        reviewer = str((creator or {}).get("name") or "").strip()[:80] or "Goodreads reader"
+        seen.add(key)
+        reviews.append({
+            "source": "Goodreads",
+            "reviewer": reviewer,
+            "rating": rating if 1 <= rating <= 5 else 0,
+            "excerpt": excerpt,
+            "url": page_url,
+        })
+        if len(reviews) >= GOODREADS_REVIEW_LIMIT:
+            break
+    return reviews
+
+
 def parse_goodreads_book(html, expected_title, expected_author, page_url):
     """Extract only aggregate data and short, attributed public excerpts."""
     soup = BeautifulSoup(html or "", "html.parser")
@@ -5085,9 +5133,9 @@ def parse_goodreads_book(html, expected_title, expected_author, page_url):
     average = _goodreads_number(aggregate.get("ratingValue"))
     ratings_count = _goodreads_number(aggregate.get("ratingCount"), integer=True)
     reviews_count = _goodreads_number(aggregate.get("reviewCount"), integer=True)
-    reviews = []
-    seen_excerpts = set()
-    for card in soup.select(".ReviewCard"):
+    reviews = goodreads_state_reviews(soup, page_url)
+    seen_excerpts = {normalize_match_text(review["excerpt"]) for review in reviews}
+    for card in ([] if len(reviews) >= GOODREADS_REVIEW_LIMIT else soup.select(".ReviewCard")):
         content = card.select_one(".ReviewText__content")
         if not content:
             continue
@@ -5115,6 +5163,7 @@ def parse_goodreads_book(html, expected_title, expected_author, page_url):
             flags=re.IGNORECASE,
         )
         reviews.append({
+            "source": "Goodreads",
             "reviewer": (
                 reviewer_node.get_text(" ", strip=True)
                 if reviewer_node
@@ -5618,6 +5667,7 @@ def parse_bookmarks_reception(html, expected_title, expected_author, page_url):
             else ""
         )
         reviews.append({
+            "source": "Book Marks",
             "reviewer": " · ".join(part for part in (reviewer, publication) if part),
             "rating": 0,
             "sentiment": (
@@ -5664,6 +5714,20 @@ def fetch_openlibrary_reception(ol_key):
         "reviews_count": 0,
         "url": f"{OL}{ol_key}",
     }
+
+
+def reception_links(work_id, lang):
+    """Where a reader can read full reviews, built from cached identity only."""
+    detail, _state = cached_book_detail(work_id, lang, allow_stale=True)
+    detail = detail or {}
+    title = str(detail.get("title") or "").strip()
+    author = str(detail.get("author") or "").strip()
+    links = {"openlibrary": f"{OL}/works/{work_id}"}
+    if title:
+        links["goodreads"] = "https://www.goodreads.com/search?" + urlencode({
+            "q": f"{title} {author}".strip(),
+        })
+    return links
 
 
 def book_reception_cache_key(work_id, lang):
@@ -9160,10 +9224,11 @@ def api_book_reception():
         }), 400
     work_id = work_id_from_ol_key(ol_key)
     lang = normalize_book_lang(request.args.get("book_lang")) or get_book_lang()
+    links = reception_links(work_id, lang)
     payload, cache_state = cached_book_reception(work_id, lang)
     if payload and cache_state != "stale":
         response_payload = reception_payload_with_source_ratings(payload)
-        response_payload.update({"cache": cache_state, "refreshing": False})
+        response_payload.update({"cache": cache_state, "refreshing": False, "links": links})
         add_server_timing("book-reception", duration=0, description=cache_state)
         return jsonify(response_payload)
 
@@ -9176,7 +9241,7 @@ def api_book_reception():
 
     if payload:
         response_payload = reception_payload_with_source_ratings(payload)
-        response_payload.update({"cache": "stale", "refreshing": refreshing})
+        response_payload.update({"cache": "stale", "refreshing": refreshing, "links": links})
         add_server_timing("book-reception", duration=0, description="stale")
         return jsonify(response_payload)
 
@@ -9189,9 +9254,17 @@ def api_book_reception():
             "cache": "miss",
         }), 202
 
+    # Nothing cached and nothing pending: still answer with a renderable,
+    # consistent section (no ratings yet + where to read reviews).
     add_server_timing("book-reception", duration=0, description="unavailable")
     return jsonify({
-        "success": False,
+        "success": True,
+        "rating": None,
+        "other_ratings": [],
+        "source_ratings": [],
+        "reviews": [],
+        "reviews_source": None,
+        "links": links,
         "refreshing": False,
         "cache": "miss",
     })

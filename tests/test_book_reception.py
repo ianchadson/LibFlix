@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -332,6 +333,61 @@ class ReceptionEndpointTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
+
+
+class ConsistentReceptionTests(unittest.TestCase):
+    def test_goodreads_reviews_come_from_embedded_state_with_stars(self):
+        state = {
+            "User:1": {"name": "Ada Reader"},
+            "User:2": {"name": "Spoiler Fan"},
+            "Review:a": {"creator": {"__ref": "User:1"}, "rating": 4, "likeCount": 9,
+                          "spoilerStatus": False, "text": "<b>Clear</b> and practical: a book that changed how I look at every door handle."},
+            "Review:b": {"creator": {"__ref": "User:2"}, "rating": 5, "likeCount": 99,
+                          "spoilerStatus": True, "text": "The ending reveals everything about the designer and the door."},
+        }
+        html = (
+            '<script id="__NEXT_DATA__" type="application/json">'
+            + json.dumps({"props": {"pageProps": {"apolloState": state}}})
+            + "</script>"
+        )
+        from bs4 import BeautifulSoup
+        reviews = app.goodreads_state_reviews(
+            BeautifulSoup(html, "html.parser"),
+            "https://www.goodreads.com/book/show/840",
+        )
+        self.assertEqual(len(reviews), 1)
+        self.assertEqual(reviews[0]["rating"], 4)
+        self.assertEqual(reviews[0]["reviewer"], "Ada Reader")
+        self.assertEqual(reviews[0]["source"], "Goodreads")
+        self.assertTrue(reviews[0]["excerpt"].startswith("Clear and practical"))
+
+    def test_unavailable_reception_still_renders_with_review_links(self):
+        detail = {"title": "The Design of Everyday Things", "author": "Donald A. Norman"}
+        with patch.object(app, "cached_book_reception", return_value=(None, "miss")), \
+                patch.object(app, "cache_get", return_value=True), \
+                patch.object(app, "cached_book_detail", return_value=(detail, "memory")):
+            response = app.app.test_client().get(
+                "/api/book-reception?ol_key=/works/OL1879162W&book_lang=en"
+            )
+        payload = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(payload["success"])
+        self.assertEqual(payload["reviews"], [])
+        self.assertIn("goodreads.com/search?q=The+Design+of+Everyday+Things+Donald+A.+Norman", payload["links"]["goodreads"])
+        self.assertEqual(payload["links"]["openlibrary"], "https://openlibrary.org/works/OL1879162W")
+
+    def test_reviews_section_has_one_layout_for_every_source(self):
+        template = (Path(app.APP_DIR) / "templates" / "book.html").read_text()
+
+        self.assertIn('id="reviewsEmpty"', template)
+        self.assertIn('id="reviewsLinks"', template)
+        self.assertIn("No reader ratings yet", template)
+        self.assertIn('<div class="review-card-head">${reviewRatingCue(review, reviewSourceName)}</div>', template)
+        self.assertIn("const reviewLinkLabel = 'Full review';", template)
+        self.assertNotIn("'Reader review' : 'Review'", template)
+        self.assertNotIn("reviewsSourceLink", template)
+        self.assertIn("receptionRetryDeadline = Date.now() + 12000", template)
+        self.assertNotIn("section.hidden = true", template.split("function hideReviewsSection()", 1)[1].split("function ", 1)[0])
 
 
 class ReceptionTemplateTests(unittest.TestCase):
