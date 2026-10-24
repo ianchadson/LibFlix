@@ -9792,6 +9792,32 @@ def api_search():
     )
     return jsonify(result)
 
+def _download_prefers_html():
+    """True for a top-level browser navigation rather than an API client."""
+    accept = (request.headers.get("Accept") or "").lower()
+    return "text/html" in accept or (
+        (request.headers.get("Sec-Fetch-Dest") or "").lower() == "document"
+    )
+
+
+def download_failure_response(message, status=502):
+    """Explain a failed download instead of dumping JSON into a browser tab."""
+    if not _download_prefers_html():
+        return jsonify({"success": False, "error": message}), status
+    body = (
+        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        "<title>Download unavailable - LibFlix</title></head>"
+        "<body><main><h1>Download unavailable</h1>"
+        f"<p>{htmlmod.escape(message)}</p>"
+        "<p>The download source was slow or stopped part-way through. Wait a "
+        "moment and try again: a slow transfer usually finishes on a retry.</p>"
+        '<p><a href="" rel="nofollow">Try again</a> &middot; '
+        '<a href="/">Back to LibFlix</a></p></main></body></html>'
+    )
+    return Response(body, status=status, mimetype="text/html")
+
+
 @app.route("/download/<md5>")
 def download(md5):
     if not is_download_id(md5 or ""):
@@ -9828,9 +9854,30 @@ def download(md5):
     range_header = request.headers.get("Range", "")
     if not re.fullmatch(r"bytes=\d*-\d*", range_header):
         range_header = ""
-    for attempt in range(2):
+
+    def open_upstream(start_offset=0):
+        """Resolve the source file and open its stream, optionally mid-file."""
         url = DOWNLOADER.resolve_download(md5)
         if not url:
+            DOWNLOADER.invalidate_download(md5)
+            return None
+        requested_range = f"bytes={start_offset}-" if start_offset else range_header
+        response = DL_SESSION.get(
+            url,
+            stream=True,
+            timeout=(5, DOWNLOAD_READ_TIMEOUT),
+            allow_redirects=True,
+            headers={"Range": requested_range} if requested_range else None,
+        )
+        response.raise_for_status()
+        return response
+
+    for _attempt in range(2):
+        try:
+            upstream = open_upstream()
+        except (requests.RequestException, OSError):
+            upstream = None
+        if upstream is None:
             DOWNLOADER.invalidate_download(md5)
             continue
         if not is_libgen_id(md5):
@@ -9849,14 +9896,6 @@ def download(md5):
                         if "." in filename else ""
                     )
         try:
-            upstream = DL_SESSION.get(
-                url,
-                stream=True,
-                timeout=(5, 60),
-                allow_redirects=True,
-                headers={"Range": range_header} if range_header else None,
-            )
-            upstream.raise_for_status()
             chunks = upstream.iter_content(chunk_size=65536)
             first_chunk = next(chunks, b"")
             content_type = upstream.headers.get("Content-Type", "").lower()
@@ -9875,20 +9914,132 @@ def download(md5):
             chunks = None
             first_chunk = b""
             DOWNLOADER.invalidate_download(md5)
-            if attempt == 0:
-                continue
     if upstream is None or chunks is None or not first_chunk:
-        return jsonify({
-            "success": False,
-            "error": "The download source did not return a working file link.",
-        }), 502
+        return download_failure_response(
+            "The download source did not return a working file link."
+        )
+
+    try:
+        total_bytes = int(upstream.headers.get("Content-Length") or 0)
+    except (TypeError, ValueError):
+        total_bytes = 0
+    # A client Range request asks for a slice, so an absolute-offset resume
+    # would send the wrong bytes; only whole-file transfers are resumable.
+    resumable = not range_header
+    cache_extension = extension if extension in {"epub", "pdf", "mobi", "azw3"} else ""
+    # Never cache a client-requested slice: a resumed range would otherwise be
+    # stored as if it were the whole book, and Real-Debrid ids carry no hash to
+    # catch that.
+    source_cache = (
+        _kindle_source_cache() if cache_extension and resumable else None
+    )
+    cached_temporary = ""
+    if source_cache is not None:
+        try:
+            cached_temporary = source_cache.temporary_path(md5, cache_extension)
+        except (OSError, SourceFileError):
+            source_cache = None
+            cached_temporary = ""
 
     def generate():
+        nonlocal upstream, chunks
+        sent = 0
+        resumes = 0
+        finished = False
+        sink = None
+        if cached_temporary:
+            try:
+                sink = open(cached_temporary, "wb")
+            except OSError:
+                sink = None
+
+        def write_sink(chunk):
+            nonlocal sink
+            if sink is None:
+                return
+            try:
+                sink.write(chunk)
+            except OSError:
+                sink.close()
+                sink = None
+
         try:
             yield first_chunk
-            yield from chunks
+            sent += len(first_chunk)
+            write_sink(first_chunk)
+            while True:
+                try:
+                    for chunk in chunks:
+                        if not chunk:
+                            continue
+                        sent += len(chunk)
+                        write_sink(chunk)
+                        yield chunk
+                    if total_bytes and sent < total_bytes:
+                        # The source closed cleanly but short of its own
+                        # Content-Length: treat it as a stall and resume.
+                        raise requests.RequestException(
+                            "Download source closed before the transfer finished"
+                        )
+                    finished = True
+                    break
+                except (requests.RequestException, OSError) as stream_error:
+                    if upstream is not None:
+                        upstream.close()
+                    upstream = None
+                    chunks = None
+                    if (
+                        not resumable
+                        or resumes >= DOWNLOAD_RESUME_LIMIT
+                        or (total_bytes and sent >= total_bytes)
+                    ):
+                        raise
+                    resumes += 1
+                    DOWNLOADER.invalidate_download(md5)
+                    try:
+                        upstream = open_upstream(start_offset=sent)
+                    except (requests.RequestException, OSError):
+                        upstream = None
+                    if upstream is None:
+                        raise stream_error
+                    resumed = re.fullmatch(
+                        r"bytes (\d+)-(\d+)/(\d+|\*)",
+                        upstream.headers.get("Content-Range", ""),
+                    )
+                    if (
+                        upstream.status_code != 206
+                        or not resumed
+                        or int(resumed.group(1)) != sent
+                    ):
+                        upstream.close()
+                        upstream = None
+                        raise stream_error
+                    chunks = upstream.iter_content(chunk_size=65536)
         finally:
-            upstream.close()
+            if sink is not None:
+                sink.close()
+            if upstream is not None:
+                upstream.close()
+            if cached_temporary:
+                committed = False
+                if finished and sent:
+                    try:
+                        validation = validate_source_file(
+                            cached_temporary,
+                            md5,
+                            cache_extension,
+                            expected_size=sent,
+                        )
+                        committed = source_cache.commit(
+                            cached_temporary,
+                            md5,
+                            cache_extension,
+                            validation,
+                        ) != cached_temporary
+                    except (OSError, SourceFileError, ValueError):
+                        committed = False
+                if not committed:
+                    source_cache.discard(cached_temporary)
 
     resp = Response(stream_with_context(generate()),
                     status=upstream.status_code,
@@ -10577,6 +10728,7 @@ class KindleProgressTracker:
 RESOLVE_HEARTBEAT_SECONDS = 4
 DOWNLOAD_MAX_ATTEMPTS = 4
 DOWNLOAD_READ_TIMEOUT = 60
+DOWNLOAD_RESUME_LIMIT = DOWNLOAD_MAX_ATTEMPTS - 1
 
 
 def _resolve_download_progress(md5, emit=None, abort_check=None):

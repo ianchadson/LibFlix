@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-24 - Resumable direct downloads
+
+- Resumed an interrupted `/download/<md5>` transfer from the last byte sent with
+  a `Range` request instead of returning a silently truncated 200 response, and
+  treated a clean-but-short source read as a stall worth retrying.
+- Committed a completed direct download to the Kindle source cache after
+  format, byte-count, and LibGen MD5 validation, so a repeat download or Send to
+  Kindle is served locally instead of re-fetching a slow mirror.
+- Replaced the raw JSON failure body with a short HTML retry page for browser
+  navigations, keeping JSON for API clients.
+- Added resume, short-stream, cache-commit, and failure-rendering regression
+  tests.
+
 ## 2026-08-29 - Goodreads discovery and broader ratings
 
 - Added compact aggregate scores to shared book cards across homepage,
