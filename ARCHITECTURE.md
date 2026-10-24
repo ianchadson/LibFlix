@@ -721,7 +721,24 @@ match on failure.
 ### `GET /download/<md5>`
 
 Resolves the md5 through the active downloader and streams the remote file
-through Flask.
+through Flask. Public mirrors are slow and drop connections, so the route is
+built around that:
+
+- A verified file already in the Kindle source cache is served locally with
+  range support (`Server-Timing: desc="source-cache"`), so a repeated download
+  never waits for the source again.
+- An interrupted whole-file transfer resumes from the last byte sent with a
+  `Range` request, up to `DOWNLOAD_RESUME_LIMIT` times, invalidating the
+  resolved link before each retry. A source that closes cleanly short of its own
+  `Content-Length` is treated as a stall and resumed the same way.
+- A completed stream is validated (format magic, byte count, and the LibGen
+  content hash) and committed to the source cache, which makes the next request
+  local and lets Send to Kindle reuse the same bytes.
+- A client `Range` request is never resumed by file offset: the client asked for
+  a slice, so an absolute-offset resume would send the wrong bytes.
+- Failures return JSON to API clients and a short HTML page with a retry link to
+  browser navigations (`Accept: text/html` or `Sec-Fetch-Dest: document`).
+
 
 ### `POST /api/kindle/jobs`
 
