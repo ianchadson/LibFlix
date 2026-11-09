@@ -1,0 +1,28 @@
+name: Conversion regression tests
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          cache: pip
+      - name: Install local OCR and Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
+          python -m pip install -r requirements.txt
+      - name: Run regressions without network access
+        env:
+          LIBFLIX_DATA_DIR: ${{ runner.temp }}/libflix-conversion-tests
+          LIBFLIX_RATE_LIMITING_ENABLED: '0'
+          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/libflix-pycache
+          PYTHONWARNINGS: error::ResourceWarning
+        run: |
+          sudo --preserve-env=LIBFLIX_DATA_DIR,LIBFLIX_RATE_LIMITING_ENABLED,PYTHONPYCACHEPREFIX,PYTHONWARNINGS unshare --net -- "$(command -v python)" -m unittest discover -s tests -v

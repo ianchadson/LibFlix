@@ -9931,7 +9931,7 @@ def _download_prepare_line(event):
 def _converted_epub_cache():
     # Derived bytes must never masquerade as the original content-MD5 source.
     return KindleSourceCache(
-        os.path.join(KINDLE_SOURCE_CACHE_DIR, "converted-epub-v2"),
+        os.path.join(KINDLE_SOURCE_CACHE_DIR, "converted-epub-v3"),
         ttl=KINDLE_SOURCE_CACHE_TTL,
         max_bytes=KINDLE_SOURCE_CACHE_MAX_BYTES,
     )
@@ -9939,14 +9939,41 @@ def _converted_epub_cache():
 
 def _converted_epub_key(book_id, extension):
     # A non-content-hash cache identifier, namespaced by converter version/type.
-    return "rd" + hashlib.sha1(f"epub-v2:{book_id}:{extension}".encode()).hexdigest()
+    language = os.environ.get("LIBFLIX_OCR_LANGUAGES", "eng")
+    return "rd" + hashlib.sha1(f"epub-v3:{language}:{book_id}:{extension}".encode()).hexdigest()
 
 
-def _convert_and_cache_epub(source_path, book_id, extension):
+@contextmanager
+def _epub_conversion_slot(waiting=None):
+    # One shared slot across Flask workers and both download/Kindle requests.
+    path = os.path.join(KINDLE_SOURCE_CACHE_DIR, ".conversion-locks", "global.lock")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "a+b") as slot:
+        deadline = time.monotonic() + 600
+        while True:
+            try:
+                fcntl.flock(slot.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if waiting:
+                    waiting.set()
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("The conversion queue is busy. Please try again shortly.")
+                time.sleep(0.05)
+        if waiting:
+            waiting.clear()
+        try:
+            yield
+        finally:
+            fcntl.flock(slot.fileno(), fcntl.LOCK_UN)
+
+
+def _convert_and_cache_epub(source_path, book_id, extension, queue_waiting=None):
     key = _converted_epub_key(book_id, extension)
     lock_path = os.path.join(KINDLE_SOURCE_CACHE_DIR, ".conversion-locks", key + ".lock")
-    with filesystem_lock(lock_path):
-        return _convert_and_cache_epub_locked(source_path, book_id, extension)
+    with _epub_conversion_slot(queue_waiting):
+        with filesystem_lock(lock_path):
+            return _convert_and_cache_epub_locked(source_path, book_id, extension)
 
 
 def _convert_and_cache_epub_locked(source_path, book_id, extension):
@@ -9981,12 +10008,16 @@ def _convert_and_cache_epub_locked(source_path, book_id, extension):
 def _convert_epub_progress(source_path, book_id, extension, *, emit=None):
     emit = emit or _kindle_progress
     with ThreadPoolExecutor(max_workers=1, thread_name_prefix="epub-conversion") as pool:
-        future = pool.submit(_convert_and_cache_epub, source_path, book_id, extension)
+        waiting = threading.Event()
+        future = pool.submit(_convert_and_cache_epub, source_path, book_id, extension, waiting)
         while True:
             try:
                 return future.result(timeout=RESOLVE_HEARTBEAT_SECONDS)
             except FutureTimeoutError:
-                yield emit("Converting to EPUB", None, "Still processing this edition")
+                if waiting.is_set():
+                    yield emit("Waiting for conversion", None, "Another book is being prepared")
+                else:
+                    yield emit("Converting to EPUB", None, "Still processing this edition")
 
 
 def _prepare_download_file(md5, extension, *, target=""):

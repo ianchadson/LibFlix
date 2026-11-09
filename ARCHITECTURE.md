@@ -952,22 +952,39 @@ can prepare a missing EPUB itself for no-JavaScript clients and supports ranges.
 Normal original-file downloads retain native browser navigation.
 
 `book_conversion.py` uses the existing `pypdf` parser to extract text and raster
-images page by page, then reuses the XHTML/OPF/NCX EPUB packager. Scans keep image
-pages without OCR. PDF columns, tables, vector drawings and exact positioning
+images page by page, then reuses the XHTML/OPF/NCX EPUB packager. Scanned text
+becomes reflowable paragraphs through selective local OCR. PDF columns, tables, vector drawings and exact positioning
 are not reconstructed. Encrypted, empty and over-limit PDFs fail closed.
 Limits are 25 MB input, 2,000 pages, 10 million text characters, 50 million
 pixels per image, one billion total image pixels and 512 MB total extracted images.
 PDF conversion runs in a disposable subprocess with a 180-second deadline and
-2 GB memory budget: Linux enforces RLIMIT_AS; macOS uses a parent RSS watchdog
-with 250 ms polling, which can overshoot between polls. The worker also has a
-CPU-time limit. Raw image dimensions (including Form resources and masks) are
-checked before text/image extraction. Inline images and deceptive metadata are
-contained by the worker limits. All scratch files live under the parent-owned
-workspace so timeout/crash cleanup does not depend on child finally blocks.
+1 GiB per-process address-space budget: Linux enforces RLIMIT_AS; macOS uses a parent RSS watchdog
+with 250 ms polling, which can overshoot between polls. The parent monitors aggregate worker/OCR RSS on both
+platforms every 250 ms and kills the whole process group on deadline or excessive
+RSS. The worker also has a CPU-time limit. All scratch files live under the
+parent-owned workspace so cleanup does not depend on child finally blocks.
+
+`pdf_reading.py` supplies conservative page-edge furniture removal, wrapped-word
+repair and paragraph preservation. PDFium identifies image-dominated scan pages
+and renders them at up to 200 DPI / 12 million pixels. Tesseract emits hOCR
+paragraphs only when a scan lacks usable text (fewer than 40 non-whitespace
+characters). Existing OCR text is reused. A full-page scan is omitted when its
+text is used, avoiding duplicate text/image pages. Ordinary illustrations remain.
+Set `LIBFLIX_OCR_LANGUAGES` to installed Tesseract languages (default `eng`).
+Tesseract is a host dependency; missing engine/models fail visibly without a
+silent image-only fallback when dependencies fail. Decorative image pages with
+no recognised text retain their images. Complex layouts, OCR accuracy and reading order
+still require representative reader checks.
+
+A single shared `flock` slot serialises all conversion formats across application
+processes, with heartbeat queue status and a maximum ten-minute queue wait.
+Per-source locks/cache checks still prevent redundant conversion. Converted cache
+version v3 includes configured OCR languages; changing languages invalidates
+lookup keys.
 
 Conversions run under a per-source filesystem lock, with heartbeat progress
 while processing. Successful derived files live under
-`kindle-source-cache/converted-epub-v1/` with the existing idle TTL and byte quota.
+`kindle-source-cache/converted-epub-v3/` with the existing idle TTL and byte quota.
 Versioned source-id/format keys use the cache's non-content-hash identifier form:
 converted bytes are never stored against the original PDF's content MD5.
 Downloads and Kindle sends share these EPUBs, even if the original source has

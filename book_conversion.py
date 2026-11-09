@@ -4,7 +4,7 @@ PDF editions and legacy MOBI/AZW3 editions become EPUBs before Kindle
 preparation and delivery. Original-format website downloads remain available.
 
 The existing pure-Python ``pypdf`` and ``mobi`` packages are used instead of
-Calibre so no external binary is required. The original file is never modified:
+Calibre so scanned pages use the local Tesseract OCR engine. The original file is never modified:
 extraction writes to
 a private temporary directory, and only a validated EPUB (ZIP with a mimetype
 entry) is returned.  Any failure yields an empty result with a warning; the
@@ -14,6 +14,7 @@ caller must not silently substitute the original file after a failed conversion.
 from __future__ import annotations
 
 import html
+import signal
 import json
 import subprocess
 import sys
@@ -24,6 +25,7 @@ import shutil
 import tempfile
 import uuid
 import zipfile
+from contextlib import closing
 from dataclasses import dataclass
 from typing import Optional
 
@@ -35,7 +37,7 @@ PDF_MAX_TEXT = 10_000_000
 PDF_MAX_IMAGE_PIXELS = 50_000_000
 PDF_MAX_TOTAL_IMAGE_PIXELS = 1_000_000_000
 PDF_MAX_IMAGE_BYTES = 512 * 1024 * 1024
-PDF_WORKER_MEMORY_BYTES = 2 * 1024**3
+PDF_WORKER_MEMORY_BYTES = 1024**3
 PDF_WORKER_TIMEOUT_SECONDS = 180
 
 
@@ -155,6 +157,31 @@ def _mac_resident_bytes(pid):
     return ctypes.c_uint64.from_buffer(info, 8).value
 
 
+def _worker_resident_bytes(group):
+    """Total RSS of the conversion worker and its OCR subprocesses."""
+    if sys.platform == "darwin":
+        import ctypes
+        library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+        members = (ctypes.c_int * 128)()
+        size = library.proc_listpgrppids(group, members, ctypes.sizeof(members))
+        if size <= 0:
+            return _mac_resident_bytes(group)
+        return sum(_mac_resident_bytes(pid) for pid in members[:size] if pid)
+    total = 0
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        try:
+            with open(f"/proc/{name}/stat") as source:
+                fields = source.read().rsplit(")", 1)[1].split()
+            if int(fields[2]) == group:
+                with open(f"/proc/{name}/statm") as source:
+                    total += int(source.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
+        except (FileNotFoundError, ProcessLookupError):
+            pass
+    return total
+
+
 def _run_pdf_worker(source_path: str, output_path: str) -> None:
     """Isolate parsing/decoding; the parent owns and removes the entire workspace."""
     if os.path.getsize(source_path) > PDF_MAX_BYTES:
@@ -163,7 +190,7 @@ def _run_pdf_worker(source_path: str, output_path: str) -> None:
     command = [sys.executable, os.path.abspath(__file__), "--pdf-worker",
                os.path.abspath(source_path), os.path.abspath(output_path), json.dumps(limits)]
     deadline = time.monotonic() + PDF_WORKER_TIMEOUT_SECONDS
-    with subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) as worker:
+    with subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, start_new_session=True) as worker:
         try:
             while True:
                 remaining = deadline - time.monotonic()
@@ -173,18 +200,17 @@ def _run_pdf_worker(source_path: str, output_path: str) -> None:
                     _, error = worker.communicate(timeout=min(0.25, remaining))
                     break
                 except subprocess.TimeoutExpired:
-                    if sys.platform == "darwin":
-                        # macOS does not enforce RLIMIT_AS. Bound resident memory
-                        # from the parent instead; production Linux uses RLIMIT_AS.
-                        if _mac_resident_bytes(worker.pid) > PDF_WORKER_MEMORY_BYTES:
-                            raise MemoryError("PDF conversion exceeded the 2 GB memory limit")
+                    if _worker_resident_bytes(worker.pid) > PDF_WORKER_MEMORY_BYTES:
+                        raise MemoryError("PDF conversion exceeded the 1 GB memory limit")
             if worker.returncode:
                 detail = error.decode("utf-8", "replace").strip()[-1000:]
                 raise RuntimeError(detail or "PDF conversion worker stopped (memory/resource limit)")
         finally:
-            if worker.poll() is None:
-                worker.kill()
-                worker.communicate()
+            try:
+                os.killpg(worker.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            worker.communicate()
 
 
 def _preflight_pdf_images(page, budget):
@@ -234,11 +260,14 @@ def _xml_text(value: str) -> str:
 def build_epub_from_pdf(source_path: str, output_path: str) -> None:
     """Reflow extractable text and retain embedded raster images, page by page.
 
-    Scanned pages keep their images (no OCR). PDF positioning, vector artwork,
+    Scanned pages use selective OCR and become reflowable text. PDF positioning,
+    vector artwork,
     columns and tables cannot be faithfully reconstructed by this extractor.
     Reuse the existing XHTML/OPF/NCX packager; never modify the source PDF.
     """
     from pypdf import PdfReader
+    from pdf_reading import clean_pages, scan_coverage, ocr_page, paragraph_html
+    import pypdfium2 as pdfium
 
     if os.path.getsize(source_path) > PDF_MAX_BYTES:
         raise ValueError("PDF is too large to convert (maximum 25 MB)")
@@ -258,21 +287,40 @@ def build_epub_from_pdf(source_path: str, output_path: str) -> None:
             language = _xml_text(reader.trailer['/Root'].get('/Lang') or 'und')
             text_count = image_bytes = image_count = decoded_pixels = 0
             pixel_budget = [0]
+            texts = []
+            scans = []
+            with pdfium.PdfDocument(source_path) as rendered:
+                for index, page in enumerate(reader.pages):
+                    _preflight_pdf_images(page, pixel_budget)
+                    text = _xml_text(page.extract_text(extraction_mode="layout") or "")
+                    with closing(rendered[index]) as rendered_page:
+                        scan = scan_coverage(rendered_page)
+                        # Keep existing useful text; OCR only image-dominated pages
+                        # with no usable text layer. A tiny caption is not a layer.
+                        if scan and len(re.sub(r"\s", "", text)) < 40:
+                            ocr_language = os.environ.get("LIBFLIX_OCR_LANGUAGES", "eng")
+                            if not re.fullmatch(r"[A-Za-z0-9_+]+", ocr_language):
+                                raise ValueError("Invalid OCR language configuration")
+                            text = _xml_text(ocr_page(rendered_page, directory, index, ocr_language))
+                            if not text.strip():
+                                # Decorative/blank image pages have no text to reflow.
+                                scan = False
+                    text_count += len(text)
+                    if text_count > PDF_MAX_TEXT:
+                        raise ValueError("PDF contains too much text to convert")
+                    texts.append(text)
+                    scans.append(scan)
+            cleaned = clean_pages(texts)
             has_content = False
             document.write("<html><body>")
             for number, page in enumerate(reader.pages, 1):
-                _preflight_pdf_images(page, pixel_budget)
-                text = _xml_text(page.extract_text() or "")
-                text_count += len(text)
-                if text_count > PDF_MAX_TEXT:
-                    raise ValueError("PDF contains too much text to convert")
-                if number > 1:
-                    document.write("<mbp:pagebreak />")
-                document.write(f"<h2>Page {number}</h2>")
-                for paragraph in re.split(r"\n\s*\n", text.strip()):
-                    if paragraph.strip():
-                        has_content = True
-                        document.write("<p>" + html.escape(" ".join(paragraph.splitlines())) + "</p>")
+                paragraphs = cleaned[number - 1]
+                if paragraphs:
+                    has_content = True
+                    document.write(paragraph_html(paragraphs))
+                if scans[number - 1]:
+                    # The recognised/existing text replaces the page scan.
+                    continue
                 for image_file in page.images:
                     image = image_file.image
                     try:

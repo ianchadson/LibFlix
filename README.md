@@ -292,18 +292,34 @@ Read signals also supply cached weekly and monthly homepage rails.
   different format. DRM-era AZW editions stay hidden.
 - **EPUB downloads from PDF editions** - PDF rows retain their original PDF
   download and offer an EPUB download with live transfer/conversion progress.
-  The EPUB link also works without JavaScript. Conversion runs locally using
-  the existing `pypdf` dependency, preserves extractable text and embedded raster
-  images in page order, and reuses a separately namespaced, versioned cache for
-  later downloads and Kindle sends. Scans retain images without OCR; columns,
-  tables, vector artwork and precise PDF layout are not reproduced. Prefer a
-  native EPUB when available. Password-protected, empty or oversized PDFs fail
-  visibly, leaving the original PDF available. Conversion is bounded to 25 MB,
-  2,000 pages, 10 million text characters, 50 million pixels per image, one billion total image pixels and 512 MB
-  of extracted image files. Conversion runs in a disposable subprocess with a
-  180-second deadline and 2 GB memory budget (hard address-space limit on Linux;
-  parent-monitored resident memory on macOS). Image dimensions are checked
-  before decoding, including nested Form resources and image masks. No conversion service or new system binary is needed.
+  The EPUB link also works without JavaScript. Conversion uses `pypdf` for text,
+  PDFium for page rendering, and local [Tesseract OCR](https://github.com/tesseract-ocr/tesseract)
+  for scanned pages without usable text. Recognised text becomes reflowable
+  paragraphs; full-page scans are omitted when usable text already exists or
+  OCR succeeds, avoiding duplicate image/text pages. Native EPUB remains best
+  for columns, tables, diagrams and complex layouts.
+  Repeated page-edge headers/footers and page numbers are removed conservatively;
+  wrapped words are joined and paragraph gaps retained. No artificial `Page N`
+  headings are inserted. OCR can make spelling and reading-order errors.
+  Encrypted or over-limit files fail visibly; original PDF downloads stay available.
+  Limits: 25 MiB input, 2,000 pages, 10 million text characters, 50 million pixels
+  per image, one billion total image pixels, and 512 MiB extracted image files.
+  One shared conversion slot serialises Kindle and download conversions across
+  application processes; waiting requests get live queue status and a ten-minute
+  queue wait limit. Each worker gets a 180-second deadline and a 1 GiB budget.
+  Linux enforces a hard per-process address-space limit. The parent also watches
+  combined worker/OCR resident memory every 250 ms on Linux and macOS; aggregate
+  usage can overshoot between polls. Termination kills the entire process group
+  and removes partial files. Cache versioning includes OCR language configuration.
+
+  **OCR installation:** install Python requirements and the Tesseract binary with
+  the required language data on the application host. Ubuntu/Debian:
+  `sudo apt-get install tesseract-ocr tesseract-ocr-eng`; macOS:
+  `brew install tesseract`. English is the default. Set `LIBFLIX_OCR_LANGUAGES`
+  to installed Tesseract languages, for example `chi_sim+eng` after installing
+  `tesseract-ocr-chi-sim` on Ubuntu/Debian. Missing OCR dependencies produce an
+  actionable error for scans; text PDFs continue to work. No OCR service receives
+  books and no models are downloaded at conversion time.
 - **Send to Kindle settings** - the global Settings menu opens a keyboard-safe
   Kindle sheet with password visibility, local browser storage, a forget
   action, and a visible configured / configure-connection state.
