@@ -955,8 +955,15 @@ Normal original-file downloads retain native browser navigation.
 images page by page, then reuses the XHTML/OPF/NCX EPUB packager. Scans keep image
 pages without OCR. PDF columns, tables, vector drawings and exact positioning
 are not reconstructed. Encrypted, empty and over-limit PDFs fail closed.
-Limits are 100 MB input, 2,000 pages, 10 million text characters, 20 million
-pixels per image and 100 MB total extracted images.
+Limits are 25 MB input, 2,000 pages, 10 million text characters, 50 million
+pixels per image, one billion total image pixels and 512 MB total extracted images.
+PDF conversion runs in a disposable subprocess with a 180-second deadline and
+2 GB memory budget: Linux enforces RLIMIT_AS; macOS uses a parent RSS watchdog
+with 250 ms polling, which can overshoot between polls. The worker also has a
+CPU-time limit. Raw image dimensions (including Form resources and masks) are
+checked before text/image extraction. Inline images and deceptive metadata are
+contained by the worker limits. All scratch files live under the parent-owned
+workspace so timeout/crash cleanup does not depend on child finally blocks.
 
 Conversions run under a per-source filesystem lock, with heartbeat progress
 while processing. Successful derived files live under

@@ -298,9 +298,12 @@ Read signals also supply cached weekly and monthly homepage rails.
   later downloads and Kindle sends. Scans retain images without OCR; columns,
   tables, vector artwork and precise PDF layout are not reproduced. Prefer a
   native EPUB when available. Password-protected, empty or oversized PDFs fail
-  visibly, leaving the original PDF available. Conversion is bounded to 100 MB,
-  2,000 pages, 10 million text characters, 20 million pixels per image and 100 MB
-  of extracted image files. No conversion service or new system binary is needed.
+  visibly, leaving the original PDF available. Conversion is bounded to 25 MB,
+  2,000 pages, 10 million text characters, 50 million pixels per image, one billion total image pixels and 512 MB
+  of extracted image files. Conversion runs in a disposable subprocess with a
+  180-second deadline and 2 GB memory budget (hard address-space limit on Linux;
+  parent-monitored resident memory on macOS). Image dimensions are checked
+  before decoding, including nested Form resources and image masks. No conversion service or new system binary is needed.
 - **Send to Kindle settings** - the global Settings menu opens a keyboard-safe
   Kindle sheet with password visibility, local browser storage, a forget
   action, and a visible configured / configure-connection state.

@@ -14,6 +14,10 @@ caller must not silently substitute the original file after a failed conversion.
 from __future__ import annotations
 
 import html
+import json
+import subprocess
+import sys
+import time
 import os
 import re
 import shutil
@@ -25,10 +29,14 @@ from typing import Optional
 
 CONVERTIBLE_EXTENSIONS = frozenset({"pdf", "mobi", "azw3"})
 CONVERTIBLE_TARGET = "epub"
-PDF_MAX_BYTES = 100 * 1024 * 1024
+PDF_MAX_BYTES = 25 * 1024 * 1024
 PDF_MAX_PAGES = 2000
 PDF_MAX_TEXT = 10_000_000
-PDF_MAX_IMAGE_PIXELS = 20_000_000
+PDF_MAX_IMAGE_PIXELS = 50_000_000
+PDF_MAX_TOTAL_IMAGE_PIXELS = 1_000_000_000
+PDF_MAX_IMAGE_BYTES = 512 * 1024 * 1024
+PDF_WORKER_MEMORY_BYTES = 2 * 1024**3
+PDF_WORKER_TIMEOUT_SECONDS = 180
 
 
 @dataclass(frozen=True)
@@ -81,7 +89,7 @@ def convert_to_epub(source_path: str, extension: str) -> ConversionResult:
     converted = False
     try:
         if extension == "pdf":
-            build_epub_from_pdf(source_path, output_path)
+            _run_pdf_worker(source_path, output_path)
             if not _valid_epub(output_path):
                 raise ValueError("Converted EPUB failed validation")
             converted = True
@@ -131,6 +139,89 @@ def convert_to_epub(source_path: str, extension: str) -> ConversionResult:
             _remove_tree(workdir)
 
 
+def _mac_resident_bytes(pid):
+    import ctypes
+    # Darwin sys/proc_info.h: proc_taskinfo is six uint64s, twelve int32s.
+    info = ctypes.create_string_buffer(96)
+    library = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64,
+                                    ctypes.c_void_p, ctypes.c_int]
+    size = library.proc_pidinfo(pid, 4, 0, info, len(info))
+    if size != len(info):
+        # A worker may exit between communicate's timeout and this read.
+        if ctypes.get_errno() == 3:  # ESRCH
+            return 0
+        raise RuntimeError("Cannot monitor PDF conversion memory")
+    return ctypes.c_uint64.from_buffer(info, 8).value
+
+
+def _run_pdf_worker(source_path: str, output_path: str) -> None:
+    """Isolate parsing/decoding; the parent owns and removes the entire workspace."""
+    if os.path.getsize(source_path) > PDF_MAX_BYTES:
+        raise ValueError("PDF is too large to convert (maximum 25 MB)")
+    limits = {name: value for name, value in globals().items() if name.startswith("PDF_")}
+    command = [sys.executable, os.path.abspath(__file__), "--pdf-worker",
+               os.path.abspath(source_path), os.path.abspath(output_path), json.dumps(limits)]
+    deadline = time.monotonic() + PDF_WORKER_TIMEOUT_SECONDS
+    with subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) as worker:
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("PDF conversion exceeded the 180 second time limit")
+                try:
+                    _, error = worker.communicate(timeout=min(0.25, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    if sys.platform == "darwin":
+                        # macOS does not enforce RLIMIT_AS. Bound resident memory
+                        # from the parent instead; production Linux uses RLIMIT_AS.
+                        if _mac_resident_bytes(worker.pid) > PDF_WORKER_MEMORY_BYTES:
+                            raise MemoryError("PDF conversion exceeded the 2 GB memory limit")
+            if worker.returncode:
+                detail = error.decode("utf-8", "replace").strip()[-1000:]
+                raise RuntimeError(detail or "PDF conversion worker stopped (memory/resource limit)")
+        finally:
+            if worker.poll() is None:
+                worker.kill()
+                worker.communicate()
+
+
+def _preflight_pdf_images(page, budget):
+    """Inspect raw XObjects (including Forms/masks) before pypdf decodes images.
+
+    Inline images and misleading metadata still need the isolated worker limit.
+    Count shared objects again on each page because output repeats those images.
+    """
+    seen = set()
+    def visit(reference, depth=0):
+        if depth > 64:
+            raise ValueError("PDF image resource nesting is too deep")
+        obj = reference.get_object()
+        identity = id(obj)
+        if identity in seen:
+            return
+        seen.add(identity)
+        if obj.get("/Subtype") == "/Image":
+            width, height = int(obj.get("/Width", 0)), int(obj.get("/Height", 0))
+            pixels = width * height
+            if width <= 0 or height <= 0 or pixels > PDF_MAX_IMAGE_PIXELS:
+                raise ValueError("PDF image is too large to convert (maximum 50 million pixels)")
+            budget[0] += pixels
+            if budget[0] > PDF_MAX_TOTAL_IMAGE_PIXELS:
+                raise ValueError("PDF has too many image pixels to convert")
+            for name in ("/SMask", "/Mask"):
+                mask = obj.get(name)
+                if mask is not None and hasattr(mask.get_object(), "get"):
+                    visit(mask, depth + 1)
+        resources = obj.get("/Resources")
+        if resources:
+            objects = resources.get_object().get("/XObject", {})
+            for child in objects.get_object().values() if hasattr(objects, "get_object") else objects.values():
+                visit(child, depth + 1)
+    visit(page)
+
+
 def _xml_text(value: str) -> str:
     # PDF metadata/text may contain control characters forbidden in XML 1.0.
     return "".join(
@@ -150,8 +241,8 @@ def build_epub_from_pdf(source_path: str, output_path: str) -> None:
     from pypdf import PdfReader
 
     if os.path.getsize(source_path) > PDF_MAX_BYTES:
-        raise ValueError("PDF is too large to convert (maximum 100 MB)")
-    with tempfile.TemporaryDirectory(prefix="libflix-pdf-") as directory:
+        raise ValueError("PDF is too large to convert (maximum 25 MB)")
+    with tempfile.TemporaryDirectory(prefix="libflix-pdf-", dir=os.path.dirname(os.path.abspath(output_path))) as directory:
         image_dir = os.path.join(directory, "Images")
         os.makedirs(image_dir)
         html_path = os.path.join(directory, "book.html")
@@ -165,10 +256,12 @@ def build_epub_from_pdf(source_path: str, output_path: str) -> None:
             title = _xml_text(metadata.get("/Title") or "Book")
             author = _xml_text(metadata.get("/Author") or "")
             language = _xml_text(reader.trailer['/Root'].get('/Lang') or 'und')
-            text_count = image_bytes = image_count = 0
+            text_count = image_bytes = image_count = decoded_pixels = 0
+            pixel_budget = [0]
             has_content = False
             document.write("<html><body>")
             for number, page in enumerate(reader.pages, 1):
+                _preflight_pdf_images(page, pixel_budget)
                 text = _xml_text(page.extract_text() or "")
                 text_count += len(text)
                 if text_count > PDF_MAX_TEXT:
@@ -183,6 +276,9 @@ def build_epub_from_pdf(source_path: str, output_path: str) -> None:
                 for image_file in page.images:
                     image = image_file.image
                     try:
+                        decoded_pixels += image.width * image.height
+                        if decoded_pixels > PDF_MAX_TOTAL_IMAGE_PIXELS:
+                            raise ValueError("PDF has too many image pixels to convert")
                         if image.width * image.height > PDF_MAX_IMAGE_PIXELS:
                             raise ValueError("PDF image is too large to convert")
                         image_count += 1
@@ -196,7 +292,7 @@ def build_epub_from_pdf(source_path: str, output_path: str) -> None:
                     finally:
                         image.close()
                     image_bytes += os.path.getsize(path)
-                    if image_bytes > PDF_MAX_BYTES:
+                    if image_bytes > PDF_MAX_IMAGE_BYTES:
                         raise ValueError("PDF images are too large to convert")
                     has_content = True
                     document.write(f'<p><img src="Images/{name}" alt="Page {number} image" style="max-width:100%;height:auto;"/></p>')
@@ -444,3 +540,21 @@ def cleanup_path(path: str) -> None:
     workdir = os.path.dirname(str(path))
     if os.path.basename(workdir).startswith(("libflix-convert-", "mobiex")):
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 5 or sys.argv[1] != "--pdf-worker":
+        raise SystemExit(2)
+    try:
+        limits = json.loads(sys.argv[4])
+        for name in tuple(globals()):
+            if name.startswith("PDF_") and name in limits:
+                globals()[name] = int(limits[name])
+        import resource
+        if sys.platform != "darwin":
+            resource.setrlimit(resource.RLIMIT_AS, (PDF_WORKER_MEMORY_BYTES, PDF_WORKER_MEMORY_BYTES))
+        resource.setrlimit(resource.RLIMIT_CPU, (PDF_WORKER_TIMEOUT_SECONDS, PDF_WORKER_TIMEOUT_SECONDS + 1))
+        build_epub_from_pdf(sys.argv[2], sys.argv[3])
+    except BaseException as error:
+        print(f"{type(error).__name__}: {error}", file=sys.stderr)
+        raise SystemExit(1)

@@ -9931,7 +9931,7 @@ def _download_prepare_line(event):
 def _converted_epub_cache():
     # Derived bytes must never masquerade as the original content-MD5 source.
     return KindleSourceCache(
-        os.path.join(KINDLE_SOURCE_CACHE_DIR, "converted-epub-v1"),
+        os.path.join(KINDLE_SOURCE_CACHE_DIR, "converted-epub-v2"),
         ttl=KINDLE_SOURCE_CACHE_TTL,
         max_bytes=KINDLE_SOURCE_CACHE_MAX_BYTES,
     )
@@ -9939,7 +9939,7 @@ def _converted_epub_cache():
 
 def _converted_epub_key(book_id, extension):
     # A non-content-hash cache identifier, namespaced by converter version/type.
-    return "rd" + hashlib.sha1(f"epub-v1:{book_id}:{extension}".encode()).hexdigest()
+    return "rd" + hashlib.sha1(f"epub-v2:{book_id}:{extension}".encode()).hexdigest()
 
 
 def _convert_and_cache_epub(source_path, book_id, extension):
