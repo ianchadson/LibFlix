@@ -935,13 +935,37 @@ first row is best. The flagged row renders as the persistent primary option;
 remaining editions live in a closed native `<details>` disclosure and are
 expanded automatically if one contains an active resumed delivery.
 
-MOBI and AZW3 editions stay visible because LibFlix can convert them to EPUB
-before Send to Kindle, so they are ranked as deliverable candidates. AZW (the
+PDF, MOBI and AZW3 editions are converted to EPUB before Send to Kindle.
+Legacy editions stay visible and rank as deliverable candidates. AZW (the
 DRM-era extension) is still removed before deduplication and ranking, and the
 job API independently rejects any format outside EPUB, PDF, MOBI, and AZW3 to
 protect against stale clients or direct requests. A convertible row is flagged
-`kindle_conversion` so the UI can label its action `Convert & Kindle`; only
+`kindle_conversion` so the UI can label legacy actions `Convert & Kindle`; PDF
+conversion is automatic behind the normal Kindle action. Only
 LibGen and Real-Debrid ids are eligible.
+
+PDF rows also expose a converted EPUB download alongside the unchanged original
+PDF action. The EPUB action streams NDJSON from
+`/api/download/prepare/<id>?ext=pdf&format=epub`, then navigates to the local
+attachment at `/download/<id>?format=epub&source_ext=pdf`. That attachment route
+can prepare a missing EPUB itself for no-JavaScript clients and supports ranges.
+Normal original-file downloads retain native browser navigation.
+
+`book_conversion.py` uses the existing `pypdf` parser to extract text and raster
+images page by page, then reuses the XHTML/OPF/NCX EPUB packager. Scans keep image
+pages without OCR. PDF columns, tables, vector drawings and exact positioning
+are not reconstructed. Encrypted, empty and over-limit PDFs fail closed.
+Limits are 100 MB input, 2,000 pages, 10 million text characters, 20 million
+pixels per image and 100 MB total extracted images.
+
+Conversions run under a per-source filesystem lock, with heartbeat progress
+while processing. Successful derived files live under
+`kindle-source-cache/converted-epub-v1/` with the existing idle TTL and byte quota.
+Versioned source-id/format keys use the cache's non-content-hash identifier form:
+converted bytes are never stored against the original PDF's content MD5.
+Downloads and Kindle sends share these EPUBs, even if the original source has
+expired. Failed conversions remove temporary workspaces and never mail the
+original PDF as a silent fallback.
 
 Ranking is dominated by normalized title similarity, including exact,
 containment, token-overlap, and sequence checks. Author agreement is the next
@@ -982,10 +1006,9 @@ The renderer also:
 Before SMTP upload, `book_preparation.py` applies a clean canonical filename.
 For EPUB it edits only the OPF package: title is canonicalized, absent metadata
 is filled, and a JPEG cover is added only if no cover declaration or cover image
-already exists. The archive keeps `mimetype` first and uncompressed. PDF title
-and missing author/description fields are updated through `pypdf`. Any parsing
-or encryption problem returns the original file, so preparation cannot turn a
-usable download into a failed send.
+already exists. The archive keeps `mimetype` first and uncompressed. Cosmetic
+metadata repair failures keep the pre-existing EPUB. Conversion failures are
+different: they stop delivery visibly rather than sending the source format.
 
 ### Rendering Performance
 

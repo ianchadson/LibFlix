@@ -41,17 +41,17 @@ def _valid_epub(path: str) -> None:
 
 class ConvertibleDetectionTests(unittest.TestCase):
     def test_legacy_formats_are_convertible(self):
-        for extension in ("mobi", "azw3", "MOBI", ".azw3"):
+        for extension in ("pdf", ".PDF", "mobi", "azw3", "MOBI", ".azw3"):
             with self.subTest(extension=extension):
                 self.assertTrue(is_convertible(extension))
 
     def test_primary_and_hidden_formats_are_not_convertible(self):
-        for extension in ("epub", "pdf", "azw", "", None, "txt", "djvu"):
+        for extension in ("epub", "azw", "", None, "txt", "djvu"):
             with self.subTest(extension=extension):
                 self.assertFalse(is_convertible(extension))
 
     def test_convertible_set_is_bounded(self):
-        self.assertEqual(CONVERTIBLE_EXTENSIONS, frozenset({"mobi", "azw3"}))
+        self.assertEqual(CONVERTIBLE_EXTENSIONS, frozenset({"pdf", "mobi", "azw3"}))
 
 
 class MobiMagicTests(unittest.TestCase):
@@ -164,8 +164,9 @@ class ConvertToEpubTests(unittest.TestCase):
     def test_delivery_fails_instead_of_sending_unconverted_mobi(self):
         import app as app_module
 
-        source = open(app_module.__file__, encoding="utf-8").read()
-        conversion_block = source.split("conversion = convert_to_epub(source_path, ext)", 1)[1].split(
+        with open(app_module.__file__, encoding="utf-8") as source_file:
+            source = source_file.read()
+        conversion_block = source.split("conversion = yield from _convert_epub_progress(source_path, md5, ext, emit=tracker.event)", 1)[1].split(
             "progress = 68", 1
         )[0]
         self.assertIn("raise RuntimeError(", conversion_block)

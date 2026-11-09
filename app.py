@@ -1,4 +1,5 @@
 import re, os, io, json, html as htmlmod, warnings, time, random, threading, hashlib, sqlite3, unicodedata, uuid, ipaddress, socket, fcntl, math
+import shutil
 from contextlib import contextmanager
 from difflib import SequenceMatcher
 from urllib.parse import urljoin, quote, urlencode, urlsplit, parse_qs
@@ -68,6 +69,7 @@ from downloaders import DOWNLOADER
 from downloaders.base import Book, SESSION as DL_SESSION, is_download_id, is_libgen_id
 from downloaders.libgen import MIRROR
 from book_conversion import (
+    ConversionResult,
     cleanup_path as cleanup_conversion_path,
     convert_to_epub,
     converter_available as mobi_converter_available,
@@ -6107,7 +6109,7 @@ def is_kindle_delivery_format(extension):
     return extension in KINDLE_DELIVERY_FORMATS
 
 def is_convertible_kindle_format(extension):
-    """True for legacy formats LibFlix can convert to EPUB for delivery."""
+    """True for PDF and legacy formats converted to EPUB for delivery."""
     return is_convertible(extension)
 
 def is_deliverable_kindle_format(extension):
@@ -6249,7 +6251,7 @@ def recommendation_reasons(
     if extension == "epub":
         reasons.append("Kindle-ready EPUB" if kindle_eligible else "EPUB download")
     elif extension == "pdf":
-        reasons.append("Readable PDF" if kindle_eligible else "PDF download")
+        reasons.append("Converts PDF to Kindle EPUB" if kindle_eligible else "PDF download")
     elif convertible:
         reasons.append("Converts to Kindle EPUB")
     if fastest_to_kindle:
@@ -9575,7 +9577,7 @@ def api_search():
         separators=(",", ":"),
     )
     result_cache_key = (
-        f"download_search:v11:{scope}:{sort}:{order}:{limit}:{page}:"
+        f"download_search:v12:{scope}:{sort}:{order}:{limit}:{page}:"
         f"{fmt}:{lang}:{int(dedup_on)}:{target_title}:{target_author}:"
         f"{identity_signature}"
     )
@@ -9803,6 +9805,23 @@ def download(md5):
     ascii_filename = filename.encode("ascii", "ignore").decode().strip()
     ascii_filename = re.sub(r'[^A-Za-z0-9._ -]+', '', ascii_filename) or f"{md5}.epub"
     extension = re.sub(r"[^a-z0-9]", "", filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+    if request.args.get("format") == "epub":
+        source_ext = request.args.get("source_ext", "pdf").lower()
+        if not is_convertible(source_ext):
+            return jsonify({"success": False, "error": "Unsupported conversion source format."}), 400
+        try:
+            preparation = _prepare_download_file(md5, source_ext, target="epub")
+            while True:
+                try:
+                    next(preparation)
+                except StopIteration as completed:
+                    path, _ = completed.value
+                    break
+        except Exception as error:
+            return jsonify({"success": False, "error": str(error)}), 422
+        filename = os.path.splitext(filename)[0] + ".epub"
+        return send_file(path, as_attachment=True, download_name=filename,
+                         mimetype="application/epub+zip", conditional=True, etag=True)
     if extension in {"epub", "pdf", "mobi", "azw3"}:
         cached_path = _kindle_source_cache().get(md5, extension)
         if cached_path:
@@ -9909,6 +9928,107 @@ def _download_prepare_line(event):
     ).encode("utf-8")
 
 
+def _converted_epub_cache():
+    # Derived bytes must never masquerade as the original content-MD5 source.
+    return KindleSourceCache(
+        os.path.join(KINDLE_SOURCE_CACHE_DIR, "converted-epub-v1"),
+        ttl=KINDLE_SOURCE_CACHE_TTL,
+        max_bytes=KINDLE_SOURCE_CACHE_MAX_BYTES,
+    )
+
+
+def _converted_epub_key(book_id, extension):
+    # A non-content-hash cache identifier, namespaced by converter version/type.
+    return "rd" + hashlib.sha1(f"epub-v1:{book_id}:{extension}".encode()).hexdigest()
+
+
+def _convert_and_cache_epub(source_path, book_id, extension):
+    key = _converted_epub_key(book_id, extension)
+    lock_path = os.path.join(KINDLE_SOURCE_CACHE_DIR, ".conversion-locks", key + ".lock")
+    with filesystem_lock(lock_path):
+        return _convert_and_cache_epub_locked(source_path, book_id, extension)
+
+
+def _convert_and_cache_epub_locked(source_path, book_id, extension):
+    cache = _converted_epub_cache()
+    key = _converted_epub_key(book_id, extension)
+    cached = cache.get(key, "epub")
+    if cached:
+        return ConversionResult(cached, "epub")
+    conversion = convert_to_epub(source_path, extension)
+    if not conversion.path:
+        return conversion
+    temporary = None
+    try:
+        temporary = cache.temporary_path(key, "epub")
+        shutil.copyfile(conversion.path, temporary)
+        validation = validate_source_file(temporary, key, "epub")
+        cached = cache.commit(temporary, key, "epub", validation)
+        if cached == temporary:
+            # Kindle can still use the temporary conversion with caching off.
+            return conversion
+        temporary = None
+        cleanup_conversion_path(conversion.path)
+        return ConversionResult(cached, "epub")
+    except Exception:
+        cleanup_conversion_path(conversion.path)
+        raise
+    finally:
+        if temporary:
+            cache.discard(temporary)
+
+
+def _convert_epub_progress(source_path, book_id, extension, *, emit=None):
+    emit = emit or _kindle_progress
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="epub-conversion") as pool:
+        future = pool.submit(_convert_and_cache_epub, source_path, book_id, extension)
+        while True:
+            try:
+                return future.result(timeout=RESOLVE_HEARTBEAT_SECONDS)
+            except FutureTimeoutError:
+                yield emit("Converting to EPUB", None, "Still processing this edition")
+
+
+def _prepare_download_file(md5, extension, *, target=""):
+    """Yield shared transfer/conversion progress and return a cached file path."""
+    if target == "epub":
+        cached = _converted_epub_cache().get(_converted_epub_key(md5, extension), "epub")
+        if cached:
+            return cached, True
+    source_cache = _kindle_source_cache()
+    source_path = source_cache.get(md5, extension)
+    cache_hit = bool(source_path)
+    temporary = None
+    try:
+        if not source_path:
+            yield _kindle_progress("Finding book file", None, "Checking the download source")
+            url = yield from _resolve_download_progress(md5, emit=_kindle_progress)
+            if not url:
+                raise RuntimeError("The download source did not return a file link.")
+            yield _kindle_progress("Downloading book", 10, "Preparing a verified copy")
+            temporary = source_cache.temporary_path(md5, extension)
+            _, _, validation = yield from _download_book_progress(
+                url, temporary, md5=md5, extension=extension, emit=_kindle_progress,
+            )
+            source_path = source_cache.commit(temporary, md5, extension, validation)
+            if source_path == temporary:
+                raise RuntimeError("The download cache is unavailable.")
+            temporary = None
+        if target == "epub":
+            yield _kindle_progress("Converting to EPUB", 66, "Preparing your EPUB download")
+            conversion = yield from _convert_epub_progress(source_path, md5, extension)
+            if not conversion.path:
+                raise RuntimeError("This edition couldn't be converted to EPUB. " + conversion.warning)
+            if conversion.temporary:
+                cleanup_conversion_path(conversion.path)
+                raise RuntimeError("The EPUB download cache is unavailable.")
+            source_path = conversion.path
+        return source_path, cache_hit
+    finally:
+        if temporary:
+            source_cache.discard(temporary)
+
+
 @app.route("/api/download/prepare/<md5>")
 def api_prepare_download(md5):
     """Validate and cache an EPUB/PDF before navigating to its download URL.
@@ -9918,7 +10038,7 @@ def api_prepare_download(md5):
     connection active with the existing Kindle transfer progress events and
     leaves the final attachment request as a local, range-capable file send.
     """
-    if not re.fullmatch(r"[a-fA-F0-9]{32}", md5 or ""):
+    if not is_download_id(md5 or ""):
         return jsonify({"success": False, "error": "Invalid download identifier."}), 404
     extension = re.sub(
         r"[^a-z0-9]",
@@ -9931,6 +10051,10 @@ def api_prepare_download(md5):
             "error": "Only EPUB, PDF, MOBI, and AZW3 downloads can be prepared.",
         }), 400
 
+    target = request.args.get("format", "").lower()
+    if target and (target != "epub" or not is_convertible(extension)):
+        return jsonify({"success": False, "error": "Unsupported download conversion."}), 400
+
     md5 = md5.lower()
 
     def events():
@@ -9942,64 +10066,16 @@ def api_prepare_download(md5):
                     return stopped.value
                 yield _download_prepare_line(event)
 
-        source_cache = _kindle_source_cache()
-        cached_path = source_cache.get(md5, extension)
-        if cached_path:
-            yield _download_prepare_line({
-                "type": "complete",
-                "success": True,
-                "stage": "Download ready",
-                "progress": 100,
-                "source_cache_hit": True,
-            })
-            return
-
-        temporary_path = None
         try:
-            yield _download_prepare_line(
-                _kindle_progress("Finding book file", None, "Checking the download source")
-            )
-            download_url = yield from relay(_resolve_download_progress(
-                md5,
-                emit=_kindle_progress,
-            ))
-            if not download_url:
-                raise RuntimeError("The download source did not return a file link.")
-
-            yield _download_prepare_line(
-                _kindle_progress("Downloading book", 10, "Preparing a verified copy")
-            )
-            temporary_path = source_cache.temporary_path(md5, extension)
-            _, _, validation = yield from relay(_download_book_progress(
-                download_url,
-                temporary_path,
-                md5=md5,
-                extension=extension,
-                emit=_kindle_progress,
-            ))
-            cached_path = source_cache.commit(
-                temporary_path,
-                md5,
-                extension,
-                validation,
-            )
-            if cached_path == temporary_path:
-                raise RuntimeError("The download cache is unavailable.")
-            temporary_path = None
+            preparation = _prepare_download_file(md5, extension, target=target)
+            _, cache_hit = yield from relay(preparation)
             yield _download_prepare_line({
-                "type": "complete",
-                "success": True,
-                "stage": "Download ready",
-                "progress": 100,
-                "source_cache_hit": False,
+                "type": "complete", "success": True, "stage": "Download ready",
+                "progress": 100, "source_cache_hit": cache_hit,
             })
         except Exception as error:
-            if temporary_path:
-                source_cache.discard(temporary_path)
             yield _download_prepare_line({
-                "type": "error",
-                "success": False,
-                "stage": "Download unavailable",
+                "type": "error", "success": False, "stage": "Download unavailable",
                 "error": str(error) or "The download source did not return a working file.",
             })
 
@@ -10964,11 +11040,17 @@ def _send_to_kindle_events(data):
             smtp_configuration,
             parallel_cancel,
         )
-        if ext == "epub" and data.get("cover_url"):
+        if (ext == "epub" or is_convertible(ext)) and data.get("cover_url"):
             cover_future = parallel_executor.submit(timed_cover_load)
 
         yield tracker.event("Preparing delivery", progress, "Starting secure delivery tasks")
-        source_path = source_cache.get(md5, ext)
+        derived_path = (
+            _converted_epub_cache().get(_converted_epub_key(md5, ext), "epub")
+            if is_convertible(ext) else ""
+        )
+        if derived_path:
+            ext = "epub"
+        source_path = derived_path or source_cache.get(md5, ext)
         source_cache_hit = bool(source_path)
         if source_cache_hit:
             progress = 65
@@ -11010,19 +11092,19 @@ def _send_to_kindle_events(data):
                 progress,
                 "Turning this edition into a Kindle-friendly EPUB",
             )
-            conversion = convert_to_epub(source_path, ext)
+            conversion = yield from _convert_epub_progress(source_path, md5, ext, emit=tracker.event)
             if conversion.path:
-                conversion_path = conversion.path
+                conversion_path = conversion.path if conversion.temporary else None
                 source_path = conversion.path
                 ext = conversion.extension
             else:
-                # Send to Kindle rejects MOBI/AZW3, so an unconverted file
-                # would bounce silently at Amazon; fail visibly instead.
+                # Never silently send the original PDF or legacy file when
+                # the requested EPUB conversion fails.
                 app.logger.info(
                     "Kindle conversion failed for %s: %s", ext, conversion.warning
                 )
                 raise RuntimeError(
-                    "This edition couldn't be converted for Kindle."
+                    "This edition couldn't be converted for Kindle. " + conversion.warning
                 )
 
         progress = 68

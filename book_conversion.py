@@ -1,16 +1,14 @@
-"""Convert legacy Kindle formats (MOBI / AZW / AZW3) to EPUB.
+"""Convert PDF and legacy Kindle formats (MOBI / AZW3) to EPUB.
 
-LibFlix hides MOBI/AZW/AZW3 from download search because Amazon's Send to
-Kindle no longer accepts them.  Some books are only available in those
-formats, so this module unpacks them into a clean EPUB before the normal
-preparation and delivery path runs.
+PDF editions and legacy MOBI/AZW3 editions become EPUBs before Kindle
+preparation and delivery. Original-format website downloads remain available.
 
-The pure-Python ``mobi`` package is used instead of Calibre so no external
-binary is required.  The original file is never modified: extraction writes to
+The existing pure-Python ``pypdf`` and ``mobi`` packages are used instead of
+Calibre so no external binary is required. The original file is never modified:
+extraction writes to
 a private temporary directory, and only a validated EPUB (ZIP with a mimetype
 entry) is returned.  Any failure yields an empty result with a warning; the
-caller must not send the unconverted file, because Send to Kindle rejects
-MOBI/AZW3.
+caller must not silently substitute the original file after a failed conversion.
 """
 
 from __future__ import annotations
@@ -25,8 +23,12 @@ import zipfile
 from dataclasses import dataclass
 from typing import Optional
 
-CONVERTIBLE_EXTENSIONS = frozenset({"mobi", "azw3"})
+CONVERTIBLE_EXTENSIONS = frozenset({"pdf", "mobi", "azw3"})
 CONVERTIBLE_TARGET = "epub"
+PDF_MAX_BYTES = 100 * 1024 * 1024
+PDF_MAX_PAGES = 2000
+PDF_MAX_TEXT = 10_000_000
+PDF_MAX_IMAGE_PIXELS = 20_000_000
 
 
 @dataclass(frozen=True)
@@ -66,7 +68,8 @@ def _valid_epub(path: str) -> bool:
 
 
 def convert_to_epub(source_path: str, extension: str) -> ConversionResult:
-    """Return an EPUB path for a MOBI/AZW/AZW3 file, or an empty failure."""
+    """Return an EPUB path for a PDF/MOBI/AZW3 file, or an empty failure."""
+    extension = re.sub(r"[^a-z0-9]", "", str(extension or "").casefold())
     if not is_convertible(extension):
         return ConversionResult("", "")
     if not source_path or not os.path.isfile(source_path):
@@ -77,6 +80,12 @@ def convert_to_epub(source_path: str, extension: str) -> ConversionResult:
     extraction_root = ""
     converted = False
     try:
+        if extension == "pdf":
+            build_epub_from_pdf(source_path, output_path)
+            if not _valid_epub(output_path):
+                raise ValueError("Converted EPUB failed validation")
+            converted = True
+            return ConversionResult(output_path, CONVERTIBLE_TARGET, temporary=True)
         try:
             import mobi  # type: ignore
         except ImportError:
@@ -120,6 +129,88 @@ def convert_to_epub(source_path: str, extension: str) -> ConversionResult:
         _remove_tree(extraction_root)
         if not converted:
             _remove_tree(workdir)
+
+
+def _xml_text(value: str) -> str:
+    # PDF metadata/text may contain control characters forbidden in XML 1.0.
+    return "".join(
+        char for char in str(value or "")
+        if char in "\t\n\r" or 0x20 <= ord(char) <= 0xD7FF
+        or 0xE000 <= ord(char) <= 0xFFFD or 0x10000 <= ord(char) <= 0x10FFFF
+    )
+
+
+def build_epub_from_pdf(source_path: str, output_path: str) -> None:
+    """Reflow extractable text and retain embedded raster images, page by page.
+
+    Scanned pages keep their images (no OCR). PDF positioning, vector artwork,
+    columns and tables cannot be faithfully reconstructed by this extractor.
+    Reuse the existing XHTML/OPF/NCX packager; never modify the source PDF.
+    """
+    from pypdf import PdfReader
+
+    if os.path.getsize(source_path) > PDF_MAX_BYTES:
+        raise ValueError("PDF is too large to convert (maximum 100 MB)")
+    with tempfile.TemporaryDirectory(prefix="libflix-pdf-") as directory:
+        image_dir = os.path.join(directory, "Images")
+        os.makedirs(image_dir)
+        html_path = os.path.join(directory, "book.html")
+        with open(source_path, "rb") as source, open(html_path, "w", encoding="utf-8") as document:
+            reader = PdfReader(source)
+            if reader.is_encrypted:
+                raise ValueError("Password-protected PDFs cannot be converted")
+            if not 0 < len(reader.pages) <= PDF_MAX_PAGES:
+                raise ValueError("PDF conversion supports 1 to 2000 pages")
+            metadata = reader.metadata or {}
+            title = _xml_text(metadata.get("/Title") or "Book")
+            author = _xml_text(metadata.get("/Author") or "")
+            language = _xml_text(reader.trailer['/Root'].get('/Lang') or 'und')
+            text_count = image_bytes = image_count = 0
+            has_content = False
+            document.write("<html><body>")
+            for number, page in enumerate(reader.pages, 1):
+                text = _xml_text(page.extract_text() or "")
+                text_count += len(text)
+                if text_count > PDF_MAX_TEXT:
+                    raise ValueError("PDF contains too much text to convert")
+                if number > 1:
+                    document.write("<mbp:pagebreak />")
+                document.write(f"<h2>Page {number}</h2>")
+                for paragraph in re.split(r"\n\s*\n", text.strip()):
+                    if paragraph.strip():
+                        has_content = True
+                        document.write("<p>" + html.escape(" ".join(paragraph.splitlines())) + "</p>")
+                for image_file in page.images:
+                    image = image_file.image
+                    try:
+                        if image.width * image.height > PDF_MAX_IMAGE_PIXELS:
+                            raise ValueError("PDF image is too large to convert")
+                        image_count += 1
+                        name = f"image{image_count:05d}.png"
+                        path = os.path.join(image_dir, name)
+                        if image.mode not in {"RGB", "RGBA", "L", "LA", "P", "1"}:
+                            with image.convert("RGB") as rgb:
+                                rgb.save(path, format="PNG")
+                        else:
+                            image.save(path, format="PNG")
+                    finally:
+                        image.close()
+                    image_bytes += os.path.getsize(path)
+                    if image_bytes > PDF_MAX_BYTES:
+                        raise ValueError("PDF images are too large to convert")
+                    has_content = True
+                    document.write(f'<p><img src="Images/{name}" alt="Page {number} image" style="max-width:100%;height:auto;"/></p>')
+            document.write("</body></html>")
+            if not has_content:
+                raise ValueError("PDF contains no extractable text or images")
+        with open(os.path.join(directory, "content.opf"), "w", encoding="utf-8") as metadata_file:
+            metadata_file.write(
+                '<package><metadata><dc:title>' + html.escape(title)
+                + '</dc:title><dc:creator>' + html.escape(author)
+                + '</dc:creator><dc:language>' + html.escape(language)
+                + '</dc:language></metadata></package>'
+            )
+        build_epub_from_mobi7(html_path, output_path)
 
 
 XHTML_HEADER = (

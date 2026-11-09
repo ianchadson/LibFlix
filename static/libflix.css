@@ -1722,7 +1722,8 @@ button.edition-recommended {
   gap: 6px;
 }
 
-.edition-actions.has-apple-books {
+.edition-actions.has-apple-books,
+.edition-actions.has-epub-conversion {
   grid-template-columns: repeat(3, minmax(92px, 1fr));
 }
 
@@ -1750,20 +1751,23 @@ button.edition-recommended {
   stroke-linejoin: round;
 }
 
-.edition-download {
+.edition-download,
+.edition-epub-convert {
   border: 1px solid rgba(255, 255, 255, .14);
   background: #1a1c20;
   color: #e1e2e5;
   box-shadow: none;
 }
 
-.edition-download:hover {
+.edition-download:hover,
+.edition-epub-convert:hover {
   border-color: rgba(255, 255, 255, .28);
   background: #22252a;
   color: #fff;
 }
 
-.edition-download.busy {
+.edition-download.busy,
+.edition-epub-convert.busy {
   opacity: .72;
   pointer-events: none;
 }
@@ -2890,7 +2894,8 @@ button.edition-recommended {
     margin-top: 1px;
   }
 
-  .edition-actions.has-apple-books {
+  .edition-actions.has-apple-books,
+  .edition-actions.has-epub-conversion {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 

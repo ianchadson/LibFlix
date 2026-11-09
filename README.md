@@ -285,11 +285,22 @@ Read signals also supply cached weekly and monthly homepage rails.
   Setup validates the installer before offering the next step, preserves the
   selected book, and provides an EPUB fallback. Handoff feedback resets on return
   with a setup-repair link; the browser cannot confirm that Books imported a file.
-- **Kindle-compatible results** - EPUB and PDF editions send directly. MOBI and
-  AZW3 editions (including older KF7 MOBI files) are converted to EPUB before
-  Send to Kindle (`Convert & Kindle`);
+- **EPUB-first Kindle delivery** - EPUB editions send directly. PDF, MOBI and
+  AZW3 editions (including older KF7 MOBI files) automatically become EPUB before
+  Send to Kindle (legacy editions show `Convert & Kindle`);
   if conversion fails the send stops with a clear error rather than mailing a
-  file Amazon would reject. DRM-era AZW editions stay hidden.
+  different format. DRM-era AZW editions stay hidden.
+- **EPUB downloads from PDF editions** - PDF rows retain their original PDF
+  download and offer an EPUB download with live transfer/conversion progress.
+  The EPUB link also works without JavaScript. Conversion runs locally using
+  the existing `pypdf` dependency, preserves extractable text and embedded raster
+  images in page order, and reuses a separately namespaced, versioned cache for
+  later downloads and Kindle sends. Scans retain images without OCR; columns,
+  tables, vector artwork and precise PDF layout are not reproduced. Prefer a
+  native EPUB when available. Password-protected, empty or oversized PDFs fail
+  visibly, leaving the original PDF available. Conversion is bounded to 100 MB,
+  2,000 pages, 10 million text characters, 20 million pixels per image and 100 MB
+  of extracted image files. No conversion service or new system binary is needed.
 - **Send to Kindle settings** - the global Settings menu opens a keyboard-safe
   Kindle sheet with password visibility, local browser storage, a forget
   action, and a visible configured / configure-connection state.
@@ -309,11 +320,10 @@ Read signals also supply cached weekly and monthly homepage rails.
   the clean Open Library title to the attachment. EPUB files also receive
   missing author, language, publisher, date, description, work identifier, and
   cover metadata without re-encoding their chapters. A cover already displayed
-  by LibFlix is reused from the server cache instead of downloaded again. PDFs
-  receive a clean title plus missing author/description metadata. Unsupported
-  MOBI/AZW files are excluded before rendering or delivery.
-  Unsupported, malformed, or encrypted files fall back to the unmodified
-  original rather than blocking delivery.
+  by LibFlix is reused from the server cache instead of downloaded again.
+  PDF and legacy-format conversion runs before this EPUB metadata step. Cosmetic
+  metadata repair can keep the existing EPUB on failure; a failed conversion
+  never falls back to sending a PDF or legacy file.
 - **Kindle-aware recommendations** - the best candidate is selected by title,
   author, language, format, file sanity, and metadata quality. The chosen row
   explains its strongest signals, while English mode rejects Chinese
@@ -427,7 +437,7 @@ Read signals also supply cached weekly and monthly homepage rails.
 | `/book/OL...W` | Book detail, similar books, download search |
 | `/fiction/cn/book/OL...W` | Book detail with clean mode/language context |
 | `/search?q=...` | Direct libgen download search page |
-| `/download/<md5>` | Verified local file download, with a streamed-source fallback |
+| `/download/<md5>` | Original file download; `?format=epub&source_ext=pdf` converts a PDF on demand |
 | `/api/shelf/<topic>` | JSON endpoint for homepage shelf pagination |
 | `/api/category/<topic>` | JSON endpoint for category infinite scroll |
 | `/api/discover` | JSON endpoint for discovery search pagination |
@@ -440,7 +450,7 @@ Read signals also supply cached weekly and monthly homepage rails.
 | `/api/cn-display-titles` | Batched English display-title lookup for visible CN cards |
 | `/api/similar` | JSON endpoint for canonical similar books with mapped Inventaire outage fallback |
 | `/api/search` | JSON endpoint for libgen download search |
-| `/api/download/prepare/<md5>` | Streams source preparation progress before an EPUB/PDF download |
+| `/api/download/prepare/<md5>` | Streams preparation progress; `?ext=pdf&format=epub` also converts and caches EPUB |
 | `/api/kindle/jobs` | Start a background Send to Kindle delivery |
 | `/api/kindle/jobs/<job_id>` | Poll incremental delivery status |
 | `/api/sendtokindle` | Compatibility endpoint for synchronous/streaming delivery |

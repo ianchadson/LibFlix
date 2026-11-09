@@ -352,7 +352,7 @@
     const extension = String(book.ext || '').toLowerCase();
     const format = extension || 'file';
     const kindleCompatible = book.kindle_compatible === true;
-    const kindleConversion = book.kindle_conversion === true;
+    const kindleConversion = book.kindle_conversion === true && extension !== 'pdf';
     const recommended = book.best_match === true;
     const reasons = Array.isArray(book.recommendation_reasons)
       ? book.recommendation_reasons.filter(Boolean).slice(0, 4)
@@ -372,6 +372,9 @@
     const filename = cleanFilename(book.title, format);
     const downloadHref = book.md5
       ? '/download/' + encodeURIComponent(book.md5) + '?filename=' + encodeURIComponent(filename)
+      : '';
+    const epubHref = extension === 'pdf' && book.md5
+      ? '/download/' + encodeURIComponent(book.md5) + '?format=epub&source_ext=pdf&filename=' + encodeURIComponent(cleanFilename(book.title, 'epub'))
       : '';
     const appleBooksAvailable = extension === 'epub' && appleBooksSupported;
     const appleBooksDownloadUrl = appleBooksAvailable
@@ -398,8 +401,11 @@
       metaItem(shorten(book.language, 18)),
     ].join('');
     const actions = book.md5
-      ? '<div class="edition-actions' + (appleBooksAvailable ? ' has-apple-books' : '') + '">' +
+      ? '<div class="edition-actions' + (appleBooksAvailable ? ' has-apple-books' : '') + (epubHref ? ' has-epub-conversion' : '') + '">' +
           '<a class="edition-action edition-download" href="' + downloadHref + '" data-md5="' + escapeHtml(book.md5) + '" data-format="' + escapeHtml(format) + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>' + escapeHtml(format.toUpperCase()) + '</span></a>' +
+          (epubHref
+            ? '<a class="edition-action edition-epub-convert" href="' + escapeHtml(epubHref) + '" data-md5="' + escapeHtml(book.md5) + '" aria-label="Download ' + escapeHtml(title) + ' as EPUB">' + icons.download + '<span>EPUB</span></a>'
+            : '') +
           (appleBooksAvailable
             ? '<a class="edition-action edition-apple-books" href="' + escapeHtml(appleBooksHref) + '" aria-label="Open ' + escapeHtml(title) + ' in Apple Books"><span> Books</span></a>'
             : '') +
@@ -472,6 +478,13 @@
     if (!container || wiredContainers.has(container)) return;
     wiredContainers.add(container);
     container.addEventListener('click', event => {
+      const epubDownload = event.target.closest('.edition-epub-convert');
+      if (epubDownload && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        if (epubDownload.classList.contains('busy')) return;
+        downloadConvertedEpub(epubDownload);
+        return;
+      }
       const appleBooks = event.target.closest('.edition-apple-books');
       if (appleBooks) {
         if (appleBooks.dataset.opening === 'true') {
@@ -523,15 +536,39 @@
     });
   }
 
-  function createKindleProgress(button) {
+  async function downloadConvertedEpub(download) {
+    if (!download.dataset.originalHtml) download.dataset.originalHtml = download.innerHTML;
+    const panel = createKindleProgress(download, 'epub');
+    panel?.querySelector('[role="progressbar"]')?.setAttribute('aria-label', 'EPUB download progress');
+    setDownloadBusy(download, 'Preparing EPUB');
+    try {
+      const response = await fetch('/api/download/prepare/' + encodeURIComponent(download.dataset.md5) + '?ext=pdf&format=epub', {
+        headers: { Accept: 'application/x-ndjson' }, cache: 'no-store',
+      });
+      await readKindleProgress(response, event => {
+        updateKindleProgress(panel, { ...event, detail: event.error || event.detail || '' });
+        if (event.type === 'complete' && panel) panel.querySelector('.kindle-progress-value').textContent = 'Ready';
+      });
+      window.location.assign(download.href);
+    } catch (error) {
+      updateKindleProgress(panel, { type: 'error', stage: 'EPUB unavailable', detail: error.message });
+      panel?.setAttribute('role', 'alert');
+      window.LibFlixNotify?.('EPUB conversion failed: ' + error.message, 'error');
+    } finally {
+      resetDownload(download);
+    }
+  }
+
+  function createKindleProgress(button, purpose = 'kindle') {
     const row = button?.closest('.edition-row');
     if (!row) return null;
     const disclosure = button.closest('.edition-more');
     if (disclosure) disclosure.open = true;
-    let panel = row.querySelector('.kindle-progress');
+    let panel = row.querySelector('[data-progress-purpose="' + purpose + '"]');
     if (!panel) {
       panel = document.createElement('div');
       panel.className = 'kindle-progress';
+      panel.dataset.progressPurpose = purpose;
       panel.setAttribute('role', 'status');
       panel.setAttribute('aria-live', 'polite');
       panel.innerHTML =
