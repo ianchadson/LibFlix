@@ -35,6 +35,28 @@ def scanned_pdf(path):
 
 
 class ReadingTests(unittest.TestCase):
+    def test_literal_web_links_preserve_punctuation_and_exact_reading_text(self):
+        from bs4 import BeautifulSoup
+        from pdf_reading import inline_html
+        text = ('Read (https://example.org/a_(b)?x=1&y=2), then '
+                'https://example.org/end. <Safe> & unchanged.')
+        soup = BeautifulSoup(inline_html(text), 'html.parser')
+        self.assertEqual(soup.get_text(), text)
+        self.assertEqual([a['href'] for a in soup.find_all('a')],
+                         ['https://example.org/a_(b)?x=1&y=2', 'https://example.org/end'])
+
+    def test_web_links_do_not_guess_broken_or_unsafe_addresses(self):
+        from bs4 import BeautifulSoup
+        from pdf_reading import inline_html
+        for text in ['https://', 'https://[bad', 'https://example.org:99999/a',
+                     'https://user:password@example.org/a', 'javascript:alert(1)',
+                     'www.example.org', '<script>https://</script>']:
+            with self.subTest(text=text):
+                soup = BeautifulSoup('<span>' + inline_html(text) + '</span>', 'html.parser')
+                self.assertEqual(soup.get_text(), text)
+                self.assertFalse(soup.find('a'))
+                self.assertFalse(soup.find('script'))
+
     def test_wrapped_words_paragraphs_headers_and_numbers(self):
         pages = [f'Garden Notes\nA differ-\nent story for page {i}.\n\nA second paragraph.\n{i}' for i in range(1, 4)]
         cleaned = clean_pages(pages)
@@ -80,7 +102,7 @@ class ReadingTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, 'Tesseract OCR installed'):
                         ocr_page(page, directory, 0, 'eng')
 
-    def test_already_ocr_scan_does_not_run_ocr_or_duplicate_scan(self):
+    def test_unaligned_existing_ocr_preserves_scan_or_refreshes_with_available_engine(self):
         from pypdf import PdfReader, PdfWriter
         from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
         from test_pdf_epub import pdf_bytes
@@ -96,12 +118,55 @@ class ReadingTests(unittest.TestCase):
             writer = PdfWriter(); writer.add_page(reader.pages[0])
             with Path(directory, 'layered.pdf').open('wb') as output: writer.write(output)
             writer.close()
+            with patch('book_conversion.shutil.which', return_value=None), patch('pdf_reading.ocr_page', side_effect=AssertionError('OCR unavailable')):
+                book_conversion.build_epub_from_pdf(str(Path(directory, 'layered.pdf')), str(Path(directory, 'out.epub')))
+            with zipfile.ZipFile(Path(directory, 'out.epub')) as archive:
+                text = archive.read('OEBPS/part0000.xhtml').decode()
+                self.assertNotIn('Existing OCR words', text)
+                self.assertIn('<img', text)
+                self.assertIn('Original page 1', text)
+            from pdf_reading import ReadingPage, ReadingBlock
+            refreshed = ReadingPage([ReadingBlock('text', (0, 0, 100, 100), 'Refreshed readable content.')], (600, 800))
+            with patch('book_conversion.shutil.which', return_value='tesseract'), patch('pdf_reading.ocr_page', return_value=refreshed) as engine:
+                book_conversion.build_epub_from_pdf(str(Path(directory, 'layered.pdf')), str(Path(directory, 'fresh.epub')))
+                engine.assert_called_once()
+            with zipfile.ZipFile(Path(directory, 'fresh.epub')) as archive:
+                self.assertIn(b'Refreshed readable content.', archive.read('OEBPS/part0000.xhtml'))
+                self.assertFalse(any(name.startswith('OEBPS/Images/') for name in archive.namelist()))
+
+    def test_aligned_existing_ocr_is_reused_without_duplicate_scan(self):
+        from pypdf import PdfReader, PdfWriter
+        from pypdf.generic import DecodedStreamObject, NameObject
+        from test_pdf_epub import pdf_bytes
+        import pypdfium2 as pdfium
+        from contextlib import closing
+        sentence = b'Existing OCR words form a complete readable sentence.'
+        writer = PdfWriter(clone_from=io.BytesIO(pdf_bytes()))
+        stream = DecodedStreamObject()
+        stream.set_data(b'BT /F1 6 Tf 20 100 Td (' + sentence + b') Tj ET')
+        writer.pages[0][NameObject('/Contents')] = stream
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory, 'native.pdf')
+            with original.open('wb') as output: writer.write(output)
+            with pdfium.PdfDocument(original) as pdf, closing(pdf[0]) as page, closing(page.render(scale=2)) as bitmap:
+                image = bitmap.to_pil()
+                try: image.save(Path(directory, 'scan.pdf'), 'PDF', resolution=144)
+                finally: image.close()
+            reader = PdfReader(Path(directory, 'scan.pdf'))
+            reader.pages[0]['/Resources'][NameObject('/Font')] = writer.pages[0]['/Resources']['/Font']
+            layered = DecodedStreamObject()
+            layered.set_data(reader.pages[0].get_contents().get_data() + b'\nBT /F1 6 Tf 3 Tr 20 100 Td (' + sentence + b') Tj ET')
+            reader.pages[0][NameObject('/Contents')] = layered
+            final = PdfWriter(); final.add_page(reader.pages[0])
+            with Path(directory, 'layered.pdf').open('wb') as output: final.write(output)
             with patch('pdf_reading.ocr_page', side_effect=AssertionError('OCR repeated')):
                 book_conversion.build_epub_from_pdf(str(Path(directory, 'layered.pdf')), str(Path(directory, 'out.epub')))
             with zipfile.ZipFile(Path(directory, 'out.epub')) as archive:
                 text = archive.read('OEBPS/part0000.xhtml').decode()
-                self.assertIn('Existing OCR words', text)
+                self.assertIn(sentence.decode(), text)
                 self.assertNotIn('<img', text)
+            final.close()
+        writer.close()
 
 
 class ConversionQueueTests(unittest.TestCase):

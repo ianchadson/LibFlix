@@ -238,6 +238,22 @@ class Mobi7ConversionTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.extraction))
         book_conversion.cleanup_path(result.path)
 
+    def test_kf7_undefined_language_uses_packager_default(self):
+        opf_path = os.path.join(self.book_dir, "content.opf")
+        with open(opf_path, encoding="utf-8") as handle:
+            opf = handle.read().replace("<dc:language>en</dc:language>",
+                                        "<dc:language>und</dc:language>")
+        with open(opf_path, "w", encoding="utf-8") as handle:
+            handle.write(opf)
+        html_path = os.path.join(self.book_dir, "book.html")
+        with patch("mobi.extract", return_value=(self.extraction, html_path)):
+            result = convert_to_epub(self.mobi_path, "mobi")
+        self.assertTrue(result.path, result.warning)
+        self.addCleanup(book_conversion.cleanup_path, result.path)
+        with zipfile.ZipFile(result.path) as archive:
+            root = ElementTree.fromstring(archive.read("OEBPS/content.opf"))
+            self.assertEqual(root.find(".//{http://purl.org/dc/elements/1.1/}language").text, "en")
+
     def test_kf7_conversion_failure_cleans_up(self):
         html_path = os.path.join(self.book_dir, "book.html")
         with open(html_path, "w", encoding="utf-8") as handle:

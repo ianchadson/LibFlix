@@ -9,6 +9,8 @@
     info: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5"></path><path d="M12 8h.01"></path></svg>',
     books: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H11a2 2 0 0 1 2 2v15a2.7 2.7 0 0 0-2.4-1.5H4Z"></path><path d="M20 5.5A2.5 2.5 0 0 0 17.5 3H13v17a2.7 2.7 0 0 1 2.4-1.5H20Z"></path></svg>',
   };
+  let kindleMenuSerial = 0;
+  const kindlePdfFormats = new Map();
   const hiddenKindleFormats = new Set(['azw']);
   const appleBooksShortcutName = 'LibFlix to Books';
   const appleBooksShortcutStorageKey = 'libflix.appleBooksShortcutReady';
@@ -400,6 +402,22 @@
       metaItem(book.pages ? book.pages + ' pages' : ''),
       metaItem(shorten(book.language, 18)),
     ].join('');
+    const pdfKindle = extension === 'pdf' && kindleCompatible;
+    const pdfDelivery = readActiveKindleJobs()[String(book.md5).toLowerCase()]?.pdfDelivery
+      || kindlePdfFormats.get(book.md5) || 'epub';
+    const kindleFormat = pdfDelivery === 'original' ? 'Original PDF' : 'Convert to EPUB';
+    const kindleAction = kindleCompatible
+      ? '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(coverUrl) + '" data-format="' + escapeHtml(format) + '" data-pdf-delivery="' + pdfDelivery + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>' + (kindleConversion ? 'Convert &amp; Kindle' : 'Kindle') + '</span></button>'
+      : '';
+    const kindleMenuId = 'kindle-format-' + (++kindleMenuSerial);
+    const kindleControls = pdfKindle
+      ? '<div class="edition-kindle-options">' + kindleAction +
+          '<button class="edition-kindle-toggle" type="button" aria-label="Kindle format: ' + kindleFormat + '" aria-haspopup="menu" aria-expanded="false" aria-controls="' + kindleMenuId + '" popovertarget="' + kindleMenuId + '">' + icons.chevron + '</button>' +
+          '<div class="edition-kindle-menu" id="' + kindleMenuId + '" role="menu" aria-label="Send to Kindle" popover="auto">' +
+            '<button type="button" role="menuitemradio" aria-checked="' + (pdfDelivery === 'epub') + '" tabindex="-1" data-pdf-delivery="epub"><span class="kindle-format-check" aria-hidden="true">✓</span>Convert to EPUB</button>' +
+            '<button type="button" role="menuitemradio" aria-checked="' + (pdfDelivery === 'original') + '" tabindex="-1" data-pdf-delivery="original"><span class="kindle-format-check" aria-hidden="true">✓</span>Original PDF</button>' +
+          '</div></div>'
+      : kindleAction;
     const actions = book.md5
       ? '<div class="edition-actions' + (appleBooksAvailable ? ' has-apple-books' : '') + (epubHref ? ' has-epub-conversion' : '') + '">' +
           '<a class="edition-action edition-download" href="' + downloadHref + '" data-md5="' + escapeHtml(book.md5) + '" data-format="' + escapeHtml(format) + '" aria-label="Download ' + escapeHtml(title) + ' as ' + escapeHtml(format.toUpperCase()) + '">' + icons.download + '<span>' + escapeHtml(format.toUpperCase()) + '</span></a>' +
@@ -409,9 +427,7 @@
           (appleBooksAvailable
             ? '<a class="edition-action edition-apple-books" href="' + escapeHtml(appleBooksHref) + '" aria-label="Open ' + escapeHtml(title) + ' in Apple Books"><span> Books</span></a>'
             : '') +
-          (kindleCompatible
-            ? '<button class="edition-action edition-kindle" type="button" data-md5="' + escapeHtml(book.md5) + '" data-title="' + escapeHtml(book.title || '') + '" data-author="' + escapeHtml(book.author || '') + '" data-publisher="' + escapeHtml(book.publisher || '') + '" data-year="' + escapeHtml(book.year || '') + '" data-language="' + escapeHtml(book.language || '') + '" data-cover-url="' + escapeHtml(coverUrl) + '" data-format="' + escapeHtml(format) + '" aria-label="Send ' + escapeHtml(title) + ' to Kindle">' + icons.send + '<span>' + (kindleConversion ? 'Convert &amp; Kindle' : 'Kindle') + '</span></button>'
-            : '') +
+          kindleControls +
         '</div>'
       : '<div class="edition-actions"><span class="edition-action edition-kindle" aria-disabled="true">Unavailable</span></div>';
 
@@ -474,10 +490,82 @@
     if (download.dataset.originalHtml) download.innerHTML = download.dataset.originalHtml;
   }
 
+  function closeKindleMenu(group, restoreFocus = false) {
+    const menu = group?.querySelector('.edition-kindle-menu');
+    if (menu?.matches(':popover-open')) menu.hidePopover();
+    const toggle = group?.querySelector('.edition-kindle-toggle');
+    toggle?.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) toggle?.focus();
+  }
+
+  function openKindleMenu(toggle, last = false) {
+    if (toggle.disabled) return;
+    const menu = toggle.closest('.edition-kindle-options').querySelector('.edition-kindle-menu');
+    menu.showPopover();
+    const anchor = toggle.getBoundingClientRect();
+    const bounds = menu.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(anchor.right - bounds.width, window.innerWidth - bounds.width - 8)) + 'px';
+    menu.style.top = Math.max(8, anchor.bottom + bounds.height + 6 <= window.innerHeight
+      ? anchor.bottom + 6 : anchor.top - bounds.height - 6) + 'px';
+    toggle.setAttribute('aria-expanded', 'true');
+    if (!menu.dataset.wired) {
+      menu.dataset.wired = 'true';
+      menu.addEventListener('toggle', () => toggle.setAttribute('aria-expanded', String(menu.matches(':popover-open'))));
+    }
+    const items = menu.querySelectorAll('[role="menuitemradio"]');
+    items[last ? items.length - 1 : 0]?.focus();
+  }
+
   function wireActions(container) {
     if (!container || wiredContainers.has(container)) return;
     wiredContainers.add(container);
+    container.addEventListener('keydown', event => {
+      const toggle = event.target.closest('.edition-kindle-toggle');
+      if (toggle && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
+        event.preventDefault();
+        openKindleMenu(toggle, event.key === 'ArrowUp');
+        return;
+      }
+      const menu = event.target.closest('.edition-kindle-menu');
+      if (!menu) return;
+      if (['Escape', 'Tab'].includes(event.key)) {
+        if (event.key === 'Escape') event.preventDefault();
+        closeKindleMenu(menu.parentElement, true);
+      } else if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault();
+        const items = [...menu.querySelectorAll('[role="menuitemradio"]')];
+        const index = items.indexOf(document.activeElement);
+        const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+          : (index + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        items[next]?.focus();
+      }
+    });
     container.addEventListener('click', event => {
+      const toggle = event.target.closest('.edition-kindle-toggle');
+      if (toggle) {
+        event.preventDefault();
+        const group = toggle.closest('.edition-kindle-options');
+        if (group.querySelector('.edition-kindle-menu').matches(':popover-open')) closeKindleMenu(group, true);
+        else openKindleMenu(toggle);
+        return;
+      }
+      const choice = event.target.closest('[data-pdf-delivery][role="menuitemradio"]');
+      if (choice) {
+        const group = choice.closest('.edition-kindle-options');
+        const button = group.querySelector('.edition-kindle');
+        if (group.querySelector('.edition-kindle-toggle').disabled) return;
+        const mode = choice.dataset.pdfDelivery;
+        button.dataset.pdfDelivery = mode;
+        kindlePdfFormats.set(button.dataset.md5, mode);
+        group.querySelectorAll('[role="menuitemradio"]').forEach(item => {
+          item.setAttribute('aria-checked', String(item.dataset.pdfDelivery === mode));
+        });
+        const label = mode === 'original' ? 'Original PDF' : 'Convert to EPUB';
+        group.querySelector('.edition-kindle-toggle').setAttribute('aria-label', 'Kindle format: ' + label);
+        button.setAttribute('aria-label', 'Send ' + button.dataset.title + ' to Kindle as ' + (mode === 'original' ? 'original PDF' : 'EPUB'));
+        closeKindleMenu(group, true);
+        return;
+      }
       const epubDownload = event.target.closest('.edition-epub-convert');
       if (epubDownload && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
         event.preventDefault();
@@ -520,6 +608,7 @@
         return;
       }
       if (typeof window.sendToKindle !== 'function') return;
+      const pdfDelivery = kindle.dataset.pdfDelivery || 'epub';
       window.sendToKindle(
         kindle.dataset.md5,
         kindle.dataset.title,
@@ -531,6 +620,7 @@
           year: kindle.dataset.year || '',
           language: kindle.dataset.language || '',
           coverUrl: kindle.dataset.coverUrl || '',
+          pdfDelivery,
         },
       );
     });
@@ -632,6 +722,7 @@
     jobs[String(md5).toLowerCase()] = {
       jobId,
       title: metadata.canonical_title || metadata.title || 'Book',
+      pdfDelivery: metadata.pdf_delivery === 'original' ? 'original' : 'epub',
       startedAt: Date.now(),
     };
     writeActiveKindleJobs(jobs);
@@ -917,6 +1008,11 @@
     if (!button.dataset.originalHtml) button.dataset.originalHtml = button.innerHTML;
     if (!button.dataset.originalAriaLabel) button.dataset.originalAriaLabel = button.getAttribute('aria-label') || 'Send to Kindle';
 
+    const formatToggle = button.closest('.edition-kindle-options')?.querySelector('.edition-kindle-toggle');
+    if (formatToggle) {
+      closeKindleMenu(formatToggle.closest('.edition-kindle-options'));
+      formatToggle.disabled = true;
+    }
     const panel = createKindleProgress(button);
     const trayMetadata = {
       title: payload.canonical_title || payload.title || button.dataset.title || 'Book',
@@ -1007,6 +1103,7 @@
     } finally {
       button.classList.remove('sending');
       button.removeAttribute('aria-busy');
+      if (formatToggle) formatToggle.disabled = Boolean(storedKindleJobId(payload.md5));
     }
   }
 

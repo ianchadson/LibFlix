@@ -79,13 +79,64 @@ class PdfConversionTests(unittest.TestCase):
                     ElementTree.fromstring(archive.read(name))
             self.assertIn(b'Example &amp; Book', archive.read('OEBPS/content.opf'))
             self.assertIn(b'Hello &amp; &lt;world&gt;.', archive.read('OEBPS/part0000.xhtml'))
+            self.assertIn(b'<dc:language>en</dc:language>', archive.read('OEBPS/content.opf'))
+
+    def test_pdf_language_is_normalised_or_defaults_when_unspecified(self):
+        from pypdf.generic import TextStringObject
+        for language, expected in [('und', 'en'), ('', 'en'), ('eng', 'en'),
+                                   ('English', 'en'), ('en_US', 'en-us'),
+                                   ('de-DE', 'de-de'), ('zh-CN', 'zh'),
+                                   ('not a language', 'en')]:
+            with self.subTest(language=language):
+                writer = PdfWriter(clone_from=io.BytesIO(pdf_bytes()))
+                writer.root_object[NameObject('/Lang')] = TextStringObject(language)
+                with self.source.open('wb') as output:
+                    writer.write(output)
+                writer.close()
+                result = book_conversion.convert_to_epub(str(self.source), 'pdf')
+                self.addCleanup(book_conversion.cleanup, result)
+                self.assertTrue(result.path, result.warning)
+                with zipfile.ZipFile(result.path) as archive:
+                    root = ElementTree.fromstring(archive.read('OEBPS/content.opf'))
+                    self.assertEqual(root.find('.//{http://purl.org/dc/elements/1.1/}language').text, expected)
+                    document = ElementTree.fromstring(archive.read('OEBPS/part0000.xhtml'))
+                    self.assertEqual(document.get('{http://www.w3.org/XML/1998/namespace}lang'), expected)
+
+    def test_pdf_navigation_targets_sections_and_preserved_pages_without_content_changes(self):
+        from bs4 import BeautifulSoup
+        root = Path(self.directory.name)
+        book = root / 'book.html'
+        original = ('<html><body><div><h2>Chapter 1 &amp; More</h2>'
+                    '<p>A paragraph crossing a page continues here.</p>'
+                    '<p><img src="Images/a.jpg" alt="Illustration on page 1"/></p>'
+                    '<p><img src="Images/b.jpg" alt="Original page 2"/></p>'
+                    '<h2>Next section</h2><pre><code>https://example.org</code></pre>'
+                    '</div></body></html>')
+        book.write_text(original)
+        book_conversion._add_pdf_navigation(str(book))
+        before = BeautifulSoup(original, 'html.parser')
+        after = BeautifulSoup(book.read_text(), 'html.parser')
+        self.assertEqual(after.get_text(), before.get_text())
+        self.assertEqual([str(x) for x in after.find_all('img')],
+                         [str(x) for x in before.find_all('img')])
+        book_conversion.build_epub_from_mobi7(str(book), str(root / 'book.epub'))
+        ns = {'n': 'http://www.daisy.org/z3986/2005/ncx/'}
+        with zipfile.ZipFile(root / 'book.epub') as archive:
+            toc = ElementTree.fromstring(archive.read('OEBPS/toc.ncx'))
+            self.assertEqual([x.text for x in toc.findall('.//n:navLabel/n:text', ns)],
+                             ['Chapter 1 & More', 'Original page 2', 'Next section'])
+            for target in toc.findall('.//n:content', ns):
+                filename, anchor = target.get('src').split('#')
+                document = ElementTree.fromstring(archive.read('OEBPS/' + filename))
+                self.assertEqual(len(document.findall(f'.//*[@id="{anchor}"]')), 1)
 
     def test_scanned_page_keeps_image_without_ocr(self):
         result = self.convert(text=False, image=True)
         self.assertTrue(result.path, result.warning)
         with zipfile.ZipFile(result.path) as archive:
-            self.assertIn('OEBPS/Images/image00001.png', archive.namelist())
-            self.assertIn(b'Images/image00001.png', archive.read('OEBPS/part0000.xhtml'))
+            images = [name for name in archive.namelist() if name.startswith('OEBPS/Images/')]
+            self.assertEqual(len(images), 1)
+            self.assertIn(images[0].removeprefix('OEBPS/').encode(), archive.read('OEBPS/part0000.xhtml'))
 
     def test_illustrated_page_keeps_text_and_image(self):
         result = self.convert(text=True, image=True)
@@ -186,13 +237,14 @@ class PdfDeliveryTests(unittest.TestCase):
             self.assertIn('no readable content', response.json['error'])
         self.assertEqual(Path(self.cached_pdf).read_bytes(), self.data)
 
-    def kindle_events(self):
+    def kindle_events(self, **options):
         FakeSMTP.connections = 0
         FakeSMTP.messages = []
         FakeSMTP.fail_first = False
         payload = {'md5': self.md5, 'ext': 'pdf', 'title': 'Example',
                    'kindle_email': 'reader@kindle.com', 'smtp_host': 'smtp.example.com',
                    'smtp_port': 587, 'smtp_user': 'sender@example.com', 'smtp_pass': 'test-only'}
+        payload.update(options)
         with patch('smtplib.SMTP', FakeSMTP):
             return list(app._send_to_kindle_events(payload))
 
@@ -205,6 +257,34 @@ class PdfDeliveryTests(unittest.TestCase):
         self.assertEqual(attachment.get_filename(), 'Example.epub')
         self.assertEqual(attachment.get_content_type(), 'application/epub+zip')
         self.assertTrue(zipfile.is_zipfile(io.BytesIO(attachment.get_payload(decode=True))))
+
+    def test_original_pdf_ignores_converted_cache_and_preserves_attachment_bytes(self):
+        self.assertEqual(self.prepare()[-1]['type'], 'complete')
+        with patch.object(app, '_converted_epub_cache', side_effect=AssertionError('No converted cache')), \
+             patch.object(app, 'convert_to_epub', side_effect=AssertionError('No conversion')), \
+             patch.object(app, '_kindle_cover_bytes', side_effect=AssertionError('No cover fetch')), \
+             patch('book_preparation._rewrite_pdf', side_effect=AssertionError('No PDF rewrite')):
+            events = self.kindle_events(pdf_delivery='original', cover_url='https://example.org/cover.jpg')
+        self.assertEqual(events[-1]['type'], 'complete', events)
+        self.assertNotIn('Converting book', [e.get('stage') for e in events])
+        self.assertIn('Preparing original PDF', [e.get('stage') for e in events])
+        attachment = next(FakeSMTP.messages[-1].iter_attachments())
+        self.assertEqual(attachment.get_content_type(), 'application/pdf')
+        self.assertEqual(attachment.get_filename(), 'Example.pdf')
+        self.assertEqual(attachment.get_payload(decode=True), self.data)
+        self.assertEqual(Path(self.cached_pdf).read_bytes(), self.data)
+
+    def test_pdf_delivery_mode_is_validated_before_starting_a_job(self):
+        payload = {'md5': self.md5, 'ext': 'pdf', 'kindle_email': 'reader@kindle.com',
+                   'smtp_host': 'smtp.example.com', 'smtp_user': 'sender@example.com', 'smtp_pass': 'test-only'}
+        for mode, extension in [('unknown', 'pdf'), (None, 'pdf'), (True, 'pdf'),
+                                (['original'], 'pdf'), ('original', 'epub'), ('original', 'mobi')]:
+            with self.subTest(mode=mode, extension=extension), \
+                 patch.object(app.socket, 'getaddrinfo', side_effect=AssertionError('Reject before network lookup')), \
+                 patch.object(app, 'kindle_job_create', side_effect=AssertionError('No queued job')):
+                response = self.client.post('/api/kindle/jobs', json={**payload, 'ext': extension, 'pdf_delivery': mode})
+                self.assertEqual(response.status_code, 400)
+                self.assertIn('original PDF', response.json['error'])
 
     def test_kindle_converts_pdf_and_never_sends_pdf_on_failure(self):
         events = self.kindle_events()

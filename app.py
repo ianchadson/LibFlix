@@ -9931,7 +9931,7 @@ def _download_prepare_line(event):
 def _converted_epub_cache():
     # Derived bytes must never masquerade as the original content-MD5 source.
     return KindleSourceCache(
-        os.path.join(KINDLE_SOURCE_CACHE_DIR, "converted-epub-v3"),
+        os.path.join(KINDLE_SOURCE_CACHE_DIR, "converted-epub-v8"),
         ttl=KINDLE_SOURCE_CACHE_TTL,
         max_bytes=KINDLE_SOURCE_CACHE_MAX_BYTES,
     )
@@ -9940,7 +9940,8 @@ def _converted_epub_cache():
 def _converted_epub_key(book_id, extension):
     # A non-content-hash cache identifier, namespaced by converter version/type.
     language = os.environ.get("LIBFLIX_OCR_LANGUAGES", "eng")
-    return "rd" + hashlib.sha1(f"epub-v3:{language}:{book_id}:{extension}".encode()).hexdigest()
+    ocr = os.environ.get("LIBFLIX_PDF_OCR_ENABLED", "1") != "0"
+    return "rd" + hashlib.sha1(f"epub-v8:{language}:{ocr}:{book_id}:{extension}".encode()).hexdigest()
 
 
 @contextmanager
@@ -11043,6 +11044,7 @@ def _send_to_kindle_events(data):
 
     md5 = str(data.get("md5") or "").casefold()
     ext = re.sub(r"[^a-z0-9]", "", data.get("ext", "epub").lower()) or "epub"
+    send_original_pdf = ext == "pdf" and data.get("pdf_delivery") == "original"
     kindle_email = data.get("kindle_email", "").strip()
     smtp_configuration = _kindle_smtp_configuration(data)
     source_cache = _kindle_source_cache()
@@ -11071,13 +11073,13 @@ def _send_to_kindle_events(data):
             smtp_configuration,
             parallel_cancel,
         )
-        if (ext == "epub" or is_convertible(ext)) and data.get("cover_url"):
+        if not send_original_pdf and (ext == "epub" or is_convertible(ext)) and data.get("cover_url"):
             cover_future = parallel_executor.submit(timed_cover_load)
 
         yield tracker.event("Preparing delivery", progress, "Starting secure delivery tasks")
         derived_path = (
             _converted_epub_cache().get(_converted_epub_key(md5, ext), "epub")
-            if is_convertible(ext) else ""
+            if is_convertible(ext) and not send_original_pdf else ""
         )
         if derived_path:
             ext = "epub"
@@ -11116,7 +11118,7 @@ def _send_to_kindle_events(data):
             if source_path != tmp_path:
                 tmp_path = None
 
-        if is_convertible_kindle_format(ext):
+        if is_convertible_kindle_format(ext) and not send_original_pdf:
             progress = 66
             yield tracker.event(
                 "Converting book",
@@ -11139,7 +11141,11 @@ def _send_to_kindle_events(data):
                 )
 
         progress = 68
-        yield tracker.event("Polishing book details", progress, "Checking title, metadata, and cover")
+        yield tracker.event(
+            "Preparing original PDF" if send_original_pdf else "Polishing book details",
+            progress,
+            "Keeping the original file unchanged" if send_original_pdf else "Checking title, metadata, and cover",
+        )
         identifier = ""
         ol_key = str(data.get("ol_key") or "").strip()
         if re.fullmatch(r"/works/OL\d+W", ol_key):
@@ -11164,6 +11170,7 @@ def _send_to_kindle_events(data):
                 "identifier": identifier,
             },
             cover_loader=(lambda: cover_bytes) if cover_future else None,
+            preserve_original_pdf=send_original_pdf,
         )
         if prepared.temporary:
             prepared_path = prepared.path
@@ -11307,6 +11314,9 @@ def validate_kindle_payload(data):
     extension = re.sub(r"[^a-z0-9]", "", str(data.get("ext", "epub")).casefold()) or "epub"
     if not is_deliverable_kindle_format(extension):
         return "This file type is not supported by Send to Kindle; use EPUB, PDF, MOBI, or AZW3"
+    pdf_delivery = data.get("pdf_delivery", "epub")
+    if pdf_delivery not in ("epub", "original") or (pdf_delivery == "original" and extension != "pdf"):
+        return "Choose EPUB conversion or original PDF delivery for a PDF edition"
     smtp_configuration = _kindle_smtp_configuration(data)
     try:
         port = int(smtp_configuration["port"])

@@ -1200,6 +1200,7 @@
           cover_url: bookCoverUrl || edition.coverUrl || '',
           ol_key: olKey,
           ext: extension,
+          pdf_delivery: edition.pdfDelivery || 'epub',
           kindle_email: settings.kindle,
           ...(managedRelay ? {} : {
             smtp_host: settings.host,

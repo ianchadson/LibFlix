@@ -29,6 +29,8 @@ from contextlib import closing
 from dataclasses import dataclass
 from typing import Optional
 
+from book_preparation import normalize_language
+
 CONVERTIBLE_EXTENSIONS = frozenset({"pdf", "mobi", "azw3"})
 CONVERTIBLE_TARGET = "epub"
 PDF_MAX_BYTES = 25 * 1024 * 1024
@@ -258,15 +260,18 @@ def _xml_text(value: str) -> str:
 
 
 def build_epub_from_pdf(source_path: str, output_path: str) -> None:
-    """Reflow extractable text and retain embedded raster images, page by page.
+    """Reflow safe text/illustration layouts, preserve uncertain pages intact.
 
-    Scanned pages use selective OCR and become reflowable text. PDF positioning,
-    vector artwork,
-    columns and tables cannot be faithfully reconstructed by this extractor.
+    PDFium composes masks, vector graphics, rotation and image layers before
+    anything is exported. Tesseract layout separates scan artwork from prose.
     Reuse the existing XHTML/OPF/NCX packager; never modify the source PDF.
     """
     from pypdf import PdfReader
-    from pdf_reading import clean_pages, scan_coverage, ocr_page, paragraph_html
+    from pdf_reading import (clean_pages, scan_coverage, ocr_page, paragraph_html, inline_html,
+                             ReadingPage, ReadingBlock, render_page_image,
+                             existing_scan_page, remove_running_headers,
+                             native_illustrated_page, flow_blocks, join_page_continuations,
+                             scan_pages_to_preserve)
     import pypdfium2 as pdfium
 
     if os.path.getsize(source_path) > PDF_MAX_BYTES:
@@ -284,67 +289,129 @@ def build_epub_from_pdf(source_path: str, output_path: str) -> None:
             metadata = reader.metadata or {}
             title = _xml_text(metadata.get("/Title") or "Book")
             author = _xml_text(metadata.get("/Author") or "")
-            language = _xml_text(reader.trailer['/Root'].get('/Lang') or 'und')
-            text_count = image_bytes = image_count = decoded_pixels = 0
+            # PDFs commonly omit /Lang. Kindle rejects the syntactically valid
+            # BCP 47 placeholder "und", so use the packager's existing English
+            # default when no useful source language is available.
+            language = normalize_language(reader.trailer['/Root'].get('/Lang')) or "en"
+            text_count = image_bytes = 0
             pixel_budget = [0]
-            texts = []
-            scans = []
+            pages, scan_flags = [], []
             with pdfium.PdfDocument(source_path) as rendered:
                 for index, page in enumerate(reader.pages):
                     _preflight_pdf_images(page, pixel_budget)
                     text = _xml_text(page.extract_text(extraction_mode="layout") or "")
                     with closing(rendered[index]) as rendered_page:
                         scan = scan_coverage(rendered_page)
-                        # Keep existing useful text; OCR only image-dominated pages
-                        # with no usable text layer. A tiny caption is not a layer.
-                        if scan and len(re.sub(r"\s", "", text)) < 40:
+                        scan_flags.append(scan)
+                        if scan and os.environ.get('LIBFLIX_PDF_OCR_ENABLED', '1') == '0':
+                            path = render_page_image(rendered_page, image_dir, index)
+                            reading = ReadingPage([ReadingBlock('image', (0, 0, 0, 0), source=path)],
+                                                  fallback=True, reason='OCR disabled')
+                        elif scan and len(re.sub(r"\s", "", text)) < 40:
                             ocr_language = os.environ.get("LIBFLIX_OCR_LANGUAGES", "eng")
                             if not re.fullmatch(r"[A-Za-z0-9_+]+", ocr_language):
                                 raise ValueError("Invalid OCR language configuration")
-                            text = _xml_text(ocr_page(rendered_page, directory, index, ocr_language))
-                            if not text.strip():
-                                # Decorative/blank image pages have no text to reflow.
-                                scan = False
-                    text_count += len(text)
+                            reading = ocr_page(rendered_page, image_dir, index, ocr_language)
+                        elif scan:
+                            reading = existing_scan_page(rendered_page, text, image_dir, index)
+                            if reading.fallback:
+                                # Old hidden OCR can be misaligned or omit drawings.
+                                # Reanalyse the composed page when the local engine
+                                # is available; retain the intact page otherwise.
+                                if shutil.which('tesseract'):
+                                    language_config = os.environ.get('LIBFLIX_OCR_LANGUAGES', 'eng')
+                                    if not re.fullmatch(r'[A-Za-z0-9_+]+', language_config):
+                                        raise ValueError('Invalid OCR language configuration')
+                                    previous_images = {b.source for b in reading.blocks if b.source}
+                                    reading = ocr_page(rendered_page, image_dir, index, language_config)
+                                    for unused in previous_images - {b.source for b in reading.blocks}:
+                                        os.unlink(unused)
+                        else:
+                            reading = native_illustrated_page(rendered_page, image_dir, index)
+                    text_count += sum(len(block.text) for block in reading.blocks)
                     if text_count > PDF_MAX_TEXT:
                         raise ValueError("PDF contains too much text to convert")
-                    texts.append(text)
-                    scans.append(scan)
-            cleaned = clean_pages(texts)
+                    for block in reading.blocks:
+                        block.text = _xml_text(block.text)
+                        if block.source:
+                            image_bytes += os.path.getsize(block.source)
+                            if image_bytes > PDF_MAX_IMAGE_BYTES:
+                                raise ValueError("PDF images are too large to convert")
+                    pages.append(reading)
+                for index in scan_pages_to_preserve(pages, scan_flags):
+                    # Mutate the existing page so geometry consumers also see
+                    # the final representation. Unused crops are removed below.
+                    with closing(rendered[index]) as rendered_page:
+                        path = render_page_image(rendered_page, image_dir, index)
+                    reading = pages[index]
+                    reading.blocks = [ReadingBlock('image', (0, 0, *reading.size), source=path)]
+                    reading.fallback, reading.reason = True, 'Consistent layout for uncertain scanned book'
+                image_bytes = sum(os.path.getsize(block.source) for reading in pages
+                                  for block in reading.blocks if block.source)
+                if image_bytes > PDF_MAX_IMAGE_BYTES:
+                    raise ValueError("PDF images are too large to convert")
+            remove_running_headers(pages)
+            join_page_continuations(pages)
+            used_images = {block.source for reading in pages for block in reading.blocks if block.source}
+            for name in os.listdir(image_dir):
+                path = os.path.join(image_dir, name)
+                if path not in used_images:
+                    os.unlink(path)
+            # Preserve cross-page paragraph/word repair for ordinary native PDFs.
+            # Images and complex pages interrupt a run so prose never jumps art.
+            run = []
+            def finish_run():
+                if run:
+                    for reading, paragraphs in zip(run, clean_pages([p.blocks[0].text for p in run])):
+                        reading.blocks[0].text = '\n\n'.join(paragraphs)
+                    run.clear()
+            for reading in pages:
+                if reading.size == (0, 0) and len(reading.blocks) == 1 and reading.blocks[0].kind == 'text':
+                    run.append(reading)
+                else:
+                    finish_run()
+            finish_run()
             has_content = False
-            document.write("<html><body>")
-            for number, page in enumerate(reader.pages, 1):
-                paragraphs = cleaned[number - 1]
-                if paragraphs:
-                    has_content = True
-                    document.write(paragraph_html(paragraphs))
-                if scans[number - 1]:
-                    # The recognised/existing text replaces the page scan.
-                    continue
-                for image_file in page.images:
-                    image = image_file.image
-                    try:
-                        decoded_pixels += image.width * image.height
-                        if decoded_pixels > PDF_MAX_TOTAL_IMAGE_PIXELS:
-                            raise ValueError("PDF has too many image pixels to convert")
-                        if image.width * image.height > PDF_MAX_IMAGE_PIXELS:
-                            raise ValueError("PDF image is too large to convert")
-                        image_count += 1
-                        name = f"image{image_count:05d}.png"
-                        path = os.path.join(image_dir, name)
-                        if image.mode not in {"RGB", "RGBA", "L", "LA", "P", "1"}:
-                            with image.convert("RGB") as rgb:
-                                rgb.save(path, format="PNG")
-                        else:
-                            image.save(path, format="PNG")
-                    finally:
-                        image.close()
-                    image_bytes += os.path.getsize(path)
-                    if image_bytes > PDF_MAX_IMAGE_BYTES:
-                        raise ValueError("PDF images are too large to convert")
-                    has_content = True
-                    document.write(f'<p><img src="Images/{name}" alt="Page {number} image" style="max-width:100%;height:auto;"/></p>')
-            document.write("</body></html>")
+            document.write('<html><body><div style="overflow-wrap:anywhere;word-wrap:break-word;">')
+            text_run = []
+            def write_text_run():
+                if text_run:
+                    for paragraphs in clean_pages(text_run, edge_cleanup=False):
+                        document.write(paragraph_html(paragraphs))
+                    text_run.clear()
+            for number, reading in enumerate(pages, 1):
+                for block in flow_blocks(reading.blocks, text_run[-1] if text_run else ''):
+                    if block.kind == 'text':
+                        if block.text.strip():
+                            has_content = True
+                            if block.role:
+                                write_text_run()
+                                value = ' '.join(clean_pages([block.text], edge_cleanup=False)[0])
+                                if block.role == 'heading':
+                                    document.write('<h2>' + inline_html(value) + '</h2>')
+                                elif block.role == 'list':
+                                    # Keep the printed marker (including ordered
+                                    # numbering) and a hanging indent on reflow.
+                                    document.write('<p style="margin-left:1.2em;text-indent:-1.2em;">'
+                                                   + inline_html(value) + '</p>')
+                                elif block.role == 'code':
+                                    document.write('<pre style="white-space:pre-wrap;overflow-wrap:anywhere;">'
+                                                   '<code>' + html.escape(block.text) + '</code></pre>')
+                                elif block.role == 'verse':
+                                    document.write('<p>' + '<br/>'.join(inline_html(line) for line in
+                                                                      block.text.splitlines()) + '</p>')
+                            else:
+                                text_run.append(block.text)
+                    elif block.source:
+                        write_text_run()
+                        name = os.path.basename(block.source)
+                        label = f'Original page {number}' if reading.fallback else f'Illustration on page {number}'
+                        has_content = True
+                        document.write(f'<p style="text-align:center;page-break-inside:avoid;"><img '
+                                       f'src="Images/{name}" alt="{label}" '
+                                       'style="max-width:100%;height:auto;"/></p>')
+            write_text_run()
+            document.write("</div></body></html>")
             if not has_content:
                 raise ValueError("PDF contains no extractable text or images")
         with open(os.path.join(directory, "content.opf"), "w", encoding="utf-8") as metadata_file:
@@ -354,7 +421,40 @@ def build_epub_from_pdf(source_path: str, output_path: str) -> None:
                 + '</dc:creator><dc:language>' + html.escape(language)
                 + '</dc:language></metadata></package>'
             )
+        _add_pdf_navigation(html_path)
         build_epub_from_mobi7(html_path, output_path)
+
+
+def _add_pdf_navigation(html_path: str) -> None:
+    """Add section/page jumps to existing blocks without disturbing text flow."""
+    from bs4 import BeautifulSoup
+
+    with open(html_path, encoding="utf-8") as handle:
+        soup = BeautifulSoup(handle.read(), "html.parser")
+    points = []
+    for tag in soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "img"]):
+        if tag.name == "img":
+            label = tag.get("alt", "")
+            if not re.fullmatch(r"Original page \d+", label):
+                continue
+            target = tag.parent
+        else:
+            label = tag.get_text(" ", strip=True)
+            target = tag
+        if not label:
+            continue
+        anchor = f"pdf-reading-{len(points) + 1}"
+        target["id"] = anchor
+        points.append((label, anchor))
+    if not points:
+        return
+    with open(html_path, "w", encoding="utf-8") as handle:
+        handle.write(str(soup))
+    with open(os.path.join(os.path.dirname(html_path), "toc.ncx"), "w", encoding="utf-8") as handle:
+        handle.write('<ncx><navMap>' + ''.join(
+            '<navPoint><navLabel><text>' + html.escape(label)
+            + '</text></navLabel><content src="book.html#' + anchor + '"/></navPoint>'
+            for label, anchor in points) + '</navMap></ncx>')
 
 
 XHTML_HEADER = (
@@ -381,10 +481,11 @@ def _opf_values(opf_text: str, tag: str) -> list:
     ]
 
 
-def _xhtml_document(title: str, body: str) -> str:
+def _xhtml_document(title: str, body: str, language: str = "en") -> str:
     return (
         XHTML_HEADER
-        + '<html xmlns="http://www.w3.org/1999/xhtml"><head>'
+        + '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="'
+        + html.escape(language, quote=True) + '"><head>'
         + f"<title>{html.escape(title)}</title>"
         + '<meta http-equiv="Content-Type" content="text/html; charset=utf-8"/>'
         + f"</head><body>{body}</body></html>"
@@ -412,7 +513,7 @@ def build_epub_from_mobi7(html_path: str, output_path: str) -> None:
             opf_text = handle.read()
     title = (_opf_values(opf_text, "title") or ["Book"])[0]
     creators = _opf_values(opf_text, "creator")
-    language = (_opf_values(opf_text, "language") or ["en"])[0]
+    language = normalize_language((_opf_values(opf_text, "language") or [""])[0]) or "en"
     publisher = (_opf_values(opf_text, "publisher") or [""])[0]
     identifier = "urn:uuid:" + str(uuid.uuid4())
 
@@ -468,7 +569,7 @@ def build_epub_from_mobi7(html_path: str, output_path: str) -> None:
                 if href and href.startswith("#") and href[1:] in anchor_file:
                     target = anchor_file[href[1:]]
                     link["href"] = href if target == name else f"{target}{href}"
-        document = _xhtml_document(title, "".join(str(node) for node in part))
+        document = _xhtml_document(title, "".join(str(node) for node in part), language)
         ElementTree.fromstring(document.encode("utf-8"))
         documents.append((name, document))
 

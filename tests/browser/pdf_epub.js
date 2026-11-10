@@ -32,6 +32,21 @@ async page => {
   assert(await page.locator('.edition-download').innerText() === 'PDF', 'Keep original PDF');
   assert(await page.locator('.edition-epub-convert').innerText() === 'EPUB', 'Offer converted EPUB');
   assert(await page.locator('.edition-kindle').innerText() === 'Kindle', 'PDF conversion is automatic');
+  assert(await page.locator('select.edition-kindle-format').count() === 0, 'Integrate format menu into Kindle button');
+  await page.evaluate(() => {
+    window.sendToKindle = (md5, title, extension, button, edition) => { window.testPdfDelivery = edition.pdfDelivery; };
+  });
+  await page.locator('.edition-kindle-toggle').click();
+  assert(await page.getByRole('menuitemradio', { name: 'Convert to EPUB', exact: true }).getAttribute('aria-checked') === 'true', 'EPUB checked by default');
+  await page.getByRole('menuitemradio', { name: 'Original PDF', exact: true }).click();
+  assert(await page.evaluate(() => window.testPdfDelivery) === undefined, 'Changing format does not send');
+  await page.locator('.edition-kindle').click();
+  assert(await page.evaluate(() => window.testPdfDelivery) === 'original', 'Main action sends selected PDF format');
+  await page.locator('.edition-kindle-toggle').click();
+  assert(await page.getByRole('menuitemradio', { name: 'Original PDF', exact: true }).getAttribute('aria-checked') === 'true', 'Keep selection after send');
+  await page.getByRole('menuitemradio', { name: 'Convert to EPUB', exact: true }).click();
+  await page.locator('.edition-kindle').click();
+  assert(await page.evaluate(() => window.testPdfDelivery) === 'epub', 'Can switch back to EPUB');
   for (const width of [320, 390, 768, 1280]) {
     await page.setViewportSize({ width, height: 900 });
     const box = await page.locator('.edition-actions').boundingBox();
