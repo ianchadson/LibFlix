@@ -1722,8 +1722,89 @@ button.edition-recommended {
   gap: 6px;
 }
 
-.edition-actions.has-apple-books {
+.edition-actions.has-apple-books,
+.edition-actions.has-epub-conversion {
   grid-template-columns: repeat(3, minmax(92px, 1fr));
+}
+
+.edition-kindle-options {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  min-width: 0;
+  border-radius: var(--app-radius);
+  box-shadow: 0 5px 14px rgba(242, 13, 27, .16);
+}
+
+.edition-kindle-options > .edition-kindle {
+  min-width: 0;
+  padding: 0 6px;
+  gap: 4px;
+  border-radius: var(--app-radius) 0 0 var(--app-radius);
+  box-shadow: none;
+  font-size: .74rem;
+}
+
+.edition-kindle-options > .edition-kindle svg { width: 14px; flex-shrink: 0; }
+.edition-kindle-options > .edition-kindle span { overflow: hidden; text-overflow: ellipsis; }
+
+.edition-kindle-toggle {
+  display: grid;
+  place-items: center;
+  min-height: 38px;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid rgba(255, 255, 255, .25);
+  border-radius: 0 var(--app-radius) var(--app-radius) 0;
+  background: var(--app-red);
+  color: #fff;
+  cursor: pointer;
+}
+
+.edition-kindle-toggle:hover,
+.edition-kindle-toggle[aria-expanded="true"] { background: var(--app-red-hover); }
+.edition-kindle-toggle:disabled { opacity: .6; cursor: default; }
+.edition-kindle-toggle svg { width: 14px; height: 14px; transform: rotate(90deg); fill: none; stroke: currentColor; stroke-width: 2; }
+
+.edition-kindle-menu {
+  position: fixed;
+  inset: auto;
+  width: min(224px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--app-line-strong);
+  border-radius: var(--app-radius);
+  background: var(--app-surface-strong);
+  color: var(--app-text);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .4);
+}
+
+.edition-kindle-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  font: inherit;
+  font-size: .85rem;
+  cursor: pointer;
+}
+
+.kindle-format-check { width: 14px; flex-shrink: 0; visibility: hidden; }
+.edition-kindle-menu [aria-checked="true"] .kindle-format-check { visibility: visible; }
+
+.edition-kindle-menu button:hover,
+.edition-kindle-menu button:focus { background: rgba(255, 255, 255, .08); outline: none; }
+.edition-kindle-toggle:focus-visible { outline: 2px solid var(--app-focus); outline-offset: 2px; }
+
+@media (max-width: 380px) {
+  .edition-kindle-options > .edition-kindle svg { display: none; }
 }
 
 .edition-action {
@@ -1750,20 +1831,23 @@ button.edition-recommended {
   stroke-linejoin: round;
 }
 
-.edition-download {
+.edition-download,
+.edition-epub-convert {
   border: 1px solid rgba(255, 255, 255, .14);
   background: #1a1c20;
   color: #e1e2e5;
   box-shadow: none;
 }
 
-.edition-download:hover {
+.edition-download:hover,
+.edition-epub-convert:hover {
   border-color: rgba(255, 255, 255, .28);
   background: #22252a;
   color: #fff;
 }
 
-.edition-download.busy {
+.edition-download.busy,
+.edition-epub-convert.busy {
   opacity: .72;
   pointer-events: none;
 }
@@ -2890,7 +2974,8 @@ button.edition-recommended {
     margin-top: 1px;
   }
 
-  .edition-actions.has-apple-books {
+  .edition-actions.has-apple-books,
+  .edition-actions.has-epub-conversion {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 

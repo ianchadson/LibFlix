@@ -935,13 +935,102 @@ first row is best. The flagged row renders as the persistent primary option;
 remaining editions live in a closed native `<details>` disclosure and are
 expanded automatically if one contains an active resumed delivery.
 
-MOBI and AZW3 editions stay visible because LibFlix can convert them to EPUB
-before Send to Kindle, so they are ranked as deliverable candidates. AZW (the
+PDF, MOBI and AZW3 editions are converted to EPUB before Send to Kindle.
+Legacy editions stay visible and rank as deliverable candidates. AZW (the
 DRM-era extension) is still removed before deduplication and ranking, and the
 job API independently rejects any format outside EPUB, PDF, MOBI, and AZW3 to
 protect against stale clients or direct requests. A convertible row is flagged
-`kindle_conversion` so the UI can label its action `Convert & Kindle`; only
+`kindle_conversion` so the UI can label legacy actions `Convert & Kindle`; PDF
+conversion is automatic behind the normal Kindle action. Only
 LibGen and Real-Debrid ids are eligible.
+
+PDF rows also expose a converted EPUB download alongside the unchanged original
+PDF action. The EPUB action streams NDJSON from
+`/api/download/prepare/<id>?ext=pdf&format=epub`, then navigates to the local
+attachment at `/download/<id>?format=epub&source_ext=pdf`. That attachment route
+can prepare a missing EPUB itself for no-JavaScript clients and supports ranges.
+Normal original-file downloads retain native browser navigation.
+
+`book_conversion.py` uses `pypdf` for text, metadata and pre-decode resource
+checks, and PDFium to compose masks, layers, vector drawings and rotated pages.
+It reuses the XHTML/OPF/NCX EPUB packager. Safe text and illustration layouts
+become reflowable; uncertain layouts remain composed page images rather than
+losing artwork or overlaid text. Encrypted, empty and over-limit PDFs fail closed.
+Limits are 25 MB input, 2,000 pages, 10 million text characters, 50 million
+pixels per image, one billion total image pixels and 512 MB total extracted images.
+PDF conversion runs in a disposable subprocess with a 180-second deadline and
+1 GiB per-process address-space budget: Linux enforces RLIMIT_AS; macOS uses a parent RSS watchdog
+with 250 ms polling, which can overshoot between polls. The parent monitors aggregate worker/OCR RSS on both
+platforms every 250 ms and kills the whole process group on deadline or excessive
+RSS. The worker also has a CPU-time limit. All scratch files live under the
+parent-owned workspace so cleanup does not depend on child finally blocks.
+
+`pdf_reading.py` supplies conservative page-edge furniture removal, wrapped-word
+repair and paragraph preservation. PDFium identifies image-dominated scan pages
+and renders them at up to 300 DPI / 12 million pixels for OCR. Tesseract runs
+when a scan lacks usable text, or when the existing OCR layer fails a visual
+alignment/content check. Aligned complete text layers are reused. The engine's
+hOCR output supplies paragraphs, captions and illustration boxes; it is enabled
+explicitly so custom trained-data folders do not need config files. The standard
+`TESSDATA_PREFIX` variable supports official `tessdata_best` models for higher
+accuracy at a CPU cost. Model changes require clearing the converted-file cache.
+Image crops come from the composed page, never separate PDF image layers.
+A bounded ink-component map recovers drawings Tesseract failed to classify;
+labels and overlaid text touching that region remain in its crop. Uncertain body
+recognition, ambiguous columns and remaining unexplained marks preserve the
+whole page. Short uncertain glyphs retain their printed appearance. Repeated
+headers are removed line by line without deleting the body of a shared OCR
+paragraph; chapter headings and verse line breaks are retained. Movable images
+are placed between sentences when a page break divides a paragraph. Exact text
+wrapping is not reproduced.
+Native character geometry preserves headings, list items, code indentation and
+paragraphs without font-fragment duplication. Transformed PDF forms remain
+composed at their outer bounds. Connected vector diagrams, tables, boxed exercises
+and overlaid labels stay as composed regions, while surrounding prose reflows.
+Ambiguous columns/rotation, dense inline mathematics and uncertain OCR paragraphs
+retain the whole page rather than fragmenting text into unreliable crops.
+Composed native regions use
+up to 200 DPI / 8 million pixels; all exported JPEGs fit within 2000 x 2400.
+An intact page retains its original text positioning but its font cannot resize
+independently. OCR errors remain possible even at high reported confidence.
+When at least half of a book's nonempty scanned pages require preservation
+(with at least three scans), the remaining scans retain their printed pages too,
+avoiding inconsistent alternation between scanned typography and reflowed text.
+Native digital pages and blank scans are not changed by this consistency rule.
+No page is deliberately duplicated as both a complete scan and OCR paragraphs.
+PDF editions offer a Kindle split button: its attached dropdown checks the
+selected format (converted EPUB by default, or original PDF). Choosing a format
+does not send; the main Kindle action sends the selected format. Explicit
+original-PDF delivery bypasses the derived EPUB cache,
+conversion, cover fetching and PDF metadata rewriting; attachment bytes remain
+unchanged. The server accepts `pdf_delivery=original` only for PDF sources.
+Set `LIBFLIX_OCR_LANGUAGES` to installed Tesseract languages (default `eng`).
+Tesseract is a host dependency; missing engine/models fail visibly without a
+silent image-only fallback when dependencies fail. Decorative image pages with
+no recognised text retain their images. `LIBFLIX_PDF_OCR_ENABLED=0` disables OCR
+and preserves complete scan pages, including all layers and drawings. Missing or
+invalid PDF language metadata defaults to `en` for Kindle compatibility.
+The reading document also declares this language for assistive readers. Detected
+section headings and intact preserved pages appear in the EPUB navigation menu;
+page numbers refer to the input PDF sequence. Literal HTTP/HTTPS addresses in
+reflowed prose are clickable without guessing or repairing broken printed URLs.
+Code remains literal. Navigation anchors do not interrupt paragraph continuation.
+Complex layouts, OCR accuracy and reading order still require reader checks.
+
+A single shared `flock` slot serialises all conversion formats across application
+processes, with heartbeat queue status and a maximum ten-minute queue wait.
+Per-source locks/cache checks still prevent redundant conversion. Converted cache
+version v8 includes configured OCR languages and the OCR enable flag; changing
+either invalidates lookup keys, as do the layout and metadata format changes.
+
+Conversions run under a per-source filesystem lock, with heartbeat progress
+while processing. Successful derived files live under
+`kindle-source-cache/converted-epub-v8/` with the existing idle TTL and byte quota.
+Versioned source-id/format keys use the cache's non-content-hash identifier form:
+converted bytes are never stored against the original PDF's content MD5.
+Downloads and Kindle sends share these EPUBs, even if the original source has
+expired. Failed conversions remove temporary workspaces and never mail the
+original PDF as a silent fallback.
 
 Ranking is dominated by normalized title similarity, including exact,
 containment, token-overlap, and sequence checks. Author agreement is the next
@@ -982,10 +1071,9 @@ The renderer also:
 Before SMTP upload, `book_preparation.py` applies a clean canonical filename.
 For EPUB it edits only the OPF package: title is canonicalized, absent metadata
 is filled, and a JPEG cover is added only if no cover declaration or cover image
-already exists. The archive keeps `mimetype` first and uncompressed. PDF title
-and missing author/description fields are updated through `pypdf`. Any parsing
-or encryption problem returns the original file, so preparation cannot turn a
-usable download into a failed send.
+already exists. The archive keeps `mimetype` first and uncompressed. Cosmetic
+metadata repair failures keep the pre-existing EPUB. Conversion failures are
+different: they stop delivery visibly rather than sending the source format.
 
 ### Rendering Performance
 

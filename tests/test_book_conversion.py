@@ -41,17 +41,17 @@ def _valid_epub(path: str) -> None:
 
 class ConvertibleDetectionTests(unittest.TestCase):
     def test_legacy_formats_are_convertible(self):
-        for extension in ("mobi", "azw3", "MOBI", ".azw3"):
+        for extension in ("pdf", ".PDF", "mobi", "azw3", "MOBI", ".azw3"):
             with self.subTest(extension=extension):
                 self.assertTrue(is_convertible(extension))
 
     def test_primary_and_hidden_formats_are_not_convertible(self):
-        for extension in ("epub", "pdf", "azw", "", None, "txt", "djvu"):
+        for extension in ("epub", "azw", "", None, "txt", "djvu"):
             with self.subTest(extension=extension):
                 self.assertFalse(is_convertible(extension))
 
     def test_convertible_set_is_bounded(self):
-        self.assertEqual(CONVERTIBLE_EXTENSIONS, frozenset({"mobi", "azw3"}))
+        self.assertEqual(CONVERTIBLE_EXTENSIONS, frozenset({"pdf", "mobi", "azw3"}))
 
 
 class MobiMagicTests(unittest.TestCase):
@@ -164,8 +164,9 @@ class ConvertToEpubTests(unittest.TestCase):
     def test_delivery_fails_instead_of_sending_unconverted_mobi(self):
         import app as app_module
 
-        source = open(app_module.__file__, encoding="utf-8").read()
-        conversion_block = source.split("conversion = convert_to_epub(source_path, ext)", 1)[1].split(
+        with open(app_module.__file__, encoding="utf-8") as source_file:
+            source = source_file.read()
+        conversion_block = source.split("conversion = yield from _convert_epub_progress(source_path, md5, ext, emit=tracker.event)", 1)[1].split(
             "progress = 68", 1
         )[0]
         self.assertIn("raise RuntimeError(", conversion_block)
@@ -236,6 +237,22 @@ class Mobi7ConversionTests(unittest.TestCase):
                 ElementTree.fromstring(archive.read(name))
         self.assertFalse(os.path.exists(self.extraction))
         book_conversion.cleanup_path(result.path)
+
+    def test_kf7_undefined_language_uses_packager_default(self):
+        opf_path = os.path.join(self.book_dir, "content.opf")
+        with open(opf_path, encoding="utf-8") as handle:
+            opf = handle.read().replace("<dc:language>en</dc:language>",
+                                        "<dc:language>und</dc:language>")
+        with open(opf_path, "w", encoding="utf-8") as handle:
+            handle.write(opf)
+        html_path = os.path.join(self.book_dir, "book.html")
+        with patch("mobi.extract", return_value=(self.extraction, html_path)):
+            result = convert_to_epub(self.mobi_path, "mobi")
+        self.assertTrue(result.path, result.warning)
+        self.addCleanup(book_conversion.cleanup_path, result.path)
+        with zipfile.ZipFile(result.path) as archive:
+            root = ElementTree.fromstring(archive.read("OEBPS/content.opf"))
+            self.assertEqual(root.find(".//{http://purl.org/dc/elements/1.1/}language").text, "en")
 
     def test_kf7_conversion_failure_cleans_up(self):
         html_path = os.path.join(self.book_dir, "book.html")

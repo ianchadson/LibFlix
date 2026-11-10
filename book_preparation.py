@@ -88,7 +88,7 @@ def clean_book_author(value):
 
 
 def normalize_language(value):
-    language = _plain_text(value, 24).casefold()
+    language = _plain_text(value, 24).casefold().replace("_", "-")
     aliases = {
         "chinese": "zh",
         "chi": "zh",
@@ -99,6 +99,10 @@ def normalize_language(value):
         "eng": "en",
     }
     language = aliases.get(language, language)
+    # These codes describe absent/indeterminate language, not a book language
+    # Kindle can use. Do not overwrite a useful EPUB language with one of them.
+    if language.split("-", 1)[0] in {"und", "mul", "zxx"}:
+        return ""
     return language if re.fullmatch(r"[a-z]{2,3}(?:-[a-z0-9]{2,8})*", language) else ""
 
 
@@ -337,12 +341,15 @@ def prepare_book_for_kindle(
     metadata: Mapping[str, object],
     cover_loader: Callable[[], bytes] | None = None,
     pdf_rewrite_max_bytes: int | None = None,
+    preserve_original_pdf: bool = False,
 ):
     values = normalize_metadata(metadata)
     extension = re.sub(r"[^a-z0-9]", "", str(extension or "").lower()) or "epub"
     filename = attachment_filename(values["title"], extension)
     temporary_path = ""
     try:
+        if extension == "pdf" and preserve_original_pdf:
+            return PreparedBook(source_path, filename, values["title"], values["author"])
         if extension not in {"epub", "pdf"}:
             return PreparedBook(source_path, filename, values["title"], values["author"])
         if extension == "pdf":

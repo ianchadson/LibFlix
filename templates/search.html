@@ -173,6 +173,7 @@
           language: edition.language || (BOOK_LANG === 'cn' ? 'zh' : 'en'),
           cover_url: edition.coverUrl || '',
           ext: extension,
+          pdf_delivery: edition.pdfDelivery || 'epub',
           kindle_email: settings.kindle,
           ...(managedRelay ? {} : {
             smtp_host: settings.host,

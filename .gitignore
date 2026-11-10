@@ -33,3 +33,5 @@ kindle-source-cache/
 kindle-delivery.lock
 nyt-bestsellers.lock
 goodreads-discovery.lock
+
+output/pdf/
