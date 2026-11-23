@@ -1,6 +1,9 @@
+import os
 import unittest
 import tempfile
 from unittest.mock import patch
+
+import requests
 
 import app
 from app import (
@@ -335,6 +338,30 @@ class DownloadRankingTests(unittest.TestCase):
         self.assertTrue(app.is_kindle_delivery_format("pdf"))
 
 
+class RecordingSourceCache:
+    """Minimal ``KindleSourceCache`` stand-in for streaming-download tests."""
+
+    def __init__(self, root):
+        self.root = root
+        self.committed = []
+        self.discarded = []
+
+    @staticmethod
+    def get(_book_id, _extension):
+        return ""
+
+    def temporary_path(self, book_id, extension):
+        return os.path.join(self.root, f"{book_id}.{extension}.part")
+
+    def commit(self, path, book_id, extension, validation=None):
+        del validation
+        self.committed.append((os.path.basename(path), book_id, extension))
+        return path + ".stored"
+
+    def discard(self, path):
+        self.discarded.append(os.path.basename(path))
+
+
 class DirectDownloadTests(unittest.TestCase):
     class Downloader:
         def __init__(self):
@@ -366,6 +393,50 @@ class DirectDownloadTests(unittest.TestCase):
         def iter_content(self, chunk_size=65536):
             del chunk_size
             yield self.content
+
+        def close(self):
+            self.closed = True
+
+    class StreamingUpstream:
+        """Upstream that can stall or stop short, like a dropped CDN stream."""
+
+        def __init__(
+            self,
+            content,
+            *,
+            status_code=200,
+            headers=None,
+            error_after=None,
+            truncate_to=None,
+        ):
+            self.content = content
+            self.status_code = status_code
+            self.headers = {
+                "Content-Type": "application/epub+zip",
+                "Content-Length": str(len(content)),
+                "Accept-Ranges": "bytes",
+            }
+            if headers:
+                self.headers.update(headers)
+            self.error_after = error_after
+            self.truncate_to = truncate_to
+            self.url = "https://files.example.test/book.epub"
+            self.closed = False
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+        def iter_content(self, chunk_size=65536):
+            del chunk_size
+            if self.truncate_to is not None:
+                yield self.content[: self.truncate_to]
+                return
+            if self.error_after is None:
+                yield self.content
+                return
+            yield self.content[: self.error_after]
+            raise requests.ConnectionError("stream stalled")
 
         def close(self):
             self.closed = True
@@ -446,6 +517,111 @@ class DirectDownloadTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b'"type":"complete"', response.data)
         self.assertIn(b'"source_cache_hit":true', response.data)
+
+    def test_stalled_transfer_resumes_with_a_range_request(self):
+        downloader = self.Downloader()
+        stalled = self.StreamingUpstream(b"0123456789", error_after=4)
+        resumed = self.StreamingUpstream(
+            b"456789",
+            status_code=206,
+            headers={"Content-Range": "bytes 4-9/10", "Content-Length": "6"},
+        )
+        with tempfile.TemporaryDirectory() as cache_root:
+            with (
+                patch.object(app, "DOWNLOADER", downloader),
+                patch.object(
+                    app, "_kindle_source_cache", return_value=RecordingSourceCache(cache_root)
+                ),
+                patch.object(app.DL_SESSION, "get", side_effect=[stalled, resumed]) as get,
+            ):
+                response = app.app.test_client().get("/download/" + "c" * 32)
+                # The body is a stream: consume it while the source is mocked.
+                body = response.data
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(body, b"0123456789")
+            self.assertEqual(get.call_count, 2)
+            self.assertEqual(get.call_args_list[1].kwargs["headers"], {"Range": "bytes=4-"})
+            self.assertTrue(stalled.closed)
+            self.assertTrue(resumed.closed)
+
+    def test_short_clean_stream_is_resumed_instead_of_truncated(self):
+        downloader = self.Downloader()
+        short = self.StreamingUpstream(b"0123456789", truncate_to=4)
+        resumed = self.StreamingUpstream(
+            b"456789",
+            status_code=206,
+            headers={"Content-Range": "bytes 4-9/10", "Content-Length": "6"},
+        )
+        with tempfile.TemporaryDirectory() as cache_root:
+            with (
+                patch.object(app, "DOWNLOADER", downloader),
+                patch.object(
+                    app, "_kindle_source_cache", return_value=RecordingSourceCache(cache_root)
+                ),
+                patch.object(app.DL_SESSION, "get", side_effect=[short, resumed]),
+            ):
+                response = app.app.test_client().get("/download/" + "d" * 32)
+                body = response.data
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(body, b"0123456789")
+
+    def test_completed_stream_is_committed_to_the_source_cache(self):
+        downloader = self.Downloader()
+        upstream = self.StreamingUpstream(b"EPUB-BYTES")
+        with tempfile.TemporaryDirectory() as cache_root:
+            cache = RecordingSourceCache(cache_root)
+            with (
+                patch.object(app, "DOWNLOADER", downloader),
+                patch.object(app, "_kindle_source_cache", return_value=cache),
+                patch.object(app, "validate_source_file", return_value=object()),
+                patch.object(app.DL_SESSION, "get", side_effect=[upstream]),
+            ):
+                response = app.app.test_client().get(
+                    "/download/" + "f" * 32 + "?filename=Book.epub"
+                )
+                response.data
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(len(cache.committed), 1)
+            self.assertEqual(cache.committed[0][1], "f" * 32)
+            self.assertEqual(cache.committed[0][2], "epub")
+            self.assertEqual(cache.discarded, [])
+
+    def test_browser_navigation_failure_renders_an_html_page(self):
+        downloader = self.Downloader()
+        html_pages = [
+            self.Upstream(b"<html>blocked</html>", "text/html"),
+            self.Upstream(b"<html>blocked</html>", "text/html"),
+        ]
+        with (
+            patch.object(app, "DOWNLOADER", downloader),
+            patch.object(app.DL_SESSION, "get", side_effect=html_pages),
+        ):
+            response = app.app.test_client().get(
+                "/download/" + "a" * 32, headers={"Accept": "text/html"}
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("text/html", response.content_type)
+        self.assertIn(b"Download unavailable", response.data)
+        self.assertNotIn(b'"success"', response.data)
+
+    def test_api_client_failure_still_returns_json(self):
+        downloader = self.Downloader()
+        html_pages = [
+            self.Upstream(b"<html>blocked</html>", "text/html"),
+            self.Upstream(b"<html>blocked</html>", "text/html"),
+        ]
+        with (
+            patch.object(app, "DOWNLOADER", downloader),
+            patch.object(app.DL_SESSION, "get", side_effect=html_pages),
+        ):
+            response = app.app.test_client().get("/download/" + "b" * 32)
+
+        self.assertEqual(response.status_code, 502)
+        self.assertFalse(response.get_json()["success"])
 
 
 if __name__ == "__main__":
