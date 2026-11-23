@@ -7009,10 +7009,10 @@ RUNTIME_RATE_LIMIT_RULES = {
     "api_similar": ("similar", RateLimitRule(36, 60)),
     "api_book": ("book-detail", RateLimitRule(24, 60)),
     "api_search": ("search", RateLimitRule(24, 60)),
-    "download": ("download", RateLimitRule(12, 300)),
-    "api_prepare_download": ("download-prepare", RateLimitRule(12, 300)),
-    "api_create_kindle_job": ("kindle", RateLimitRule(4, 600)),
-    "api_sendtokindle": ("kindle", RateLimitRule(4, 600)),
+    "download": ("download", RateLimitRule(15, 300)),
+    "api_prepare_download": ("download-prepare", RateLimitRule(15, 300)),
+    "api_create_kindle_job": ("kindle", RateLimitRule(15, 600)),
+    "api_sendtokindle": ("kindle", RateLimitRule(15, 600)),
     "api_kindle_job": ("kindle-status", RateLimitRule(60, 60)),
     "web_vitals": ("metrics", RateLimitRule(30, 60)),
 }
@@ -7028,8 +7028,8 @@ RUNTIME_GLOBAL_RATE_LIMIT_RULES = {
     "api_search": ("search-global", RateLimitRule(120, 60)),
     "download": ("download-global", RateLimitRule(60, 300)),
     "api_prepare_download": ("download-prepare-global", RateLimitRule(60, 300)),
-    "api_create_kindle_job": ("kindle-global", RateLimitRule(10, 600)),
-    "api_sendtokindle": ("kindle-global", RateLimitRule(10, 600)),
+    "api_create_kindle_job": ("kindle-global", RateLimitRule(15, 600)),
+    "api_sendtokindle": ("kindle-global", RateLimitRule(15, 600)),
     "api_kindle_job": ("kindle-status-global", RateLimitRule(600, 60)),
 }
 RUNTIME_METRICS_SKIPPED_ENDPOINTS = {

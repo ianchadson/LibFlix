@@ -1,11 +1,12 @@
 import json
 import sqlite3
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 import app
-from security_runtime import RateLimitDecision
+from security_runtime import RateLimitDecision, SQLiteRateLimiter
 
 
 class SecurityIntegrationTests(unittest.TestCase):
@@ -323,6 +324,33 @@ class SecurityIntegrationTests(unittest.TestCase):
             ),
         ):
             self.assertEqual(app.trusted_proxy_client_identity(), "127.0.0.1")
+
+    def test_delivery_limits_allow_fifteen_requests_before_throttling(self):
+        routes = (
+            ("download", "GET", "/download/" + "a" * 32),
+            ("api_prepare_download", "GET", "/api/download/prepare/" + "a" * 32),
+            ("api_create_kindle_job", "POST", "/api/kindle/jobs"),
+            ("api_sendtokindle", "POST", "/api/sendtokindle"),
+        )
+        for endpoint, method, url in routes:
+            with self.subTest(endpoint=endpoint), tempfile.TemporaryDirectory() as directory:
+                limiter = SQLiteRateLimiter(str(Path(directory) / "limits.sqlite3"))
+                with (
+                    patch.dict(app.app.config, {"RATE_LIMITING_ENABLED": True}),
+                    patch.object(app, "RUNTIME_RATE_LIMITER", limiter),
+                    patch.object(app, "rate_limit_client_identity", return_value="test-client"),
+                    patch("security_runtime.time.time", return_value=1000),
+                    patch.dict(app.app.view_functions, {endpoint: lambda **kwargs: ("", 204)}),
+                ):
+                    client = app.app.test_client()
+                    for index in range(16):
+                        response = client.open(
+                            url, method=method,
+                            environ_overrides={"libflix.enforce_rate_limits": True},
+                        )
+                        with response:
+                            self.assertEqual(response.status_code, 204 if index < 15 else 429)
+                            self.assertEqual(response.headers["X-RateLimit-Limit"], "15")
 
     def test_legacy_kindle_concurrency_cap_returns_retry_after(self):
         self.assertTrue(app.KINDLE_LEGACY_SEMAPHORE.acquire(blocking=False))
